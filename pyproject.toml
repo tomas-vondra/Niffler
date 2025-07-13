@@ -1,0 +1,8 @@
+[project]
+name = "niffler"
+version = "0.1.0"
+description = "Niffler is a Python-based trading application, meticulously designed to sniff out profitable opportunities in the market, much like its namesake."
+requires-python = ">=3.13"
+dependencies = [
+    "pandas>=2.3.1",
+]
