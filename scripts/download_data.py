@@ -7,19 +7,8 @@ import logging
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Try to import ccxt, if not available, inform the user
-try:
-    import ccxt
-except ImportError:
-    ccxt = None
-    print("Warning: ccxt library not found. Install it with 'pip install ccxt' to use exchange data.")
-
-# Try to import yfinance, if not available, inform the user
-try:
-    import yfinance as yf
-except ImportError:
-    yf = None
-    print("Warning: yfinance library not found. Install it with 'pip install yfinance' to use Yahoo Finance data.")
+import ccxt
+import yfinance as yf
 
 
 ccxt_timeframes = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M']
@@ -27,9 +16,6 @@ yahoo_timeframes = ['1m', '2m', '5m', '15m', '30m', '60m', '90m', '1h', '1d', '5
 
 def download_ccxt_data(exchange_id, symbol, timeframe, start_ms, end_ms, limit=1000):
     """Downloads historical data using ccxt within a specified date range."""
-    if ccxt is None:
-        logging.error("ccxt library not found. Install it with 'uv pip install ccxt' to use exchange data.")
-        return None
 
     try:
         exchange_class = getattr(ccxt, exchange_id)
@@ -72,9 +58,6 @@ def download_ccxt_data(exchange_id, symbol, timeframe, start_ms, end_ms, limit=1
 
 def download_yfinance_data(ticker, start_date, end_date, interval):
     """Downloads historical data using yfinance."""
-    if yf is None:
-        logging.error("yfinance library not found. Install it with 'uv pip install yfinance' to use Yahoo Finance data.")
-        return None
 
     try:
         logging.info(f"Fetching {ticker} data from Yahoo Finance...")
@@ -108,6 +91,10 @@ def main():
 
     args = parser.parse_args()
 
+    # Set default end_date if not provided
+    if not args.end_date:
+        args.end_date = pd.Timestamp.now().strftime('%Y-%m-%d')
+
     output_dir = os.path.join(os.getcwd(), 'data')
     os.makedirs(output_dir, exist_ok=True)
     if not args.output:
@@ -122,9 +109,6 @@ def main():
         output_path = os.path.join(output_dir, args.output)
 
     df = None
-
-    if not args.end_date:
-        args.end_date = pd.Timestamp.now().strftime('%Y-%m-%d')
 
     try:
         start_date_ts = pd.Timestamp(args.start_date)

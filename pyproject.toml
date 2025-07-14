@@ -5,4 +5,6 @@ description = "Niffler is a Python-based trading application, meticulously desig
 requires-python = ">=3.13"
 dependencies = [
     "pandas>=2.3.1",
+    "ccxt",
+    "yfinance",
 ]
