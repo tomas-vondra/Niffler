@@ -23,6 +23,7 @@ Niffler is a Python-based trading application that helps identify profitable mar
 ### Testing
 - Run all tests: `python -m unittest discover -s tests -p "test_*.py"`
 - Run specific test: `python -m unittest tests.test_download_data`
+- Run preprocessor tests: `python -m unittest tests.test_preprocessor`
 - Uses built-in unittest framework (no pytest)
 
 ### Data Download
@@ -36,11 +37,24 @@ python scripts/download_data.py --source ccxt --symbol BTC/USDT --timeframe 1d -
 python scripts/download_data.py --source yahoo --symbol BTC-USD --timeframe 1d --start_date 2024-01-01 --end_date 2024-01-05
 ```
 
+### Data Preprocessing
+Trading data cleaning and validation via `scripts/preprocessor.py`:
+
+```bash
+# Clean single file
+python scripts/preprocessor.py --input data/BTCUSDT_binance_1d_20240101_20240105.csv --output data/BTCUSDT_cleaned.csv
+
+# Process directory
+python scripts/preprocessor.py --input data/ --output cleaned_data/
+```
+
 ## Architecture
 
 ### Current Structure
-- `scripts/download_data.py` - Main functional component for market data acquisition
-- `tests/test_download_data.py` - Comprehensive test suite
+- `scripts/download_data.py` - Market data acquisition from exchanges and APIs
+- `scripts/preprocessor.py` - Data cleaning and validation pipeline
+- `tests/test_download_data.py` - Test suite for data download functionality
+- `tests/test_preprocessor.py` - Comprehensive test suite for data preprocessing (25 test cases)
 - `data/` - CSV storage for downloaded market data (gitignored)
 
 ### Planned/Empty Structure
@@ -60,12 +74,21 @@ python scripts/download_data.py --source yahoo --symbol BTC-USD --timeframe 1d -
 - **CCXT**: Cryptocurrency exchange data with pagination support
 - **Yahoo Finance**: Traditional financial data via yfinance library
 
+### Data Preprocessing Pipeline
+- **Infinite Value Removal**: Replaces ±∞ with NaN for calculation safety
+- **NaN Handling**: Forward-fill with backward-fill fallback for missing values
+- **OHLC Validation**: Ensures High ≥ Low and Open/Close within High/Low range
+- **Time Gap Detection**: Identifies missing periods and calculates data completeness
+- **Data Quality Checks**: Validates positive prices, non-negative volume, removes duplicates
+
 ### Error Handling
-- Comprehensive error handling in download_data.py
+- Comprehensive error handling in download_data.py and preprocessor.py
 - Proper logging and user feedback
 - Graceful handling of network errors and invalid inputs
+- Data validation prevents corrupted data from breaking downstream analysis
 
 ### Testing Approach
 - Mock external dependencies (ccxt, yfinance)
 - Test both successful operations and error conditions
 - Validate argument parsing and data output formats
+- Comprehensive preprocessor testing with 25 test cases covering edge cases

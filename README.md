@@ -50,10 +50,48 @@ python scripts/download_data.py --source ccxt --symbol BTC/USDT --timeframe 1d -
 python scripts/download_data.py --source yahoo --symbol BTC-USD --timeframe 1d --start_date 2024-01-01 --end_date 2024-01-05
 ```
 
+### Data Preprocessing
+
+The `preprocessor.py` script cleans and validates trading data for downstream analysis. It handles common data quality issues found in real market data.
+
+#### Usage:
+
+```bash
+python scripts/preprocessor.py --input <input_file_or_directory> [--output <output_file_or_directory>] [--suffix <suffix>]
+```
+
+**Arguments:**
+
+*   `--input`: Path to CSV file or directory containing CSV files to process.
+*   `--output`: (Optional) Output file or directory path. Defaults to adding suffix to input filename.
+*   `--suffix`: (Optional) Suffix for output files when processing directories. Default: `_cleaned`.
+
+#### Features:
+
+*   **Infinite Value Removal**: Detects and replaces ±∞ values with NaN
+*   **NaN Handling**: Forward-fills missing values, with backward-fill fallback for leading NaN
+*   **OHLC Validation**: Ensures High ≥ Low and Open/Close within High/Low range
+*   **Time Gap Detection**: Identifies missing time periods and reports data completeness
+*   **Data Quality Checks**: Validates positive prices, non-negative volume, removes duplicates
+
+#### Examples:
+
+**Clean a single file:**
+
+```bash
+python scripts/preprocessor.py --input data/BTCUSDT_binance_1d_20240101_20240105.csv --output data/BTCUSDT_cleaned.csv
+```
+
+**Process all CSV files in a directory:**
+
+```bash
+python scripts/preprocessor.py --input data/ --output cleaned_data/
+```
+
 ## Project Structure
 
 *   `niffler/`: Core application logic.
-*   `scripts/`: Utility scripts, such as `download_data.py`.
+*   `scripts/`: Utility scripts including `download_data.py` and `preprocessor.py`.
 *   `data/`: (Ignored by Git) Downloaded market data will be stored here.
-*   `tests/`: Unit tests.
+*   `tests/`: Unit tests.* 
 
