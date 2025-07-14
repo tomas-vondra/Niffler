@@ -10,7 +10,7 @@ import argparse
 
 # Adjust the path to import the download_data script
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'scripts')))
-import download_data as mdd
+import download_data as dd
 
 class TestMarketDataDownloader(unittest.TestCase):
 
@@ -28,7 +28,7 @@ class TestMarketDataDownloader(unittest.TestCase):
         self.patcher_getcwd.stop()
         shutil.rmtree(self.temp_dir)
 
-    @patch('market_data_downloader.ccxt')
+    @patch('download_data.ccxt')
     def test_download_ccxt_data_success(self, mock_ccxt):
         """Test successful data download from ccxt exchange."""
         # Mock exchange setup
@@ -37,7 +37,7 @@ class TestMarketDataDownloader(unittest.TestCase):
             [1640995200000, 47000, 47500, 46500, 47200, 1000],  # 2022-01-01
             [1641081600000, 47200, 47800, 47000, 47600, 1200],  # 2022-01-02
         ]
-        mock_ccxt.binance.return_value = mock_exchange
+        mock_ccxt.binance = Mock(return_value=mock_exchange)
 
         start_ms = 1640995200000  # 2022-01-01
         end_ms = 1641081600000    # 2022-01-02
@@ -51,7 +51,7 @@ class TestMarketDataDownloader(unittest.TestCase):
         self.assertEqual(list(result.columns), ['open', 'high', 'low', 'close', 'volume'])
         mock_exchange.fetch_ohlcv.assert_called_once_with('BTC/USDT', '1d', start_ms, 1000)
 
-    @patch('market_data_downloader.ccxt')
+    @patch('download_data.ccxt')
     def test_download_ccxt_data_with_pagination(self, mock_ccxt):
         """Test ccxt data download with pagination."""
         mock_exchange = Mock()
@@ -63,7 +63,7 @@ class TestMarketDataDownloader(unittest.TestCase):
             # Second call returns remaining data
             [[1641081600000, 47200, 47800, 47000, 47600, 1200]],
         ]
-        mock_ccxt.binance.return_value = mock_exchange
+        mock_ccxt.binance = Mock(return_value=mock_exchange)
 
         start_ms = 1640995200000
         end_ms = 1641081600000
@@ -74,24 +74,24 @@ class TestMarketDataDownloader(unittest.TestCase):
         self.assertEqual(len(result), 1001)
         self.assertEqual(mock_exchange.fetch_ohlcv.call_count, 2)
 
-    @patch('market_data_downloader.ccxt', None)
+    @patch('download_data.ccxt', None)
     def test_download_ccxt_data_no_ccxt_library(self):
         """Test ccxt data download when ccxt library is not available."""
         result = dd.download_ccxt_data('binance', 'BTC/USDT', '1d', 1640995200000, 1641081600000)
         self.assertIsNone(result)
 
-    @patch('market_data_downloader.ccxt')
+    @patch('download_data.ccxt')
     def test_download_ccxt_data_exception(self, mock_ccxt):
         """Test ccxt data download with exception handling."""
         mock_exchange = Mock()
         mock_exchange.fetch_ohlcv.side_effect = Exception("Connection error")
-        mock_ccxt.binance.return_value = mock_exchange
+        mock_ccxt.binance = Mock(return_value=mock_exchange)
 
         result = dd.download_ccxt_data('binance', 'BTC/USDT', '1d', 1640995200000, 1641081600000)
 
         self.assertIsNone(result)
 
-    @patch('market_data_downloader.yf')
+    @patch('download_data.yf')
     def test_download_yfinance_data_success(self, mock_yf):
         """Test successful data download from yfinance."""
         # Create mock DataFrame
@@ -111,7 +111,7 @@ class TestMarketDataDownloader(unittest.TestCase):
         self.assertEqual(len(result), 2)
         mock_yf.download.assert_called_once_with('BTC-USD', start='2022-01-01', end='2022-01-02', interval='1d')
 
-    @patch('market_data_downloader.yf')
+    @patch('download_data.yf')
     def test_download_yfinance_data_empty_result(self, mock_yf):
         """Test yfinance data download with empty result."""
         mock_yf.download.return_value = pd.DataFrame()
@@ -120,13 +120,13 @@ class TestMarketDataDownloader(unittest.TestCase):
 
         self.assertIsNone(result)
 
-    @patch('market_data_downloader.yf', None)
+    @patch('download_data.yf', None)
     def test_download_yfinance_data_no_yfinance_library(self):
         """Test yfinance data download when yfinance library is not available."""
         result = dd.download_yfinance_data('BTC-USD', '2022-01-01', '2022-01-02', '1d')
         self.assertIsNone(result)
 
-    @patch('market_data_downloader.yf')
+    @patch('download_data.yf')
     def test_download_yfinance_data_exception(self, mock_yf):
         """Test yfinance data download with exception handling."""
         mock_yf.download.side_effect = Exception("Network error")
@@ -135,9 +135,9 @@ class TestMarketDataDownloader(unittest.TestCase):
 
         self.assertIsNone(result)
 
-    @patch('market_data_downloader.download_ccxt_data')
-    @patch('market_data_downloader.os.getcwd')
-    @patch('market_data_downloader.os.makedirs')
+    @patch('download_data.download_ccxt_data')
+    @patch('download_data.os.getcwd')
+    @patch('download_data.os.makedirs')
     @patch('sys.argv', ['script.py', '--source', 'ccxt', '--symbol', 'BTC/USDT', '--start_date', '2022-01-01', '--end_date', '2022-01-02'])
     def test_main_ccxt_success(self, mock_makedirs, mock_getcwd, mock_download_ccxt):
         """Test main function with successful ccxt data download."""
@@ -166,9 +166,9 @@ class TestMarketDataDownloader(unittest.TestCase):
             # Verify directory creation
             mock_makedirs.assert_called_once()
 
-    @patch('market_data_downloader.download_yfinance_data')
-    @patch('market_data_downloader.os.getcwd')
-    @patch('market_data_downloader.os.makedirs')
+    @patch('download_data.download_yfinance_data')
+    @patch('download_data.os.getcwd')
+    @patch('download_data.os.makedirs')
     @patch('sys.argv', ['script.py', '--source', 'yahoo', '--symbol', 'BTC-USD', '--start_date', '2022-01-01', '--end_date', '2022-01-02'])
     def test_main_yahoo_success(self, mock_makedirs, mock_getcwd, mock_download_yahoo):
         """Test main function with successful yahoo data download."""
@@ -196,48 +196,48 @@ class TestMarketDataDownloader(unittest.TestCase):
     @patch('sys.argv', ['script.py', '--source', 'ccxt', '--symbol', 'BTC/USDT', '--start_date', '2022-01-02', '--end_date', '2022-01-01'])
     def test_main_invalid_date_range(self):
         """Test main function with invalid date range."""
-        with patch('market_data_downloader.logging.error') as mock_log_error:
+        with patch('download_data.logging.error') as mock_log_error:
             dd.main()
             mock_log_error.assert_called_with("start_date cannot be after end_date.")
 
-    @patch('sys.argv', ['script.py', '--source', 'ccxt', '--symbol', 'BTC/USDT', '--start_date', 'invalid-date'])
+    @patch('sys.argv', ['script.py', '--source', 'ccxt', '--symbol', 'BTC/USDT', '--start_date', 'invalid-date', '--end_date', '2022-01-02'])
     def test_main_invalid_date_format(self):
         """Test main function with invalid date format."""
-        with patch('market_data_downloader.logging.error') as mock_log_error:
+        with patch('download_data.logging.error') as mock_log_error:
             dd.main()
             mock_log_error.assert_called_with("Invalid start_date or end_date format. Use YYYY-MM-DD.")
 
-    @patch('sys.argv', ['script.py', '--source', 'ccxt', '--symbol', 'BTC/USDT', '--start_date', '2022-01-01', '--timeframe', 'invalid'])
+    @patch('sys.argv', ['script.py', '--source', 'ccxt', '--symbol', 'BTC/USDT', '--start_date', '2022-01-01', '--end_date', '2022-01-02', '--timeframe', 'invalid'])
     def test_main_invalid_ccxt_timeframe(self):
         """Test main function with invalid ccxt timeframe."""
-        with patch('market_data_downloader.logging.error') as mock_log_error:
+        with patch('download_data.logging.error') as mock_log_error:
             dd.main()
             mock_log_error.assert_called_with("Invalid timeframe 'invalid' for ccxt. Supported timeframes are: 1m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 8h, 12h, 1d, 3d, 1w, 1M")
 
-    @patch('sys.argv', ['script.py', '--source', 'yahoo', '--symbol', 'BTC-USD', '--start_date', '2022-01-01', '--timeframe', 'invalid'])
+    @patch('sys.argv', ['script.py', '--source', 'yahoo', '--symbol', 'BTC-USD', '--start_date', '2022-01-01', '--end_date', '2022-01-02', '--timeframe', 'invalid'])
     def test_main_invalid_yahoo_timeframe(self):
         """Test main function with invalid yahoo timeframe."""
-        with patch('market_data_downloader.logging.error') as mock_log_error:
+        with patch('download_data.logging.error') as mock_log_error:
             dd.main()
             mock_log_error.assert_called_with("Invalid timeframe 'invalid' for yahoo. Supported timeframes are: 1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo")
 
-    @patch('sys.argv', ['script.py', '--source', 'ccxt', '--symbol', 'BTC/USDT', '--start_date', '2022-01-01', '--exchange', ''])
+    @patch('sys.argv', ['script.py', '--source', 'ccxt', '--symbol', 'BTC/USDT', '--start_date', '2022-01-01', '--end_date', '2022-01-02', '--exchange', ''])
     def test_main_missing_exchange_for_ccxt(self):
         """Test main function with missing exchange for ccxt."""
-        with patch('market_data_downloader.logging.error') as mock_log_error:
+        with patch('download_data.logging.error') as mock_log_error:
             dd.main()
             mock_log_error.assert_called_with("--exchange is required for ccxt source.")
 
-    @patch('market_data_downloader.download_ccxt_data')
-    @patch('market_data_downloader.os.getcwd')
-    @patch('market_data_downloader.os.makedirs')
+    @patch('download_data.download_ccxt_data')
+    @patch('download_data.os.getcwd')
+    @patch('download_data.os.makedirs')
     @patch('sys.argv', ['script.py', '--source', 'ccxt', '--symbol', 'BTC/USDT', '--start_date', '2022-01-01'])
     def test_main_default_end_date(self, mock_makedirs, mock_getcwd, mock_download_ccxt):
         """Test main function with default end date (today)."""
         mock_getcwd.return_value = self.temp_dir
         mock_download_ccxt.return_value = None  # No data returned
 
-        with patch('market_data_downloader.pd.Timestamp.now') as mock_now:
+        with patch('download_data.pd.Timestamp.now') as mock_now:
             mock_now.return_value.strftime.return_value = '2022-01-03'
             dd.main()
 
@@ -295,25 +295,4 @@ class TestArgumentParser(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    # Create a test suite
-    suite = unittest.TestSuite()
-
-    # Add all test methods
-    suite.addTest(unittest.makeSuite(TestMarketDataDownloader))
-    suite.addTest(unittest.makeSuite(TestArgumentParser))
-
-    # Run the tests
-    runner = unittest.TextTestRunner(verbosity=2)
-    result = runner.run(suite)
-
-    # Print summary
-    if result.wasSuccessful():
-        print("\n✅ All tests passed!")
-    else:
-        print(f"\n❌ {len(result.failures)} test(s) failed, {len(result.errors)} error(s)")
-        for test, traceback in result.failures:
-            print(f"FAILED: {test}")
-            print(traceback)
-        for test, traceback in result.errors:
-            print(f"ERROR: {test}")
-            print(traceback)
+    unittest.main(verbosity=2)
