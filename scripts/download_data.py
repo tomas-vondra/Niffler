@@ -3,74 +3,14 @@ import argparse
 import pandas as pd
 import os
 import logging
+import sys
+from pathlib import Path
+
+from niffler.data import CCXTDownloader, YahooFinanceDownloader
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-import ccxt
-import yfinance as yf
-
-
-ccxt_timeframes = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M']
-yahoo_timeframes = ['1m', '2m', '5m', '15m', '30m', '60m', '90m', '1h', '1d', '5d', '1wk', '1mo', '3mo']
-
-def download_ccxt_data(exchange_id, symbol, timeframe, start_ms, end_ms, limit=1000):
-    """Downloads historical data using ccxt within a specified date range."""
-
-    try:
-        exchange_class = getattr(ccxt, exchange_id)
-        exchange = exchange_class({'enableRateLimit': True})
-        
-        all_ohlcv = []
-        current_since = start_ms
-
-        logging.info(f"Fetching {symbol} {timeframe} data from {exchange_id} from {pd.to_datetime(start_ms, unit='ms')} to {pd.to_datetime(end_ms, unit='ms')}...")
-
-        while True:
-            ohlcv = exchange.fetch_ohlcv(symbol, timeframe, current_since, limit)
-            if not ohlcv:
-                break
-            
-            # Filter out data beyond the end_ms
-            filtered_ohlcv = [candle for candle in ohlcv if candle[0] <= end_ms]
-            all_ohlcv.extend(filtered_ohlcv)
-
-            # If the last fetched candle is already past the end_ms, or if we got less than 'limit' candles, we are done
-            if ohlcv[-1][0] >= end_ms or len(ohlcv) < limit:
-                break
-            
-            current_since = ohlcv[-1][0] + 1  # Move to the next candle after the last one fetched
-
-        if all_ohlcv:
-            df = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            df.set_index('timestamp', inplace=True)
-            # Ensure data is within the requested range (inclusive of start_ms and end_ms)
-            df = df[(df.index.astype(int) // 10**6 >= start_ms) & (df.index.astype(int) // 10**6 <= end_ms)]
-            logging.info(f"Successfully fetched {len(df)} candles.")
-            return df
-        else:
-            logging.info("No data fetched.")
-            return None
-    except Exception as e:
-        logging.error(f"Error downloading data from {exchange_id}: {e}")
-        return None
-
-def download_yfinance_data(ticker, start_date, end_date, interval):
-    """Downloads historical data using yfinance."""
-
-    try:
-        logging.info(f"Fetching {ticker} data from Yahoo Finance...")
-        df = yf.download(ticker, start=start_date, end=end_date, interval=interval)
-        if not df.empty:
-            logging.info(f"Successfully fetched {len(df)} candles.")
-            return df
-        else:
-            logging.info("No data fetched.")
-            return None
-    except Exception as e:
-        logging.error(f"Error downloading data from Yahoo Finance for {ticker}: {e}")
-        return None
 
 def main():
     parser = argparse.ArgumentParser(description='Download historical market data.')
@@ -120,24 +60,31 @@ def main():
         logging.error("Invalid start_date or end_date format. Use YYYY-MM-DD.")
         return
 
-    # Timeframe validation
+    # Initialize downloader and validate timeframe
     if args.source == 'ccxt':
-        if args.timeframe not in ccxt_timeframes:
-            logging.error(f"Invalid timeframe '{args.timeframe}' for ccxt. Supported timeframes are: {', '.join(ccxt_timeframes)}")
-            return
         if not args.exchange:
             logging.error("--exchange is required for ccxt source.")
+            return
+            
+        downloader = CCXTDownloader()
+        if not downloader.validate_timeframe(args.timeframe):
+            supported = downloader.get_supported_timeframes()
+            logging.error(f"Invalid timeframe '{args.timeframe}' for ccxt. Supported timeframes are: {', '.join(supported)}")
             return
         
         start_ms = int(start_date_ts.timestamp() * 1000)
         end_ms = int(end_date_ts.timestamp() * 1000)
         
-        df = download_ccxt_data(args.exchange, args.symbol, args.timeframe, start_ms, end_ms)
+        df = downloader.download(args.exchange, args.symbol, args.timeframe, start_ms, end_ms)
+        
     elif args.source == 'yahoo':
-        if args.timeframe not in yahoo_timeframes:
-            logging.error(f"Invalid timeframe '{args.timeframe}' for yahoo. Supported timeframes are: {', '.join(yahoo_timeframes)}")
+        downloader = YahooFinanceDownloader()
+        if not downloader.validate_timeframe(args.timeframe):
+            supported = downloader.get_supported_timeframes()
+            logging.error(f"Invalid timeframe '{args.timeframe}' for yahoo. Supported timeframes are: {', '.join(supported)}")
             return
-        df = download_yfinance_data(args.symbol, args.start_date, args.end_date, args.timeframe)
+            
+        df = downloader.download(args.symbol, args.start_date, args.end_date, args.timeframe)
         if df is not None and not df.empty:
             # Ensure the index is named 'Date'
             if df.index.name != 'Date':
