@@ -1,22 +1,21 @@
 import unittest
-from unittest.mock import Mock, patch, MagicMock, call
+from unittest.mock import Mock, patch
 import pandas as pd
 import os
 import tempfile
 import shutil
 import sys
-from datetime import datetime
 import argparse
 
 # Add project root to path for imports
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, project_root)
 
-# Import both script and core modules
 from scripts import download_data as dd
 from niffler.data import CCXTDownloader, YahooFinanceDownloader
 
-class TestMarketDataDownloader(unittest.TestCase):
+
+class TestDownloadDataMain(unittest.TestCase):
 
     def setUp(self):
         """Set up test fixtures before each test method."""
@@ -31,121 +30,6 @@ class TestMarketDataDownloader(unittest.TestCase):
         """Clean up after each test method."""
         self.patcher_getcwd.stop()
         shutil.rmtree(self.temp_dir)
-
-    @patch('niffler.data.downloaders.ccxt_downloader.ccxt')
-    def test_download_ccxt_data_success(self, mock_ccxt):
-        """Test successful data download from ccxt exchange."""
-        # Mock exchange setup
-        mock_exchange = Mock()
-        mock_exchange.fetch_ohlcv.return_value = [
-            [1640995200000, 47000, 47500, 46500, 47200, 1000],  # 2022-01-01
-            [1641081600000, 47200, 47800, 47000, 47600, 1200],  # 2022-01-02
-        ]
-        mock_ccxt.binance = Mock(return_value=mock_exchange)
-
-        start_ms = 1640995200000  # 2022-01-01
-        end_ms = 1641081600000    # 2022-01-02
-
-        downloader = CCXTDownloader()
-        result = downloader.download('binance', 'BTC/USDT', '1d', start_ms, end_ms)
-
-        # Assertions
-        self.assertIsNotNone(result)
-        self.assertIsInstance(result, pd.DataFrame)
-        self.assertEqual(len(result), 2)
-        self.assertEqual(list(result.columns), ['open', 'high', 'low', 'close', 'volume'])
-        mock_exchange.fetch_ohlcv.assert_called_once_with('BTC/USDT', '1d', start_ms, 1000)
-
-    @patch('niffler.data.downloaders.ccxt_downloader.ccxt')
-    def test_download_ccxt_data_with_pagination(self, mock_ccxt):
-        """Test ccxt data download with pagination."""
-        mock_exchange = Mock()
-
-        # Mock multiple calls to simulate pagination
-        mock_exchange.fetch_ohlcv.side_effect = [
-            # First call returns full limit
-            [[1640995200000, 47000, 47500, 46500, 47200, 1000] for _ in range(1000)],
-            # Second call returns remaining data
-            [[1641081600000, 47200, 47800, 47000, 47600, 1200]],
-        ]
-        mock_ccxt.binance = Mock(return_value=mock_exchange)
-
-        start_ms = 1640995200000
-        end_ms = 1641081600000
-
-        downloader = CCXTDownloader()
-        result = downloader.download('binance', 'BTC/USDT', '1d', start_ms, end_ms, limit=1000)
-
-        self.assertIsNotNone(result)
-        self.assertEqual(len(result), 1001)
-        self.assertEqual(mock_exchange.fetch_ohlcv.call_count, 2)
-
-    @patch('niffler.data.downloaders.ccxt_downloader.ccxt', None)
-    def test_download_ccxt_data_no_ccxt_library(self):
-        """Test ccxt data download when ccxt library is not available."""
-        downloader = CCXTDownloader()
-        result = downloader.download('binance', 'BTC/USDT', '1d', 1640995200000, 1641081600000)
-        self.assertIsNone(result)
-
-    @patch('niffler.data.downloaders.ccxt_downloader.ccxt')
-    def test_download_ccxt_data_exception(self, mock_ccxt):
-        """Test ccxt data download with exception handling."""
-        mock_exchange = Mock()
-        mock_exchange.fetch_ohlcv.side_effect = Exception("Connection error")
-        mock_ccxt.binance = Mock(return_value=mock_exchange)
-
-        downloader = CCXTDownloader()
-        result = downloader.download('binance', 'BTC/USDT', '1d', 1640995200000, 1641081600000)
-
-        self.assertIsNone(result)
-
-    @patch('niffler.data.downloaders.yahoo_finance_downloader.yf')
-    def test_download_yfinance_data_success(self, mock_yf):
-        """Test successful data download from yfinance."""
-        # Create mock DataFrame
-        mock_df = pd.DataFrame({
-            'Open': [47000, 47200],
-            'High': [47500, 47800],
-            'Low': [46500, 47000],
-            'Close': [47200, 47600],
-            'Volume': [1000, 1200]
-        })
-        mock_yf.download.return_value = mock_df
-
-        downloader = YahooFinanceDownloader()
-        result = downloader.download('BTC-USD', '2022-01-01', '2022-01-02', '1d')
-
-        self.assertIsNotNone(result)
-        self.assertIsInstance(result, pd.DataFrame)
-        self.assertEqual(len(result), 2)
-        mock_yf.download.assert_called_once_with('BTC-USD', start='2022-01-01', end='2022-01-02', interval='1d')
-
-    @patch('niffler.data.downloaders.yahoo_finance_downloader.yf')
-    def test_download_yfinance_data_empty_result(self, mock_yf):
-        """Test yfinance data download with empty result."""
-        mock_yf.download.return_value = pd.DataFrame()
-
-        downloader = YahooFinanceDownloader()
-        result = downloader.download('INVALID-TICKER', '2022-01-01', '2022-01-02', '1d')
-
-        self.assertIsNone(result)
-
-    @patch('niffler.data.downloaders.yahoo_finance_downloader.yf', None)
-    def test_download_yfinance_data_no_yfinance_library(self):
-        """Test yfinance data download when yfinance library is not available."""
-        downloader = YahooFinanceDownloader()
-        result = downloader.download('BTC-USD', '2022-01-01', '2022-01-02', '1d')
-        self.assertIsNone(result)
-
-    @patch('niffler.data.downloaders.yahoo_finance_downloader.yf')
-    def test_download_yfinance_data_exception(self, mock_yf):
-        """Test yfinance data download with exception handling."""
-        mock_yf.download.side_effect = Exception("Network error")
-
-        downloader = YahooFinanceDownloader()
-        result = downloader.download('BTC-USD', '2022-01-01', '2022-01-02', '1d')
-
-        self.assertIsNone(result)
 
     @patch('scripts.download_data.CCXTDownloader')
     @patch('scripts.download_data.os.getcwd')

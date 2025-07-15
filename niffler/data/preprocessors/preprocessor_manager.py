@@ -25,8 +25,12 @@ class PreprocessorManager:
         Returns:
             Self for method chaining
         """
-        self.preprocessors.append(preprocessor)
-        logging.info(f"Added preprocessor: {preprocessor}")
+        # Check if this preprocessor is already in the list
+        if preprocessor not in self.preprocessors:
+            self.preprocessors.append(preprocessor)
+            logging.info(f"Added preprocessor: {preprocessor}")
+        else:
+            logging.warning(f"Preprocessor already exists, skipping: {preprocessor}")
         return self
         
     def remove_preprocessor(self, preprocessor_name: str) -> bool:
@@ -70,6 +74,10 @@ class PreprocessorManager:
         Returns:
             Processed DataFrame
         """
+        if df is None:
+            logging.warning("None DataFrame provided for preprocessing")
+            return None
+            
         if df.empty:
             logging.warning("Empty DataFrame provided for preprocessing")
             return df
@@ -87,27 +95,30 @@ class PreprocessorManager:
         for i, preprocessor in enumerate(self.preprocessors):
             try:
                 # Check if preprocessor can handle this data
-                if not preprocessor.can_process(current_df):
-                    logging.warning(f"Preprocessor {preprocessor.name} cannot process data, skipping")
+                if hasattr(preprocessor, 'can_process') and not preprocessor.can_process(current_df):
+                    preprocessor_name = getattr(preprocessor, 'name', str(preprocessor))
+                    logging.warning(f"Preprocessor {preprocessor_name} cannot process data, skipping")
                     continue
                     
                 rows_before = len(current_df)
-                logging.info(f"Step {i+1}/{len(self.preprocessors)}: Running {preprocessor.name}")
+                preprocessor_name = getattr(preprocessor, 'name', str(preprocessor))
+                logging.info(f"Step {i+1}/{len(self.preprocessors)}: Running {preprocessor_name}")
                 
                 # Apply the preprocessor
                 current_df = preprocessor.process(current_df)
                 
                 rows_after = len(current_df)
                 if rows_before != rows_after:
-                    logging.info(f"{preprocessor.name}: {rows_before} -> {rows_after} rows")
+                    logging.info(f"{preprocessor_name}: {rows_before} -> {rows_after} rows")
                     
                 # Check if data became empty
                 if current_df.empty:
-                    logging.error(f"Data became empty after {preprocessor.name}")
+                    logging.error(f"Data became empty after {preprocessor_name}")
                     break
                     
             except Exception as e:
-                logging.error(f"Error in preprocessor {preprocessor.name}: {e}")
+                preprocessor_name = getattr(preprocessor, 'name', str(preprocessor))
+                logging.error(f"Error in preprocessor {preprocessor_name}: {e}")
                 # Continue with remaining preprocessors
                 continue
                 
@@ -128,10 +139,10 @@ class PreprocessorManager:
         Returns:
             True if at least one preprocessor can process the data
         """
-        if df.empty:
+        if df is None or df.empty:
             return False
             
-        return any(p.can_process(df) for p in self.preprocessors)
+        return any(hasattr(p, 'can_process') and p.can_process(df) for p in self.preprocessors)
 
 
 def create_default_manager() -> PreprocessorManager:
