@@ -147,7 +147,7 @@ class TestMarketDataDownloader(unittest.TestCase):
 
         self.assertIsNone(result)
 
-    @patch('niffler.data.downloaders.ccxt_downloader.CCXTDownloader')
+    @patch('scripts.download_data.CCXTDownloader')
     @patch('scripts.download_data.os.getcwd')
     @patch('scripts.download_data.os.makedirs')
     @patch('sys.argv', ['script.py', '--source', 'ccxt', '--symbol', 'BTC/USDT', '--start_date', '2022-01-01', '--end_date', '2022-01-02'])
@@ -185,7 +185,7 @@ class TestMarketDataDownloader(unittest.TestCase):
             # Verify directory creation
             mock_makedirs.assert_called_once()
 
-    @patch('niffler.data.downloaders.yahoo_finance_downloader.YahooFinanceDownloader')
+    @patch('scripts.download_data.YahooFinanceDownloader')
     @patch('scripts.download_data.os.getcwd')
     @patch('scripts.download_data.os.makedirs')
     @patch('sys.argv', ['script.py', '--source', 'yahoo', '--symbol', 'BTC-USD', '--start_date', '2022-01-01', '--end_date', '2022-01-02'])
@@ -254,7 +254,7 @@ class TestMarketDataDownloader(unittest.TestCase):
             dd.main()
             mock_log_error.assert_called_with("--exchange is required for ccxt source.")
 
-    @patch('niffler.data.downloaders.ccxt_downloader.CCXTDownloader')
+    @patch('scripts.download_data.CCXTDownloader')
     @patch('scripts.download_data.os.getcwd')
     @patch('scripts.download_data.os.makedirs')
     @patch('sys.argv', ['script.py', '--source', 'ccxt', '--symbol', 'BTC/USDT', '--start_date', '2022-01-01'])
