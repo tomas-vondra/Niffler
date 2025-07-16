@@ -6,10 +6,15 @@ import logging
 import sys
 from pathlib import Path
 
+# Add the project root to Python path to enable imports
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
 from niffler.data import CCXTDownloader, YahooFinanceDownloader
+from config.logging import setup_logging
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+setup_logging(level="INFO")
 
 
 def main():

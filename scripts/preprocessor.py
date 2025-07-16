@@ -11,8 +11,10 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from niffler.data import create_default_manager
+from config.logging import setup_logging
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Configure logging
+setup_logging(level="INFO")
 
 
 def load_and_clean_csv(file_path, timestamp_column=None):

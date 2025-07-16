@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Niffler is a Python-based trading application that helps identify profitable market opportunities. The project is in early development with only the data acquisition component implemented.
+Niffler is a Python-based trading application that helps identify profitable market opportunities. The project now includes data acquisition, preprocessing, backtesting, and strategy components.
 
 ## Development Setup
 
@@ -22,8 +22,8 @@ Niffler is a Python-based trading application that helps identify profitable mar
 
 ### Testing
 - Run all tests: `python -m unittest discover -s tests -p "test_*.py"`
-- Run specific test: `python -m unittest tests.test_download_data`
-- Run preprocessor tests: `python -m unittest tests.test_preprocessor`
+- Run specific test module: `python -m unittest tests.test_downloaders.test_ccxt_downloader`
+- Run specific test class: `python -m unittest tests.test_backtesting.test_backtest_engine.TestBacktestEngine`
 - Uses built-in unittest framework (no pytest)
 
 ### Data Download
@@ -48,20 +48,36 @@ python scripts/preprocessor.py --input data/BTCUSDT_binance_1d_20240101_20240105
 python scripts/preprocessor.py --input data/ --output cleaned_data/
 ```
 
+### Backtesting
+Strategy backtesting via `scripts/backtest.py`:
+
+```bash
+# Run backtest with Simple MA strategy
+python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv --strategy simple_ma --initial_capital 10000 --commission 0.001
+
+# Run backtest with data cleaning
+python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv --strategy simple_ma --clean
+```
+
 ## Architecture
 
-### Current Structure
-- `scripts/download_data.py` - Market data acquisition from exchanges and APIs
-- `scripts/preprocessor.py` - Data cleaning and validation pipeline
-- `tests/test_download_data.py` - Test suite for data download functionality
-- `tests/test_preprocessor.py` - Comprehensive test suite for data preprocessing (25 test cases)
-- `data/` - CSV storage for downloaded market data (gitignored)
-
-### Planned/Empty Structure
-- `niffler/bot/` - Trading bot logic (empty)
-- `niffler/strategies/` - Trading strategies (empty)
-- `niffler/utils/` - Utility functions (empty)
-- `config/` - Configuration management (empty)
+### Core Components
+- `niffler/data/downloaders/` - Data acquisition from exchanges and APIs
+  - `base_downloader.py` - Abstract base class for data downloaders
+  - `ccxt_downloader.py` - Cryptocurrency exchange data via CCXT
+  - `yahoo_finance_downloader.py` - Traditional financial data via yfinance
+- `niffler/data/preprocessors/` - Data cleaning and validation pipeline
+  - `preprocessor_manager.py` - Orchestrates the preprocessing pipeline
+  - Individual processors for infinite values, NaN handling, OHLC validation, etc.
+- `niffler/backtesting/` - Strategy backtesting framework
+  - `backtest_engine.py` - Core backtesting engine with portfolio management
+  - `trade.py` - Trade execution and tracking
+  - `backtest_result.py` - Performance metrics and results
+- `niffler/strategies/` - Trading strategy implementations
+  - `base_strategy.py` - Abstract base class for strategies
+  - `simple_ma_strategy.py` - Simple moving average crossover strategy
+- `config/logging.py` - Unified logging configuration
+- `scripts/` - Command-line interfaces for core functionality
 
 ### Data Storage
 - Format: CSV files with standardized columns (timestamp, open, high, low, close, volume)

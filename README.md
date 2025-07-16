@@ -1,6 +1,14 @@
 # Niffler
 
-Niffler is a Python-based trading app that helps you sniff out market opportunities — just like a Niffler can’t resist shiny gold!
+Niffler is a Python-based trading application that helps you sniff out market opportunities — just like a Niffler can't resist shiny gold! 
+
+## Features
+
+- **Data Acquisition**: Download historical market data from cryptocurrency exchanges (via CCXT) and traditional financial markets (via yfinance)
+- **Data Preprocessing**: Clean and validate trading data with comprehensive quality checks
+- **Strategy Framework**: Implement and test custom trading strategies
+- **Backtesting Engine**: Test strategies against historical data with realistic trading simulation
+- **Comprehensive Testing**: Full test suite covering all components
 
 ## Getting Started
 
@@ -15,6 +23,14 @@ uv sync
 ```
 
 This will install all the necessary dependencies.
+
+### Running Tests
+
+Run the full test suite to ensure everything is working correctly:
+
+```bash
+python -m unittest discover -s tests -p "test_*.py"
+```
 
 ### Downloading Market Data
 
@@ -88,10 +104,55 @@ python scripts/preprocessor.py --input data/BTCUSDT_binance_1d_20240101_20240105
 python scripts/preprocessor.py --input data/ --output cleaned_data/
 ```
 
+### Strategy Backtesting
+
+The `backtest.py` script allows you to test trading strategies against historical data.
+
+#### Usage:
+
+```bash
+python scripts/backtest.py --data <data_file> --strategy <strategy_name> [--initial_capital <amount>] [--commission <rate>] [--clean]
+```
+
+**Arguments:**
+
+*   `--data`: Path to CSV file containing historical market data
+*   `--strategy`: Strategy to use (currently supports `simple_ma`)
+*   `--initial_capital`: (Optional) Starting capital amount. Default: 10000
+*   `--commission`: (Optional) Commission rate per trade. Default: 0.001 (0.1%)
+*   `--clean`: (Optional) Apply data cleaning pipeline before backtesting
+
+#### Examples:
+
+**Run backtest with Simple Moving Average strategy:**
+
+```bash
+python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv --strategy simple_ma --initial_capital 10000 --commission 0.001
+```
+
+**Run backtest with automatic data cleaning:**
+
+```bash
+python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv --strategy simple_ma --clean
+```
+
 ## Project Structure
 
-*   `niffler/`: Core application logic.
-*   `scripts/`: Utility scripts including `download_data.py` and `preprocessor.py`.
-*   `data/`: (Ignored by Git) Downloaded market data will be stored here.
-*   `tests/`: Unit tests.* 
+*   `niffler/`: Core application logic
+    *   `data/`: Data acquisition and preprocessing modules
+    *   `strategies/`: Trading strategy implementations
+    *   `backtesting/`: Backtesting engine and related components
+*   `scripts/`: Command-line interfaces for core functionality
+*   `config/`: Configuration and logging setup
+*   `data/`: (Ignored by Git) Downloaded market data storage
+*   `tests/`: Comprehensive unit test suite
+
+## Architecture
+
+Niffler follows a modular architecture:
+
+- **Data Layer**: Handles data acquisition from multiple sources and preprocessing
+- **Strategy Layer**: Abstract base classes and concrete strategy implementations
+- **Backtesting Layer**: Portfolio management, trade execution, and performance analysis
+- **Scripts Layer**: Command-line tools for easy interaction with core functionality
 
