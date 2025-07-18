@@ -59,6 +59,20 @@ python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv 
 python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv --strategy simple_ma --clean
 ```
 
+### Strategy Optimization
+Parameter optimization for trading strategies via `scripts/optimize.py`:
+
+```bash
+# Grid search optimization for Simple MA strategy
+python scripts/optimize.py --data data/BTCUSDT_binance_1d.csv --strategy simple_ma --method grid
+
+# Random search with 100 trials
+python scripts/optimize.py --data data/BTCUSDT_binance_1d.csv --strategy simple_ma --method random --trials 100
+
+# Sort results by Sharpe ratio and save to custom file
+python scripts/optimize.py --data data/BTCUSDT_binance_1d.csv --strategy simple_ma --sort-by sharpe_ratio --output my_results.json
+```
+
 ## Architecture
 
 ### Core Components
@@ -76,6 +90,13 @@ python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv 
 - `niffler/strategies/` - Trading strategy implementations
   - `base_strategy.py` - Abstract base class for strategies
   - `simple_ma_strategy.py` - Simple moving average crossover strategy
+- `niffler/optimization/` - Parameter optimization framework
+  - `base_optimizer.py` - Abstract base class for optimizers
+  - `grid_search_optimizer.py` - Exhaustive grid search optimization
+  - `random_search_optimizer.py` - Random parameter sampling optimization
+  - `optimizer_factory.py` - Factory for creating optimizers and parameter spaces
+  - `parameter_space.py` - Defines parameter ranges for strategies
+  - `optimization_result.py` - Stores and analyzes optimization results
 - `config/logging.py` - Unified logging configuration
 - `scripts/` - Command-line interfaces for core functionality
 

@@ -8,6 +8,7 @@ Niffler is a Python-based trading application that helps you sniff out market op
 - **Data Preprocessing**: Clean and validate trading data with comprehensive quality checks
 - **Strategy Framework**: Implement and test custom trading strategies
 - **Backtesting Engine**: Test strategies against historical data with realistic trading simulation
+- **Strategy Optimization**: Find optimal strategy parameters using grid search and random search methods
 - **Comprehensive Testing**: Full test suite covering all components
 
 ## Getting Started
@@ -136,12 +137,53 @@ python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv 
 python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv --strategy simple_ma --clean
 ```
 
+### Strategy Optimization
+
+The `optimize.py` script helps you find optimal parameters for your trading strategies using various optimization methods.
+
+#### Usage:
+
+```bash
+python scripts/optimize.py --data <data_file> --strategy <strategy_name> --method <optimization_method> [--trials <number>] [--sort-by <metric>] [--output <output_file>] [--clean]
+```
+
+**Arguments:**
+
+*   `--data`: Path to CSV file containing historical market data
+*   `--strategy`: Strategy to optimize (currently supports `simple_ma`)
+*   `--method`: Optimization method (`grid` for grid search, `random` for random search)
+*   `--trials`: (Optional) Number of trials for random search. Default: 50
+*   `--sort-by`: (Optional) Metric to sort results by (`total_return`, `sharpe_ratio`, `max_drawdown`, etc.)
+*   `--output`: (Optional) Output JSON file for results. Default: auto-generated filename
+*   `--clean`: (Optional) Apply data cleaning pipeline before optimization
+
+#### Examples:
+
+**Grid search optimization for Simple Moving Average strategy:**
+
+```bash
+python scripts/optimize.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv --strategy simple_ma --method grid
+```
+
+**Random search with 100 trials, sorted by Sharpe ratio:**
+
+```bash
+python scripts/optimize.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv --strategy simple_ma --method random --trials 100 --sort-by sharpe_ratio
+```
+
+**Optimization with data cleaning and custom output file:**
+
+```bash
+python scripts/optimize.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv --strategy simple_ma --method grid --clean --output my_optimization_results.json
+```
+
 ## Project Structure
 
 *   `niffler/`: Core application logic
     *   `data/`: Data acquisition and preprocessing modules
     *   `strategies/`: Trading strategy implementations
     *   `backtesting/`: Backtesting engine and related components
+    *   `optimization/`: Parameter optimization framework
 *   `scripts/`: Command-line interfaces for core functionality
 *   `config/`: Configuration and logging setup
 *   `data/`: (Ignored by Git) Downloaded market data storage
@@ -154,5 +196,6 @@ Niffler follows a modular architecture:
 - **Data Layer**: Handles data acquisition from multiple sources and preprocessing
 - **Strategy Layer**: Abstract base classes and concrete strategy implementations
 - **Backtesting Layer**: Portfolio management, trade execution, and performance analysis
+- **Optimization Layer**: Parameter optimization using grid search and random search methods
 - **Scripts Layer**: Command-line tools for easy interaction with core functionality
 

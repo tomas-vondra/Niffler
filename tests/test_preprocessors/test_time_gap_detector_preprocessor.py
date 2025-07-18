@@ -97,7 +97,7 @@ class TestTimeGapDetectorPreprocessor(unittest.TestCase):
     
     def test_process_hourly_data(self):
         """Test TimeGapDetectorPreprocessor with hourly data."""
-        hourly_dates = pd.date_range('2024-01-01', periods=24, freq='H')
+        hourly_dates = pd.date_range('2024-01-01', periods=24, freq='h')
         hourly_data = pd.DataFrame({
             'open': range(100, 124),
             'high': range(105, 129),
@@ -113,7 +113,7 @@ class TestTimeGapDetectorPreprocessor(unittest.TestCase):
     
     def test_process_hourly_data_with_gaps(self):
         """Test TimeGapDetectorPreprocessor with hourly data having gaps."""
-        hourly_dates = pd.date_range('2024-01-01', periods=24, freq='H')
+        hourly_dates = pd.date_range('2024-01-01', periods=24, freq='h')
         hourly_data = pd.DataFrame({
             'open': range(100, 124),
             'high': range(105, 129),
@@ -132,7 +132,7 @@ class TestTimeGapDetectorPreprocessor(unittest.TestCase):
     
     def test_process_minute_data(self):
         """Test TimeGapDetectorPreprocessor with minute data."""
-        minute_dates = pd.date_range('2024-01-01 09:00', periods=60, freq='T')
+        minute_dates = pd.date_range('2024-01-01 09:00', periods=60, freq='min')
         minute_data = pd.DataFrame({
             'open': range(100, 160),
             'high': range(105, 165),
