@@ -8,6 +8,7 @@ Niffler is a Python-based trading application that helps you sniff out market op
 - **Data Preprocessing**: Clean and validate trading data with comprehensive quality checks
 - **Strategy Framework**: Implement and test custom trading strategies
 - **Backtesting Engine**: Test strategies against historical data with realistic trading simulation
+- **Risk Management**: Position sizing, stop-loss management, and portfolio risk controls
 - **Strategy Optimization**: Find optimal strategy parameters using grid search and random search methods
 - **Advanced Analysis**: Validate strategy robustness with Walk-forward analysis and Monte Carlo simulation
 - **Comprehensive Testing**: Full test suite with 85+ unit tests covering all components
@@ -263,6 +264,7 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_for
     *   `data/`: Data acquisition and preprocessing modules
     *   `strategies/`: Trading strategy implementations
     *   `backtesting/`: Backtesting engine and related components
+    *   `risk/`: Risk management systems and position sizing
     *   `optimization/`: Parameter optimization framework
     *   `analysis/`: Advanced strategy validation and robustness testing
 *   `scripts/`: Command-line interfaces for core functionality
@@ -277,6 +279,7 @@ Niffler follows a modular architecture:
 - **Data Layer**: Handles data acquisition from multiple sources and preprocessing
 - **Strategy Layer**: Abstract base classes and concrete strategy implementations  
 - **Backtesting Layer**: Portfolio management, trade execution, and performance analysis
+- **Risk Management Layer**: Position sizing, stop-loss calculation, and portfolio risk controls
 - **Optimization Layer**: Parameter optimization using grid search and random search methods
 - **Analysis Layer**: Advanced robustness testing with Walk-forward analysis and Monte Carlo simulation
 - **Scripts Layer**: Command-line tools for easy interaction with core functionality
@@ -313,4 +316,93 @@ Both analysis methods help answer critical questions:
 - How robust is my strategy to different market conditions?
 - What are the realistic risk and return expectations?
 - How consistent is the strategy's performance over time?
+
+## Risk Management
+
+Niffler includes a comprehensive risk management framework designed to control position sizing, manage stop losses, and enforce portfolio-level risk limits. The system is built around an abstract base class that allows for different risk management strategies.
+
+### Available Risk Managers
+
+#### Fixed Risk Manager
+The `FixedRiskManager` provides simple, predictable risk management using fixed percentages:
+
+**Features:**
+- **Fixed Position Sizing**: Uses a constant percentage of portfolio for each trade (e.g., 10%)
+- **Fixed Stop Loss**: Sets stop loss at a fixed percentage from entry price (e.g., 5%)
+- **Portfolio Controls**: Enforces maximum number of concurrent positions
+- **Risk Per Trade Limits**: Caps maximum risk per individual trade
+- **Exposure Limits**: Controls total portfolio exposure across all positions
+
+**Use Case:** Conservative risk management where position sizes are predictable and consistent across all trades.
+
+**Example Configuration:**
+```python
+from niffler.risk.fixed_risk_manager import FixedRiskManager
+
+risk_manager = FixedRiskManager(
+    position_size_pct=0.1,      # 10% of portfolio per trade
+    stop_loss_pct=0.05,         # 5% stop loss from entry
+    max_positions=5,            # Maximum 5 concurrent positions
+    max_risk_per_trade=0.02     # Maximum 2% portfolio risk per trade
+)
+```
+
+#### Kelly Risk Manager (Planned)
+The `KellyRiskManager` implements optimal position sizing based on the Kelly Criterion:
+
+**Planned Features:**
+- **Kelly Criterion Calculation**: Uses historical win/loss ratios for optimal position sizing
+- **Fractional Kelly**: Supports conservative fractions of full Kelly (e.g., quarter-Kelly, half-Kelly)
+- **Dynamic Stop Losses**: ATR-based stop losses that adapt to market volatility
+- **Historical Analysis**: Analyzes recent trade performance to calculate optimal position sizes
+- **Risk-Adjusted Sizing**: Automatically adjusts position sizes based on strategy performance
+
+**Status:** Framework implemented, core calculations pending integration with backtest engine trade history.
+
+### Risk Management Features
+
+#### Position Tracking
+- **Real-time Monitoring**: Tracks all open positions with entry prices, sizes, and stop losses
+- **Portfolio State**: Maintains comprehensive portfolio state across all positions
+- **Position Updates**: Automatically updates position information as trades are executed
+
+#### Portfolio Risk Controls
+- **Total Exposure Limits**: Controls maximum total exposure across all positions
+- **Position Count Limits**: Enforces maximum number of concurrent positions
+- **Individual Position Limits**: Caps maximum size of any single position
+- **Risk Per Trade Controls**: Limits maximum risk on any individual trade
+
+#### Stop Loss Management
+- **Automated Calculation**: Automatically calculates stop loss prices based on chosen method
+- **Stop Loss Monitoring**: Continuously monitors positions against stop loss levels
+- **Position Closing Logic**: Determines when positions should be closed due to risk management rules
+
+#### Risk Metrics and Reporting
+- **Portfolio Summary**: Provides comprehensive overview of current portfolio state
+- **Risk Exposure Analysis**: Calculates current and maximum potential risk exposure
+- **Position Utilization**: Tracks how much of available position capacity is being used
+- **Risk Efficiency Metrics**: Measures how effectively risk capacity is being utilized
+
+### Integration with Backtesting
+
+The risk management system integrates seamlessly with the backtesting engine:
+
+1. **Trade Evaluation**: Before executing any trade, the backtest engine consults the risk manager
+2. **Position Sizing**: Risk manager calculates appropriate position size based on current portfolio state
+3. **Stop Loss Setting**: Risk manager determines stop loss price for new positions
+4. **Position Monitoring**: Throughout the backtest, risk manager monitors positions for stop loss triggers
+5. **Risk Reporting**: Post-backtest analysis includes comprehensive risk management metrics
+
+### Risk Management Workflow
+
+1. **Signal Generation**: Strategy generates buy/sell signals
+2. **Risk Evaluation**: Risk manager evaluates trade against current portfolio state
+3. **Position Sizing**: Risk manager calculates appropriate position size
+4. **Stop Loss Calculation**: Risk manager determines stop loss price
+5. **Portfolio Check**: Risk manager validates trade against portfolio limits
+6. **Trade Execution**: If approved, trade is executed with risk management parameters
+7. **Position Tracking**: Risk manager updates position tracking and portfolio state
+8. **Ongoing Monitoring**: Risk manager continuously monitors positions for exit signals
+
+This comprehensive risk management approach ensures that trading strategies operate within defined risk parameters, helping to protect capital and manage portfolio risk effectively.
 

@@ -120,6 +120,10 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
   - `walk_forward_analyzer.py` - Temporal robustness testing across rolling time windows
   - `monte_carlo_analyzer.py` - Market scenario robustness testing via bootstrap sampling
   - `analysis_result.py` - Unified result container with stability metrics
+- `niffler/risk/` - Risk management framework
+  - `base_risk_manager.py` - Abstract base class for risk management systems
+  - `fixed_risk_manager.py` - Fixed position sizing and stop-loss risk management
+  - `kelly_risk_manager.py` - Kelly criterion-based optimal position sizing (pending implementation)
 - `config/logging.py` - Unified logging configuration
 - `scripts/` - Command-line interfaces for core functionality
 
@@ -162,9 +166,31 @@ The analysis framework provides two main approaches for testing strategy robustn
 - **Key Metrics**: Return distribution statistics, VaR/CVaR, percentile analysis, skewness/kurtosis
 - **Use Case**: Assess strategy performance across various market scenarios and estimate risk metrics
 
+### Risk Management Framework
+The risk management system provides position sizing, stop-loss calculation, and portfolio-level risk controls:
+
+#### Fixed Risk Manager
+- **Purpose**: Simple, predictable risk management using fixed percentages
+- **Position Sizing**: Fixed percentage of portfolio per trade (e.g., 10%)
+- **Stop Loss**: Fixed percentage from entry price (e.g., 5%)
+- **Portfolio Controls**: Maximum positions, exposure limits, risk per trade caps
+- **Use Case**: Conservative risk management with predictable position sizes
+
+#### Kelly Risk Manager (Planned)
+- **Purpose**: Optimal position sizing based on historical strategy performance
+- **Method**: Uses Kelly Criterion formula: f* = (bp - q) / b
+- **Features**: Fractional Kelly, lookback period analysis, volatility-based stops
+- **Status**: Framework implemented, core calculations pending integration with backtest engine
+
+#### Risk Management Features
+- **Position Tracking**: Real-time monitoring of all open positions
+- **Portfolio Risk Controls**: Total exposure limits, maximum concurrent positions
+- **Stop Loss Management**: Automated stop-loss calculation and monitoring
+- **Risk Metrics**: Comprehensive risk reporting and portfolio utilization tracking
+
 ### Testing Approach
 - Mock external dependencies (ccxt, yfinance)
 - Test both successful operations and error conditions
 - Validate argument parsing and data output formats
-- Comprehensive testing: 61 unit tests for analyzers + 24 tests for CLI script
+- Comprehensive testing: 61 unit tests for analyzers + 24 tests for CLI script + risk management tests
 - Integration and functional testing to ensure end-to-end workflow reliability

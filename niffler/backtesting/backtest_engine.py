@@ -55,54 +55,160 @@ class BacktestEngine:
         # Generate trading signals
         signals_df = strategy.generate_signals(data.copy())
         
+        # Risk management will be applied during execution loop for real-time portfolio state
+        
         # Initialize tracking variables
         cash = self.initial_capital
         position = 0.0  # Number of shares/units held
         portfolio_values = np.zeros(len(data))  # Pre-allocate for performance
         trades = []
         
+        # Risk management tracking
+        current_stop_loss = None
+        entry_price = None
+        position_signal = 0  # Track whether current position is long (1) or short (-1)
+        
         # Process each signal
         for i, (idx, row) in enumerate(signals_df.iterrows()):
             current_price = row['close']
             signal = row.get('signal', 0)
             position_size = row.get('position_size', 1.0)
+            stop_loss_price = None
+            
+            # Apply risk management for this specific signal
+            if signal != 0 and hasattr(strategy, 'risk_manager') and strategy.risk_manager is not None:
+                # Get historical data up to current point  
+                historical_data = data.iloc[:i+1] if i > 0 else data.iloc[:1]
+                
+                # Get current position size as fraction of portfolio
+                portfolio_value_current = cash + position * current_price
+                current_position_fraction = (position * current_price) / portfolio_value_current if portfolio_value_current > 0 else 0.0
+                
+                # Evaluate risk for this trade
+                risk_decision = strategy.risk_manager.evaluate_trade(
+                    signal=signal,
+                    current_price=current_price,
+                    portfolio_value=portfolio_value_current,
+                    historical_data=historical_data,
+                    current_position=current_position_fraction
+                )
+                
+                # Apply risk management decisions
+                if risk_decision.allow_trade:
+                    position_size = risk_decision.position_size
+                    stop_loss_price = risk_decision.stop_loss_price
+                else:
+                    signal = 0  # Block the trade
+                    position_size = 0.0
             
             # Validate position size
-            if position_size <= 0 or position_size > 1.0:
+            if position_size < 0 or position_size > 1.0:
                 raise ValueError(f"Position size must be between 0 and 1, got {position_size}")
             
-            # Execute trades based on signals
-            if signal == 1 and cash > 0:  # Buy signal
-                trade = self._execute_buy_trade(idx, symbol, current_price, position_size, cash)
-                if trade:
-                    trades.append(trade)
-                    # Commission is already included in trade execution logic
-                    commission_cost = trade.value * self.commission
-                    cash -= trade.value + commission_cost
-                    position += trade.quantity
-                    logging.info(f"BUY: {trade.quantity:.4f} shares at ${trade.price:.2f} "
-                                 f"(Value: ${trade.value:.2f}, Commission: ${commission_cost:.2f}, Cash: ${cash:.2f})")
+            # Check stop-loss conditions for existing position
+            stop_loss_triggered = False
+            if position != 0 and current_stop_loss is not None:
+                if hasattr(strategy, 'risk_manager') and strategy.risk_manager is not None:
+                    should_close, reason = strategy.risk_manager.should_close_position(
+                        current_price=current_price,
+                        entry_price=entry_price,
+                        stop_loss_price=current_stop_loss,
+                        signal=position_signal,
+                        unrealized_pnl=(current_price - entry_price) * position * position_signal
+                    )
+                    if should_close:
+                        # Execute stop-loss trade
+                        stop_trade = self._execute_sell_trade(idx, symbol, current_price, 1.0, position)
+                        if stop_trade:
+                            trades.append(stop_trade)
+                            commission_cost = stop_trade.value * self.commission
+                            cash += stop_trade.value - commission_cost
+                            position = 0.0
+                            current_stop_loss = None
+                            entry_price = None
+                            position_signal = 0
+                            stop_loss_triggered = True
+                            
+                            # Clear risk manager position state for stop loss
+                            if hasattr(strategy, 'risk_manager') and strategy.risk_manager is not None:
+                                strategy.risk_manager.clear_position(symbol)
+                            
+                            logging.info(f"STOP LOSS: {stop_trade.quantity:.4f} shares at ${stop_trade.price:.2f} - {reason}")
+            
+            # Execute trades based on signals (if no stop-loss was triggered)
+            if not stop_loss_triggered:
+                if signal == 1 and cash > 0:  # Buy signal
+                    trade = self._execute_buy_trade(idx, symbol, current_price, position_size, cash)
+                    if trade:
+                        trades.append(trade)
+                        # Commission is already included in trade execution logic
+                        commission_cost = trade.value * self.commission
+                        cash -= trade.value + commission_cost
+                        position += trade.quantity
+                        
+                        # Set risk management tracking for new position
+                        entry_price = current_price
+                        current_stop_loss = stop_loss_price
+                        position_signal = 1
+                        
+                        # Update risk manager position state
+                        if hasattr(strategy, 'risk_manager') and strategy.risk_manager is not None:
+                            position_size_fraction = position / portfolio_value if portfolio_value > 0 else 0.0
+                            strategy.risk_manager.update_position_state(
+                                symbol=symbol,
+                                position_size=position_size_fraction,
+                                entry_price=entry_price,
+                                stop_loss_price=current_stop_loss,
+                                entry_timestamp=idx
+                            )
+                        
+                        logging.info(f"BUY: {trade.quantity:.4f} shares at ${trade.price:.2f} "
+                                     f"(Value: ${trade.value:.2f}, Commission: ${commission_cost:.2f}, Cash: ${cash:.2f})")
+                        if current_stop_loss:
+                            logging.info(f"Stop loss set at ${current_stop_loss:.2f}")
+                        
+                elif signal == -1 and position > 0:  # Sell signal
+                    # Validate sell doesn't exceed position
+                    max_sell_quantity = position
+                    requested_sell_quantity = position * position_size
                     
-            elif signal == -1 and position > 0:  # Sell signal
-                # Validate sell doesn't exceed position
-                max_sell_quantity = position
-                requested_sell_quantity = position * position_size
-                
-                if requested_sell_quantity > max_sell_quantity:
-                    logging.warning(f"Sell quantity {requested_sell_quantity:.4f} exceeds position {max_sell_quantity:.4f}")
-                    # Adjust to maximum available
-                    adjusted_position_size = max_sell_quantity / position if position > 0 else 0
-                    trade = self._execute_sell_trade(idx, symbol, current_price, adjusted_position_size, position)
-                else:
-                    trade = self._execute_sell_trade(idx, symbol, current_price, position_size, position)
-                    
-                if trade:
-                    trades.append(trade)
-                    commission_cost = trade.value * self.commission
-                    cash += trade.value - commission_cost
-                    position -= trade.quantity
-                    logging.info(f"SELL: {trade.quantity:.4f} shares at ${trade.price:.2f} "
-                                 f"(Value: ${trade.value:.2f}, Commission: ${commission_cost:.2f}, Cash: ${cash:.2f})")
+                    if requested_sell_quantity > max_sell_quantity:
+                        logging.warning(f"Sell quantity {requested_sell_quantity:.4f} exceeds position {max_sell_quantity:.4f}")
+                        # Adjust to maximum available
+                        adjusted_position_size = max_sell_quantity / position if position > 0 else 0
+                        trade = self._execute_sell_trade(idx, symbol, current_price, adjusted_position_size, position)
+                    else:
+                        trade = self._execute_sell_trade(idx, symbol, current_price, position_size, position)
+                        
+                    if trade:
+                        trades.append(trade)
+                        commission_cost = trade.value * self.commission
+                        cash += trade.value - commission_cost
+                        position -= trade.quantity
+                        
+                        # Clear risk management tracking if position fully closed
+                        if abs(position) < 0.005:  # Use tolerance for positions smaller than 0.5%
+                            current_stop_loss = None
+                            entry_price = None
+                            position_signal = 0
+                            
+                            # Clear risk manager position state
+                            if hasattr(strategy, 'risk_manager') and strategy.risk_manager is not None:
+                                strategy.risk_manager.clear_position(symbol)
+                        else:
+                            # Update risk manager with new position size
+                            if hasattr(strategy, 'risk_manager') and strategy.risk_manager is not None:
+                                position_size_fraction = position / portfolio_value if portfolio_value > 0 else 0.0
+                                strategy.risk_manager.update_position_state(
+                                    symbol=symbol,
+                                    position_size=position_size_fraction,
+                                    entry_price=entry_price,
+                                    stop_loss_price=current_stop_loss,
+                                    entry_timestamp=idx
+                                )
+                        
+                        logging.info(f"SELL: {trade.quantity:.4f} shares at ${trade.price:.2f} "
+                                     f"(Value: ${trade.value:.2f}, Commission: ${commission_cost:.2f}, Cash: ${cash:.2f})")
             
             # Calculate portfolio value AFTER trades
             portfolio_value = cash + position * current_price

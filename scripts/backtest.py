@@ -11,6 +11,7 @@ sys.path.insert(0, str(project_root))
 
 from niffler.backtesting import BacktestEngine, BacktestResult
 from niffler.strategies.simple_ma_strategy import SimpleMAStrategy
+from niffler.risk import FixedRiskManager
 from config.logging import setup_logging
 
 
@@ -78,7 +79,19 @@ def print_backtest_results(result: BacktestResult):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Backtest trading strategies on historical data')
+    parser = argparse.ArgumentParser(
+        description='Backtest trading strategies on historical data with optional risk management',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Basic backtest without risk management
+  python backtest.py --data data/BTC.csv --strategy simple_ma
+  
+  # Backtest with fixed risk management  
+  python backtest.py --data data/BTC.csv --strategy simple_ma --risk-manager fixed \\
+    --max-position-size 0.1 --stop-loss-pct 0.05 --max-positions 3
+        """
+    )
     
     # Required arguments
     parser.add_argument('--data', '-d', required=True,
@@ -111,6 +124,19 @@ def main():
     parser.add_argument('--clean', action='store_true',
                        help='Apply data cleaning pipeline to the CSV file before backtesting')
     
+    # Risk Management options
+    parser.add_argument('--risk-manager', choices=['none', 'fixed'],
+                       default='none',
+                       help='Risk manager to use (default: none)')
+    parser.add_argument('--max-position-size', type=float, default=0.2,
+                       help='Maximum position size as fraction of portfolio (default: 0.2)')
+    parser.add_argument('--stop-loss-pct', type=float, default=0.05,
+                       help='Stop loss percentage (default: 0.05)')
+    parser.add_argument('--max-positions', type=int, default=5,
+                       help='Maximum number of concurrent positions (default: 5)')
+    parser.add_argument('--max-risk-per-trade', type=float, default=0.02,
+                       help='Maximum risk per trade as fraction of portfolio (default: 0.02)')
+    
     # Logging options
     parser.add_argument('--log-level', default='INFO',
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
@@ -129,17 +155,39 @@ def main():
         data = load_data(args.data, clean=args.clean)
         print(f"Loaded {len(data)} data points from {data.index[0]} to {data.index[-1]}")
         
+        # Initialize risk manager
+        risk_manager = None
+        if args.risk_manager == 'fixed':
+            risk_manager = FixedRiskManager(
+                position_size_pct=args.max_position_size,
+                stop_loss_pct=args.stop_loss_pct,
+                max_positions=args.max_positions,
+                max_risk_per_trade=args.max_risk_per_trade
+            )
+            print(f"Risk Manager: {risk_manager.get_risk_metrics()['risk_management_type']}")
+        
         # Initialize strategy
         if args.strategy == 'simple_ma':
             strategy = SimpleMAStrategy(
                 short_window=args.short_window,
                 long_window=args.long_window,
-                position_size=args.position_size
+                position_size=args.position_size,
+                risk_manager=risk_manager
             )
         else:
             raise ValueError(f"Unknown strategy: {args.strategy}")
         
         print(f"Strategy: {strategy.get_description()}")
+        
+        # Print risk management info
+        if risk_manager is not None:
+            risk_metrics = risk_manager.get_risk_metrics()
+            print(f"Risk Management: {risk_metrics.get('risk_management_type', 'Unknown')}")
+            print(f"  Max Position Size: {risk_metrics.get('max_position_size', 'N/A')}")
+            print(f"  Stop Loss: {risk_metrics.get('stop_loss_pct', 'N/A')}")
+            print(f"  Max Positions: {risk_metrics.get('max_positions', 'N/A')}")
+        else:
+            print("Risk Management: None")
         
         # Initialize backtest engine
         engine = BacktestEngine(

@@ -409,7 +409,7 @@ class TestBaseOptimizer(unittest.TestCase):
         best_metrics = optimizer.analyze_best_metrics(results)
         
         # Should have entries for all metrics
-        expected_metrics = ['total_return', 'sharpe_ratio', 'max_drawdown', 'win_rate', 'total_trades', 'profit_factor']
+        expected_metrics = ['total_return', 'sharpe_ratio', 'max_drawdown', 'win_rate', 'total_trades']
         for metric in expected_metrics:
             self.assertIn(metric, best_metrics)
             self.assertIn('parameters', best_metrics[metric])

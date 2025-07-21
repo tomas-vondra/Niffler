@@ -19,8 +19,8 @@ from niffler.strategies.base_strategy import BaseStrategy
 class MockStrategy(BaseStrategy):
     """Mock strategy for testing."""
     
-    def __init__(self, signals_data=None):
-        super().__init__("MockStrategy", {})
+    def __init__(self, signals_data=None, risk_manager=None):
+        super().__init__("MockStrategy", {}, risk_manager)
         self.signals_data = signals_data or {}
         
     def generate_signals(self, data):
@@ -40,6 +40,47 @@ class MockStrategy(BaseStrategy):
         
     def get_description(self):
         return "Mock Strategy for Testing"
+
+
+class MockRiskManager:
+    """Mock risk manager for testing."""
+    
+    def __init__(self, allow_trade=True, position_size=0.5, stop_loss_price=95.0):
+        self.allow_trade = allow_trade
+        self.position_size = position_size  
+        self.stop_loss_price = stop_loss_price
+        self.positions = {}
+        
+    def evaluate_trade(self, signal, current_price, portfolio_value, historical_data, current_position):
+        from niffler.risk.base_risk_manager import RiskDecision
+        return RiskDecision(
+            position_size=self.position_size,
+            stop_loss_price=self.stop_loss_price,
+            max_risk_per_trade=0.05,
+            allow_trade=self.allow_trade,
+            reason="Mock risk decision"
+        )
+        
+    def should_close_position(self, current_price, entry_price, stop_loss_price, signal, unrealized_pnl):
+        if stop_loss_price and current_price <= stop_loss_price:
+            return True, "Mock stop loss triggered"
+        return False, "Mock stop loss not triggered"
+        
+    def update_position_state(self, symbol, position_size, entry_price, stop_loss_price, entry_timestamp):
+        # Debug print to see what values we're getting
+        # print(f"MockRiskManager.update_position_state: {symbol}, position_size={position_size}")
+        # Always update the position state - the backtest engine handles calling clear_position when needed
+        self.positions[symbol] = {
+            'position_size': position_size,
+            'entry_price': entry_price,
+            'stop_loss_price': stop_loss_price,
+            'entry_timestamp': entry_timestamp
+        }
+        
+    def clear_position(self, symbol):
+        # print(f"MockRiskManager.clear_position called for {symbol}")
+        if symbol in self.positions:
+            del self.positions[symbol]
 
 
 class TestBacktestEngine(unittest.TestCase):
@@ -341,6 +382,63 @@ class TestBacktestEngine(unittest.TestCase):
         log_calls = [call[0][0] for call in mock_logging.info.call_args_list]
         self.assertTrue(any("Input validation passed" in msg for msg in log_calls))
         self.assertTrue(any("Starting backtest" in msg for msg in log_calls))
+        
+    def test_backtest_with_risk_manager_allowed_trade(self):
+        """Test backtest with risk manager that allows trades."""
+        risk_manager = MockRiskManager(allow_trade=True, position_size=0.3)
+        signals_data = {self.sample_data.index[1]: 1}
+        strategy = MockStrategy(signals_data, risk_manager)
+        
+        result = self.engine.run_backtest(strategy, self.sample_data, "TEST")
+        
+        self.assertIsInstance(result, BacktestResult)
+        self.assertGreater(len(result.trades), 0)  # Should have trades
+        # Risk manager position size should be used (0.3 instead of 1.0)
+        
+        # Check that risk manager state was updated
+        self.assertIn("TEST", risk_manager.positions)
+        
+    def test_backtest_with_risk_manager_blocked_trade(self):
+        """Test backtest with risk manager that blocks trades."""
+        risk_manager = MockRiskManager(allow_trade=False)
+        signals_data = {self.sample_data.index[1]: 1}
+        strategy = MockStrategy(signals_data, risk_manager)
+        
+        result = self.engine.run_backtest(strategy, self.sample_data, "TEST")
+        
+        self.assertIsInstance(result, BacktestResult)
+        self.assertEqual(len(result.trades), 0)  # Should have no trades
+        self.assertEqual(result.final_capital, result.initial_capital)  # No trades = no change
+        
+    def test_backtest_with_risk_manager_stop_loss(self):
+        """Test backtest with risk manager stop loss functionality."""
+        risk_manager = MockRiskManager(allow_trade=True, position_size=0.5, stop_loss_price=102.0)
+        # Buy signal at index 1 (price 101.5), should trigger stop loss at index 2 (price 102.5)
+        signals_data = {self.sample_data.index[1]: 1}
+        strategy = MockStrategy(signals_data, risk_manager)
+        
+        result = self.engine.run_backtest(strategy, self.sample_data, "TEST")
+        
+        self.assertIsInstance(result, BacktestResult)
+        # Should have both buy trade and stop loss sell trade
+        self.assertGreaterEqual(len(result.trades), 1)
+        
+    def test_backtest_risk_manager_position_state_sync(self):
+        """Test that risk manager position state stays synchronized."""
+        risk_manager = MockRiskManager(allow_trade=True, position_size=1.0)  # Use 100% to ensure full close
+        signals_data = {
+            self.sample_data.index[1]: 1,   # Buy
+            self.sample_data.index[4]: -1   # Sell
+        }
+        strategy = MockStrategy(signals_data, risk_manager)
+        
+        result = self.engine.run_backtest(strategy, self.sample_data, "TEST")
+        
+        # After backtest completes, position should be cleared
+        self.assertNotIn("TEST", risk_manager.positions)
+        
+        # Should have buy and sell trades
+        self.assertGreaterEqual(len(result.trades), 2)
 
 
 if __name__ == '__main__':

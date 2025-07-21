@@ -12,7 +12,7 @@ class SimpleMAStrategy(BaseStrategy):
     """
     
     def __init__(self, short_window: int = 10, long_window: int = 30, 
-                 position_size: float = 1.0):
+                 position_size: float = 1.0, risk_manager=None):
         """
         Initialize the strategy.
         
@@ -20,13 +20,14 @@ class SimpleMAStrategy(BaseStrategy):
             short_window: Period for short moving average
             long_window: Period for long moving average  
             position_size: Fraction of portfolio to use for each trade (0.0 to 1.0)
+            risk_manager: Risk manager instance for position sizing and stop-loss
         """
         parameters = {
             'short_window': short_window,
             'long_window': long_window,
             'position_size': position_size
         }
-        super().__init__("Simple MA Crossover", parameters)
+        super().__init__("Simple MA Crossover", parameters, risk_manager)
         
         self.short_window = short_window
         self.long_window = long_window
@@ -94,6 +95,11 @@ class SimpleMAStrategy(BaseStrategy):
         
     def get_description(self) -> str:
         """Return strategy description."""
+        risk_desc = ""
+        if self.risk_manager is not None:
+            risk_metrics = self.risk_manager.get_risk_metrics()
+            risk_desc = f" Risk management: {risk_metrics.get('risk_management_type', 'Unknown')}"
+        
         return (f"Simple Moving Average Crossover Strategy with "
                 f"{self.short_window}-period short MA and {self.long_window}-period long MA. "
-                f"Position size: {self.position_size * 100}%")
+                f"Position size: {self.position_size * 100}%.{risk_desc}")
