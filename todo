@@ -1,0 +1,24 @@
+Optimize imports
+Utilize duplicate code
+Optimize logger, so it is created on start only once
+Unify __init__.py files
+Update sonar
+Unify factory pattern
+
+PARAMETER_SPACES to be included as user input
+Optimizer progress bar
+Update README with separate documentation for each module
+Retest optimizer and backtest (I dont believe optimizer works correctly)
+
+
+NEXT UP:
+- Walk forward analysis/Monte Carlo (and others?)
+- Plotting the results of the backtest
+- Documentation for each module
+- More signals (pivots, volume, etc.)
+- Paper trading (binance/bybit/ibkr)
+- Risk management
+- Elasticsearch/database integration
+- Adjust logging to elasticsearch/database
+- Monitoring (Grafana/Prometheus)
+- Alerting (Grafana/Prometheus)

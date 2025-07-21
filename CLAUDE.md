@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Niffler is a Python-based trading application that helps identify profitable market opportunities. The project now includes data acquisition, preprocessing, backtesting, and strategy components.
+Niffler is a Python-based trading application that helps identify profitable market opportunities. The project includes data acquisition, preprocessing, backtesting, strategy optimization, and advanced robustness analysis components.
 
 ## Development Setup
 
@@ -17,6 +17,8 @@ Niffler is a Python-based trading application that helps identify profitable mar
 - `pandas` (≥2.3.1) for data manipulation
 - `ccxt` for cryptocurrency exchange data
 - `yfinance` for traditional financial data
+- `numpy` for numerical computations and statistical analysis
+- `python-dateutil` for advanced date handling
 
 ## Common Commands
 
@@ -73,6 +75,23 @@ python scripts/optimize.py --data data/BTCUSDT_binance_1d.csv --strategy simple_
 python scripts/optimize.py --data data/BTCUSDT_binance_1d.csv --strategy simple_ma --sort-by sharpe_ratio --output my_results.json
 ```
 
+### Strategy Analysis
+Advanced robustness testing via `scripts/analyze.py`:
+
+```bash
+# Walk-forward analysis with specific parameters
+python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma --params '{"short_window": 10, "long_window": 30}'
+
+# Load parameters from optimization results
+python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma --params_file optimization_results.json
+
+# Monte Carlo analysis with 1000 simulations
+python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_carlo --strategy simple_ma --params '{"short_window": 10, "long_window": 30}' --simulations 1000
+
+# Parallel execution for faster analysis
+python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_carlo --strategy simple_ma --params_file optimization_results.json --n_jobs 8
+```
+
 ## Architecture
 
 ### Core Components
@@ -97,6 +116,10 @@ python scripts/optimize.py --data data/BTCUSDT_binance_1d.csv --strategy simple_
   - `optimizer_factory.py` - Factory for creating optimizers and parameter spaces
   - `parameter_space.py` - Defines parameter ranges for strategies
   - `optimization_result.py` - Stores and analyzes optimization results
+- `niffler/analysis/` - Advanced strategy validation framework
+  - `walk_forward_analyzer.py` - Temporal robustness testing across rolling time windows
+  - `monte_carlo_analyzer.py` - Market scenario robustness testing via bootstrap sampling
+  - `analysis_result.py` - Unified result container with stability metrics
 - `config/logging.py` - Unified logging configuration
 - `scripts/` - Command-line interfaces for core functionality
 
@@ -124,8 +147,24 @@ python scripts/optimize.py --data data/BTCUSDT_binance_1d.csv --strategy simple_
 - Graceful handling of network errors and invalid inputs
 - Data validation prevents corrupted data from breaking downstream analysis
 
+### Analysis Framework Architecture
+The analysis framework provides two main approaches for testing strategy robustness:
+
+#### Walk-Forward Analysis
+- **Purpose**: Tests temporal robustness by validating pre-optimized parameters across rolling time windows
+- **Process**: Uses fixed parameters obtained from optimization and tests them on sequential out-of-sample periods
+- **Key Metrics**: Period-by-period performance, temporal stability, return consistency
+- **Use Case**: Validate that optimized parameters work consistently across different time periods
+
+#### Monte Carlo Analysis  
+- **Purpose**: Tests market scenario robustness using bootstrap sampling of historical data
+- **Process**: Runs hundreds/thousands of simulations with block bootstrap sampling to preserve time series structure
+- **Key Metrics**: Return distribution statistics, VaR/CVaR, percentile analysis, skewness/kurtosis
+- **Use Case**: Assess strategy performance across various market scenarios and estimate risk metrics
+
 ### Testing Approach
 - Mock external dependencies (ccxt, yfinance)
 - Test both successful operations and error conditions
 - Validate argument parsing and data output formats
-- Comprehensive preprocessor testing with 25 test cases covering edge cases
+- Comprehensive testing: 61 unit tests for analyzers + 24 tests for CLI script
+- Integration and functional testing to ensure end-to-end workflow reliability

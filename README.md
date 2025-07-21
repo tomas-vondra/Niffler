@@ -9,7 +9,8 @@ Niffler is a Python-based trading application that helps you sniff out market op
 - **Strategy Framework**: Implement and test custom trading strategies
 - **Backtesting Engine**: Test strategies against historical data with realistic trading simulation
 - **Strategy Optimization**: Find optimal strategy parameters using grid search and random search methods
-- **Comprehensive Testing**: Full test suite covering all components
+- **Advanced Analysis**: Validate strategy robustness with Walk-forward analysis and Monte Carlo simulation
+- **Comprehensive Testing**: Full test suite with 85+ unit tests covering all components
 
 ## Getting Started
 
@@ -177,6 +178,85 @@ python scripts/optimize.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv 
 python scripts/optimize.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv --strategy simple_ma --method grid --clean --output my_optimization_results.json
 ```
 
+### Strategy Analysis
+
+The `analyze.py` script provides advanced robustness testing for trading strategies using two sophisticated methods: Walk-forward analysis and Monte Carlo simulation. This is typically used after optimization to validate that optimized parameters are robust across different time periods and market conditions.
+
+#### Usage:
+
+```bash
+python scripts/analyze.py --data <data_file> --analysis <analysis_type> --strategy <strategy_name> (--params <parameters_json> | --params_file <params_file>) [additional_options]
+```
+
+**Arguments:**
+
+*   `--data`: Path to CSV file containing historical market data
+*   `--analysis`: Analysis type (`walk_forward` or `monte_carlo`)
+*   `--strategy`: Strategy to analyze (currently supports `simple_ma`)
+*   `--params`: Strategy parameters as JSON string (e.g., `'{"short_window": 10, "long_window": 30}'`)
+*   `--params_file`: Path to JSON file containing parameters (can use optimization results file)
+*   `--initial_capital`: (Optional) Starting capital. Default: 10000
+*   `--commission`: (Optional) Commission rate per trade. Default: 0.001
+*   `--output`: (Optional) Save detailed results to JSON file
+*   `--n_jobs`: (Optional) Number of parallel jobs for analysis
+*   `--verbose`: (Optional) Enable detailed logging
+
+**Walk-forward Analysis Options:**
+*   `--test_window`: Test window size in months. Default: 6
+*   `--step`: Step size in months between test windows. Default: 3
+
+**Monte Carlo Analysis Options:**
+*   `--simulations`: Number of Monte Carlo simulations. Default: 1000
+*   `--bootstrap_pct`: Percentage of data to sample in each simulation. Default: 0.8
+*   `--block_size`: Block size in days for bootstrap sampling. Default: 30
+*   `--random_seed`: Random seed for reproducible results
+
+#### Analysis Methods:
+
+**Walk-Forward Analysis:**
+- Tests temporal robustness by validating pre-optimized parameters across rolling time windows
+- Uses fixed parameters and tests them on sequential out-of-sample periods
+- Provides period-by-period performance analysis and stability metrics
+- Ideal for validating that optimized parameters work consistently over time
+
+**Monte Carlo Analysis:**
+- Tests market scenario robustness using bootstrap sampling of historical data
+- Runs hundreds/thousands of simulations with block bootstrap sampling to preserve time series structure
+- Provides return distribution statistics, VaR/CVaR analysis, and percentile breakdowns
+- Ideal for assessing strategy performance across various market scenarios and estimating risk
+
+#### Examples:
+
+**Walk-forward analysis with specific parameters:**
+
+```bash
+python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma --params '{"short_window": 10, "long_window": 30}'
+```
+
+**Load parameters from optimization results:**
+
+```bash
+python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma --params_file optimization_results.json
+```
+
+**Monte Carlo analysis with 1000 simulations:**
+
+```bash
+python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_carlo --strategy simple_ma --params '{"short_window": 10, "long_window": 30}' --simulations 1000
+```
+
+**Parallel execution with custom settings:**
+
+```bash
+python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_carlo --strategy simple_ma --params_file optimization_results.json --n_jobs 8 --bootstrap_pct 0.75 --output analysis_results.json
+```
+
+**Walk-forward with custom time windows:**
+
+```bash
+python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma --params '{"short_window": 15, "long_window": 25}' --test_window 6 --step 3
+```
+
 ## Project Structure
 
 *   `niffler/`: Core application logic
@@ -184,18 +264,53 @@ python scripts/optimize.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv 
     *   `strategies/`: Trading strategy implementations
     *   `backtesting/`: Backtesting engine and related components
     *   `optimization/`: Parameter optimization framework
+    *   `analysis/`: Advanced strategy validation and robustness testing
 *   `scripts/`: Command-line interfaces for core functionality
 *   `config/`: Configuration and logging setup
 *   `data/`: (Ignored by Git) Downloaded market data storage
-*   `tests/`: Comprehensive unit test suite
+*   `tests/`: Comprehensive unit test suite with 85+ tests
 
 ## Architecture
 
 Niffler follows a modular architecture:
 
 - **Data Layer**: Handles data acquisition from multiple sources and preprocessing
-- **Strategy Layer**: Abstract base classes and concrete strategy implementations
+- **Strategy Layer**: Abstract base classes and concrete strategy implementations  
 - **Backtesting Layer**: Portfolio management, trade execution, and performance analysis
 - **Optimization Layer**: Parameter optimization using grid search and random search methods
+- **Analysis Layer**: Advanced robustness testing with Walk-forward analysis and Monte Carlo simulation
 - **Scripts Layer**: Command-line tools for easy interaction with core functionality
+
+## Workflow
+
+The typical workflow for using Niffler follows these steps:
+
+1. **Data Acquisition**: Download historical market data using `download_data.py`
+2. **Data Preprocessing**: Clean and validate the data using `preprocessor.py`
+3. **Strategy Development**: Implement or customize trading strategies
+4. **Backtesting**: Test strategies against historical data using `backtest.py`
+5. **Optimization**: Find optimal parameters using `optimize.py`  
+6. **Analysis**: Validate robustness using `analyze.py` with walk-forward or Monte Carlo methods
+7. **Deployment**: Use validated strategies with confidence in their robustness
+
+## Key Features of the Analysis Framework
+
+### Walk-Forward Analysis
+- **Temporal Validation**: Tests strategy performance across different time periods
+- **Rolling Windows**: Uses configurable test windows that roll forward through historical data
+- **Stability Metrics**: Calculates temporal stability, return consistency, and trend analysis
+- **Out-of-Sample Testing**: Ensures parameters work beyond the optimization period
+
+### Monte Carlo Analysis  
+- **Scenario Testing**: Simulates thousands of different market scenarios
+- **Block Bootstrap**: Preserves time series structure while creating synthetic data samples
+- **Risk Assessment**: Provides comprehensive risk metrics including VaR and CVaR
+- **Distribution Analysis**: Full statistical analysis of returns including skewness and kurtosis
+- **Parallel Processing**: Efficient multi-core processing for large simulation batches
+
+Both analysis methods help answer critical questions:
+- Will my optimized parameters work in the future?
+- How robust is my strategy to different market conditions?
+- What are the realistic risk and return expectations?
+- How consistent is the strategy's performance over time?
 

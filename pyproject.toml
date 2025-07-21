@@ -7,4 +7,5 @@ dependencies = [
     "pandas>=2.3.1",
     "ccxt",
     "yfinance",
+    "python-dateutil",
 ]
