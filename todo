@@ -7,18 +7,16 @@ Unify factory pattern
 
 PARAMETER_SPACES to be included as user input
 Optimizer progress bar
-Update README with separate documentation for each module
 Retest optimizer and backtest (I dont believe optimizer works correctly)
 
 
 NEXT UP:
-- Walk forward analysis/Monte Carlo (and others?)
+- preprocessor default output is not in data/ path
 - Plotting the results of the backtest
-- Documentation for each module
-- More signals (pivots, volume, etc.)
-- Paper trading (binance/bybit/ibkr)
-- Risk management
 - Elasticsearch/database integration
 - Adjust logging to elasticsearch/database
+
+- New strategies
+- Paper trading (binance/bybit/ibkr)
 - Monitoring (Grafana/Prometheus)
 - Alerting (Grafana/Prometheus)
