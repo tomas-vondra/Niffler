@@ -75,7 +75,7 @@ class TestBaseOptimizer(unittest.TestCase):
         self.mock_backtest_result.win_rate = 0.6
         self.mock_backtest_result.total_trades = 10
         self.mock_backtest_result.total_profits = 1000
-        self.mock_backtest_result.total_losses = -500
+        self.mock_backtest_result.total_return_pct = 15.0
     
     def test_optimizer_initialization(self):
         """Test optimizer initialization with valid parameters."""
@@ -363,10 +363,10 @@ class TestBaseOptimizer(unittest.TestCase):
         results = []
         for i in range(5):
             mock_result = Mock()
-            mock_result.backtest_result.total_return = 0.1 + i * 0.05  # 0.1, 0.15, 0.2, 0.25, 0.3
+            mock_result.total_return_pct = 10.0 + i * 5.0  # 10.0, 15.0, 20.0, 25.0, 30.0
             result = OptimizationResult(
                 parameters={'param': i},
-                backtest_result=mock_result.backtest_result
+                backtest_result=mock_result
             )
             results.append(result)
         
@@ -392,17 +392,17 @@ class TestBaseOptimizer(unittest.TestCase):
         results = []
         for i in range(3):
             mock_result = Mock()
-            mock_result.backtest_result.total_return = 0.1 + i * 0.05
-            mock_result.backtest_result.sharpe_ratio = 1.0 + i * 0.5
-            mock_result.backtest_result.max_drawdown = 0.1 - i * 0.02
-            mock_result.backtest_result.win_rate = 0.5 + i * 0.1
-            mock_result.backtest_result.total_trades = 10 + i * 5
-            mock_result.backtest_result.total_profits = 1000 + i * 200
-            mock_result.backtest_result.total_losses = -500 - i * 100
+            mock_result.total_return = 0.1 + i * 0.05
+            mock_result.sharpe_ratio = 1.0 + i * 0.5
+            mock_result.max_drawdown = 0.1 - i * 0.02
+            mock_result.win_rate = 0.5 + i * 0.1
+            mock_result.total_trades = 10 + i * 5
+            mock_result.total_profits = 1000 + i * 200
+            mock_result.total_return_pct = (0.1 + i * 0.05) * 100
             
             result = OptimizationResult(
                 parameters={'param': i},
-                backtest_result=mock_result.backtest_result
+                backtest_result=mock_result
             )
             results.append(result)
         

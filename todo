@@ -7,8 +7,6 @@ Unify factory pattern
 
 PARAMETER_SPACES to be included as user input
 Optimizer progress bar
-Retest optimizer and backtest (I dont believe optimizer works correctly)
-
 
 NEXT UP:
 - preprocessor default output is not in data/ path

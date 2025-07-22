@@ -224,17 +224,17 @@ def main():
             sort_value = accessor_func(result)
             
             if args.sort_by in ['total_return', 'max_drawdown', 'win_rate']:
-                print(f"#{i} - {args.sort_by}: {sort_value:.2%}")
+                print(f"#{i} - {args.sort_by}: {sort_value:.2f}%")
             elif args.sort_by == 'sharpe_ratio':
                 print(f"#{i} - {args.sort_by}: {sort_value:.3f}")
             else:
                 print(f"#{i} - {args.sort_by}: {sort_value}")
             print(f"    Parameters: {result.parameters}")
-            print(f"    Total Return: {result.backtest_result.total_return:.2%}")
+            print(f"    Total Return: ${result.backtest_result.total_return:,.2f} ({result.backtest_result.total_return_pct:.2f}%)")
             print(f"    Sharpe Ratio: {result.backtest_result.sharpe_ratio:.3f}")
-            print(f"    Max Drawdown: {result.backtest_result.max_drawdown:.2%}")
+            print(f"    Max Drawdown: {result.backtest_result.max_drawdown:.2f}%")
             print(f"    Total Trades: {result.backtest_result.total_trades}")
-            print(f"    Win Rate: {result.backtest_result.win_rate:.1%}")
+            print(f"    Win Rate: {result.backtest_result.win_rate:.1f}%")
             print()
         
         # Show best parameters for each metric
@@ -252,7 +252,7 @@ def main():
             
             # Format value based on metric type
             if metric_name in ['total_return', 'max_drawdown', 'win_rate']:
-                formatted_value = f"{value:.2%}"
+                formatted_value = f"{value:.2f}%"
             elif metric_name == 'sharpe_ratio':
                 formatted_value = f"{value:.3f}"
             else:

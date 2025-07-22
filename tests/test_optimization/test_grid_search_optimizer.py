@@ -64,7 +64,7 @@ class TestGridSearchOptimizer(unittest.TestCase):
         self.mock_backtest_result.win_rate = 0.6
         self.mock_backtest_result.total_trades = 10
         self.mock_backtest_result.total_profits = 1000
-        self.mock_backtest_result.total_losses = -500
+        self.mock_backtest_result.total_return_pct = 15.0
     
     def test_grid_search_optimizer_initialization(self):
         """Test grid search optimizer initialization."""

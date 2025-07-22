@@ -44,13 +44,13 @@ python scripts/download_data.py --source ccxt --symbol BTC/USDT --timeframe 1d -
 python scripts/preprocessor.py --input data/BTCUSDT_binance_1d_20240101_20241231.csv
 
 # 3. Run backtest
-python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20241231_cleaned.csv --strategy simple_ma
+python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20241231_cleaned.csv --strategy simple_ma --symbol BTC/USDT
 
 # 4. Optimize parameters  
-python scripts/optimize.py --data data/BTCUSDT_binance_1d_20240101_20241231_cleaned.csv --strategy simple_ma --method grid
+python scripts/optimize.py --data data/BTCUSDT_binance_1d_20240101_20241231_cleaned.csv --strategy simple_ma --method grid --output data/optimization_results.json
 
 # 5. Validate robustness
-python scripts/analyze.py --data data/BTCUSDT_binance_1d_20240101_20241231_cleaned.csv --analysis walk_forward --strategy simple_ma --params_file optimization_results.json
+python scripts/analyze.py --data data/BTCUSDT_binance_1d_20240101_20241231_cleaned.csv --analysis walk_forward --strategy simple_ma --params_file data/optimization_results.json
 ```
 
 ## Framework Workflow

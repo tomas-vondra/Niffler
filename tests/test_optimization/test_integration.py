@@ -49,7 +49,7 @@ class TestOptimizationIntegration(unittest.TestCase):
             result.win_rate = 0.4 + i * 0.02       # 0.4 to 0.58
             result.total_trades = 10 + i           # 10 to 19
             result.total_profits = 1000 + i * 100  # 1000 to 1900
-            result.total_losses = -500 - i * 50    # -500 to -950
+            result.total_return_pct = (0.05 + i * 0.01) * 100  # 5% to 14%
             self.mock_backtest_results.append(result)
     
     @patch('niffler.optimization.base_optimizer.BacktestEngine')

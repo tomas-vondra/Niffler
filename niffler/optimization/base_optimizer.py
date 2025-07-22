@@ -32,7 +32,7 @@ class BaseOptimizer(ABC):
     
     # Define metrics configuration (metric_name: (higher_is_better, accessor_function))
     METRICS_CONFIG = {
-        'total_return': (True, lambda r: r.backtest_result.total_return),
+        'total_return': (True, lambda r: r.backtest_result.total_return_pct),
         'sharpe_ratio': (True, lambda r: r.backtest_result.sharpe_ratio if r.backtest_result.sharpe_ratio is not None else float('-inf')),
         'max_drawdown': (False, lambda r: r.backtest_result.max_drawdown),  # Lower is better
         'win_rate': (True, lambda r: r.backtest_result.win_rate),
@@ -319,12 +319,11 @@ class BaseOptimizer(ABC):
                 'parameters': result.parameters,
                 'metrics': {
                     'total_return': result.backtest_result.total_return,
+                    'total_return_pct': result.backtest_result.total_return_pct,
                     'sharpe_ratio': result.backtest_result.sharpe_ratio,
                     'max_drawdown': result.backtest_result.max_drawdown,
                     'total_trades': result.backtest_result.total_trades,
-                    'win_rate': result.backtest_result.win_rate,
-                    'profit_factor': (result.backtest_result.total_profits / abs(result.backtest_result.total_losses) 
-                                    if result.backtest_result.total_losses != 0 else None)
+                    'win_rate': result.backtest_result.win_rate
                 }
             }
             output_data['results'].append(result_data)
