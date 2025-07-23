@@ -54,11 +54,20 @@ python scripts/preprocessor.py --input data/ --output cleaned_data/
 Strategy backtesting via `scripts/backtest.py`:
 
 ```bash
-# Run backtest with Simple MA strategy
+# Run backtest with Simple MA strategy (console output)
 python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv --strategy simple_ma --initial_capital 10000 --commission 0.001
 
-# Run backtest with data cleaning
-python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv --strategy simple_ma --clean
+# Run backtest with CSV export
+python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv --strategy simple_ma --exporters csv --csv-output-dir results/
+
+# Run backtest with multiple exporters (console + CSV + Elasticsearch)
+python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv --strategy simple_ma --exporters console,csv,elasticsearch --csv-output-dir results/
+
+# Run backtest with data cleaning and custom Elasticsearch settings
+python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv --strategy simple_ma --clean --exporters elasticsearch --es-host localhost --es-port 9200
+
+# Run backtest with risk management
+python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv --strategy simple_ma --risk-manager fixed --max-position-size 0.1 --stop-loss-pct 0.05
 ```
 
 ### Strategy Optimization
@@ -124,7 +133,14 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
   - `base_risk_manager.py` - Abstract base class for risk management systems
   - `fixed_risk_manager.py` - Fixed position sizing and stop-loss risk management
   - `kelly_risk_manager.py` - Kelly criterion-based optimal position sizing (pending implementation)
+- `niffler/exporters/` - Modular result export system
+  - `base_exporter.py` - Abstract base class for result exporters
+  - `console_exporter.py` - Human-readable console output
+  - `csv_exporter.py` - CSV file export for analysis tools
+  - `elasticsearch_exporter.py` - Elasticsearch integration for visualization
+  - `exporter_manager.py` - Multi-exporter coordination and registry
 - `config/logging.py` - Unified logging configuration
+- `config/elasticsearch/mappings/` - Elasticsearch schema definitions
 - `scripts/` - Command-line interfaces for core functionality
 
 ### Data Storage
@@ -188,9 +204,46 @@ The risk management system provides position sizing, stop-loss calculation, and 
 - **Stop Loss Management**: Automated stop-loss calculation and monitoring
 - **Risk Metrics**: Comprehensive risk reporting and portfolio utilization tracking
 
+### Export System Architecture
+The modular export system enables flexible output of backtest results to multiple destinations:
+
+#### Export Types
+- **Console Exporter**: Human-readable formatted output for quick analysis
+- **CSV Exporter**: Structured file export for external analysis tools (Excel, Python, R)
+- **Elasticsearch Exporter**: Database integration for advanced visualization and dashboards
+
+#### Export Features
+- **Multi-Export Support**: Results can be exported to multiple destinations simultaneously
+- **Unique Identification**: Each backtest receives a UUID for tracking and correlation
+- **Metadata Integration**: Complete strategy parameters and performance metrics included
+- **Configuration Management**: Environment-based configuration (.env) with command-line overrides
+- **Error Resilience**: Individual exporter failures don't affect others or main process
+
+#### Export Data Structure
+- **Backtest Metadata**: Strategy details, parameters, performance metrics, execution info
+- **Portfolio Values**: Time-series data of portfolio value evolution
+- **Trade Details**: Individual trade records with timestamps, prices, quantities
+- **Elasticsearch Integration**: Optimized bulk operations with configurable index mappings
+
+#### Configuration
+- **Environment Variables**: Default settings via `.env` file
+  - `ELASTICSEARCH_HOST` - Elasticsearch server hostname
+  - `ELASTICSEARCH_PORT` - Elasticsearch server port  
+  - `ELASTICSEARCH_INDEX_PREFIX` - Index naming prefix
+- **Command-line Overrides**: Runtime configuration via `--es-host`, `--es-port`, `--es-index-prefix`
+- **Mapping Files**: Elasticsearch schema definitions in `config/elasticsearch/mappings/`
+
 ### Testing Approach
-- Mock external dependencies (ccxt, yfinance)
+- Mock external dependencies (ccxt, yfinance, elasticsearch)
 - Test both successful operations and error conditions
 - Validate argument parsing and data output formats
-- Comprehensive testing: 61 unit tests for analyzers + 24 tests for CLI script + risk management tests
+- Comprehensive testing: 452 total tests including:
+  - 70 unit tests for exporters package (console, CSV, Elasticsearch, manager)
+  - 36 tests for analysis framework (Monte Carlo, walk-forward)
+  - 18 tests for backtesting engine
+  - 48 tests for data management (downloaders, preprocessors)
+  - 54 tests for optimization framework
+  - 18 tests for risk management
+  - 208 tests for scripts and CLI interfaces
 - Integration and functional testing to ensure end-to-end workflow reliability
+- Isolated testing with proper mocking and teardown procedures

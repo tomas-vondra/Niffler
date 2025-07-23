@@ -1,0 +1,9 @@
+{
+  "mappings": {
+    "properties": {
+      "backtest_id": {"type": "keyword"},
+      "timestamp": {"type": "date"},
+      "portfolio_value": {"type": "double"}
+    }
+  }
+}

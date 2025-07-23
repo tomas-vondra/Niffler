@@ -1,0 +1,22 @@
+{
+  "mappings": {
+    "properties": {
+      "backtest_id": {"type": "keyword"},
+      "strategy_name": {"type": "keyword"},
+      "strategy_params": {"type": "object"},
+      "symbol": {"type": "keyword"},
+      "start_date": {"type": "date"},
+      "end_date": {"type": "date"},
+      "initial_capital": {"type": "double"},
+      "final_capital": {"type": "double"},
+      "total_return": {"type": "double"},
+      "total_return_pct": {"type": "double"},
+      "max_drawdown": {"type": "double"},
+      "sharpe_ratio": {"type": "double"},
+      "win_rate": {"type": "double"},
+      "total_trades": {"type": "integer"},
+      "commission": {"type": "double"},
+      "created_at": {"type": "date"}
+    }
+  }
+}

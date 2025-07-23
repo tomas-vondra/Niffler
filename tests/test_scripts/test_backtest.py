@@ -14,7 +14,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 # Import the backtest script functions
-from scripts.backtest import load_data, print_backtest_results, main
+from scripts.backtest import load_data, main
 from niffler.backtesting import BacktestEngine, BacktestResult, Trade, TradeSide
 
 
@@ -134,111 +134,13 @@ class TestBacktestScript(unittest.TestCase):
             load_data(self.sample_data_path, clean=True)
         self.assertIn("Failed to load and clean data", str(context.exception))
         
-    def test_print_backtest_results(self):
-        """Test print_backtest_results function."""
-        # Create mock BacktestResult
-        trades = [
-            Trade(pd.Timestamp('2024-01-05'), 'TEST', TradeSide.BUY, 100.0, 10.0, 1000.0),
-            Trade(pd.Timestamp('2024-01-15'), 'TEST', TradeSide.SELL, 110.0, 10.0, 1100.0)
-        ]
-        
-        portfolio_values = pd.Series([10000, 10500, 11000], 
-                                   index=pd.date_range('2024-01-01', periods=3, freq='D'))
-        
-        result = BacktestResult(
-            strategy_name="TestStrategy",
-            symbol="TEST",
-            start_date=pd.Timestamp('2024-01-01'),
-            end_date=pd.Timestamp('2024-01-31'),
-            initial_capital=10000.0,
-            final_capital=11000.0,
-            total_return=1000.0,
-            total_return_pct=10.0,
-            trades=trades,
-            portfolio_values=portfolio_values,
-            max_drawdown=-2.0,
-            sharpe_ratio=1.5,
-            win_rate=100.0,
-            total_trades=2
-        )
-        
-        # Capture stdout
-        with patch('builtins.print') as mock_print:
-            print_backtest_results(result)
-            
-            # Check that print was called multiple times
-            self.assertTrue(mock_print.called)
-            
-            # Check that key information was printed
-            printed_text = ' '.join([str(call[0][0]) for call in mock_print.call_args_list])
-            self.assertIn("TestStrategy", printed_text)
-            self.assertIn("TEST", printed_text)
-            self.assertIn("10.00%", printed_text)
-            self.assertIn("100.0%", printed_text)  # Win rate
-            
-    def test_print_backtest_results_no_trades(self):
-        """Test print_backtest_results with no trades."""
-        result = BacktestResult(
-            strategy_name="TestStrategy",
-            symbol="TEST",
-            start_date=pd.Timestamp('2024-01-01'),
-            end_date=pd.Timestamp('2024-01-31'),
-            initial_capital=10000.0,
-            final_capital=10000.0,
-            total_return=0.0,
-            total_return_pct=0.0,
-            trades=[],
-            portfolio_values=pd.Series([10000] * 3, 
-                                     index=pd.date_range('2024-01-01', periods=3, freq='D')),
-            max_drawdown=0.0,
-            sharpe_ratio=0.0,
-            win_rate=0.0,
-            total_trades=0
-        )
-        
-        # Should not raise any errors
-        with patch('builtins.print'):
-            print_backtest_results(result)
-            
-    def test_print_backtest_results_many_trades(self):
-        """Test print_backtest_results with many trades (tests trade limiting)."""
-        trades = [
-            Trade(pd.Timestamp(f'2024-01-{i:02d}'), 'TEST', TradeSide.BUY, 100.0, 10.0, 1000.0)
-            for i in range(1, 11)  # 10 trades
-        ]
-        
-        result = BacktestResult(
-            strategy_name="TestStrategy",
-            symbol="TEST",
-            start_date=pd.Timestamp('2024-01-01'),
-            end_date=pd.Timestamp('2024-01-31'),
-            initial_capital=10000.0,
-            final_capital=11000.0,
-            total_return=1000.0,
-            total_return_pct=10.0,
-            trades=trades,
-            portfolio_values=pd.Series([10000] * 3, 
-                                     index=pd.date_range('2024-01-01', periods=3, freq='D')),
-            max_drawdown=-2.0,
-            sharpe_ratio=1.5,
-            win_rate=100.0,
-            total_trades=10
-        )
-        
-        with patch('builtins.print') as mock_print:
-            print_backtest_results(result)
-            
-            # Check that "and X more trades" message appears
-            printed_text = ' '.join([str(call[0][0]) for call in mock_print.call_args_list])
-            self.assertIn("and 5 more trades", printed_text)
             
     @patch('scripts.backtest.setup_logging')
     @patch('scripts.backtest.BacktestEngine')
     @patch('scripts.backtest.SimpleMAStrategy')
     @patch('scripts.backtest.load_data')
-    @patch('scripts.backtest.print_backtest_results')
     @patch('sys.argv', ['backtest.py', '--data', 'test.csv', '--symbol', 'TEST'])
-    def test_main_basic_execution(self, mock_print_results, mock_load_data, 
+    def test_main_basic_execution(self, mock_load_data, 
                                  mock_strategy_class, mock_engine_class, mock_setup_logging):
         """Test main function basic execution."""
         # Setup mocks
@@ -285,7 +187,6 @@ class TestBacktestScript(unittest.TestCase):
         mock_strategy_class.assert_called_once()
         mock_engine_class.assert_called_once()
         mock_engine.run_backtest.assert_called_once()
-        mock_print_results.assert_called_once()
         
     @patch('scripts.backtest.setup_logging')
     @patch('scripts.backtest.load_data')
@@ -304,9 +205,9 @@ class TestBacktestScript(unittest.TestCase):
                 
     @patch('scripts.backtest.setup_logging')
     @patch('scripts.backtest.load_data')
-    @patch('sys.argv', ['backtest.py', '--data', 'test.csv', '--output', 'results.csv'])
-    def test_main_with_output_file(self, mock_load_data, mock_setup_logging):
-        """Test main function with output file."""
+    @patch('sys.argv', ['backtest.py', '--data', 'test.csv', '--exporters', 'csv', '--csv-output-dir', '/tmp'])
+    def test_main_with_csv_export(self, mock_load_data, mock_setup_logging):
+        """Test main function with CSV export."""
         # Setup mocks
         mock_data = pd.DataFrame({
             'open': [100.0] * 10,
