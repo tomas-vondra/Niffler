@@ -1,7 +1,10 @@
+New function - compare with buy and hold strategy
+
 Optimize imports
 Utilize duplicate code
 Optimize logger, so it is created on start only once
 Unify __init__.py files
+Why __pycache__ is everywhere
 Update sonar
 Unify factory pattern
 
@@ -10,8 +13,6 @@ Optimizer progress bar
 
 NEXT UP:
 - preprocessor default output is not in data/ path
-- Plotting the results of the backtest
-- Elasticsearch/database integration
 - Adjust logging to elasticsearch/database
 
 - New strategies

@@ -159,13 +159,15 @@ class ElasticsearchExporter(BaseExporter):
         
         # Prepare bulk data
         actions = []
+        created_at = datetime.utcnow().isoformat()
         for timestamp, value in result.portfolio_values.items():
             action = {
                 "_index": self.portfolio_index,
                 "_source": {
                     "backtest_id": backtest_id,
                     "timestamp": timestamp.isoformat(),
-                    "portfolio_value": float(value)
+                    "portfolio_value": float(value),
+                    "created_at": created_at
                 }
             }
             actions.append(action)
@@ -183,6 +185,7 @@ class ElasticsearchExporter(BaseExporter):
         
         # Prepare bulk data
         actions = []
+        created_at = datetime.utcnow().isoformat()
         for trade in result.trades:
             action = {
                 "_index": self.trades_index,
@@ -193,7 +196,8 @@ class ElasticsearchExporter(BaseExporter):
                     "side": trade.side.value,
                     "price": trade.price,
                     "quantity": trade.quantity,
-                    "value": trade.value
+                    "value": trade.value,
+                    "created_at": created_at
                 }
             }
             actions.append(action)

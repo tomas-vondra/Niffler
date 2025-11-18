@@ -1,0 +1,19 @@
+apiVersion: 1
+
+datasources:
+  - name: Niffler Elasticsearch
+    type: elasticsearch
+    access: proxy
+    url: http://elasticsearch:9200
+    uid: niffler-elasticsearch
+    isDefault: true
+    editable: false
+    jsonData:
+      timeField: created_at
+      esVersion: "8.0.0"
+      logMessageField: message
+      logLevelField: level
+      interval: Daily
+      timeInterval: 1d
+      maxConcurrentShardRequests: 5
+    version: 1

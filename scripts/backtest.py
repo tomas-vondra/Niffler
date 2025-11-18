@@ -16,22 +16,43 @@ from niffler.exporters import ExporterManager
 from config.logging import setup_logging
 
 
+def extract_symbol_from_filename(file_path: str) -> str:
+    """Extract symbol from filename.
+
+    Expected formats:
+    - BTCUSD_yahoo_1d_20240101_20241231_cleaned.csv -> BTCUSD
+    - BTCUSDT_binance_1d_20240101_20240105.csv -> BTCUSDT
+    - BTC-USD_data.csv -> BTC-USD
+    - anything_else.csv -> filename without extension
+    """
+    filename = os.path.basename(file_path)
+    # Remove extension
+    name_without_ext = os.path.splitext(filename)[0]
+
+    # Try to extract symbol (first part before underscore)
+    parts = name_without_ext.split('_')
+    if len(parts) > 0:
+        return parts[0]
+
+    return name_without_ext
+
+
 def load_data(file_path: str, clean: bool = False) -> pd.DataFrame:
     """Load CSV data and optionally apply cleaning pipeline."""
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Data file not found: {file_path}")
-    
+
     if clean:
         # Apply data cleaning pipeline
         from scripts.preprocessor import load_and_clean_csv
         df = load_and_clean_csv(file_path)
-        
+
         if df is None:
             raise ValueError(f"Failed to load and clean data from {file_path}")
     else:
         # Load CSV file directly (assumes it's already cleaned)
         df = pd.read_csv(file_path)
-        
+
         # Try to parse timestamp/date column as index
         timestamp_cols = ['timestamp', 'date', 'Date', 'Timestamp']
         for col in timestamp_cols:
@@ -39,13 +60,13 @@ def load_data(file_path: str, clean: bool = False) -> pd.DataFrame:
                 df[col] = pd.to_datetime(df[col])
                 df.set_index(col, inplace=True)
                 break
-    
+
     # Validate required columns
     required_columns = ['open', 'high', 'low', 'close', 'volume']
     missing_columns = [col for col in required_columns if col not in df.columns]
     if missing_columns:
         raise ValueError(f"Missing required columns: {missing_columns}")
-    
+
     return df
 
 
@@ -94,8 +115,8 @@ Examples:
                        help=f'Comma-separated list of exporters to use: {available_exporters} (default: console)')
     parser.add_argument('--csv-output-dir', default='.',
                        help='Directory for CSV output files (default: current directory)')
-    parser.add_argument('--symbol', default='UNKNOWN',
-                       help='Symbol identifier for the data (default: UNKNOWN)')
+    parser.add_argument('--symbol', default=None,
+                       help='Symbol identifier for the data (default: extracted from filename)')
     
     # Elasticsearch options (optional overrides for .env file configuration)
     parser.add_argument('--es-host',
@@ -139,7 +160,13 @@ Examples:
         print(f"Loading data from {args.data}...")
         data = load_data(args.data, clean=args.clean)
         print(f"Loaded {len(data)} data points from {data.index[0]} to {data.index[-1]}")
-        
+
+        # Extract symbol from filename if not provided
+        symbol = args.symbol
+        if symbol is None:
+            symbol = extract_symbol_from_filename(args.data)
+            print(f"Symbol extracted from filename: {symbol}")
+
         # Initialize risk manager
         risk_manager = None
         if args.risk_manager == 'fixed':
@@ -182,16 +209,16 @@ Examples:
         )
         
         print("Running backtest...")
-        
+
         # Run backtest
-        result = engine.run_backtest(strategy, data, args.symbol)
-        
+        result = engine.run_backtest(strategy, data, symbol)
+
         # Setup exporters
         exporter_manager = ExporterManager()
-        
+
         # Parse exporters parameter
         exporter_names = [name.strip().lower() for name in args.exporters.split(',')]
-        
+
         # Create exporters - pass all options, each exporter will use what it needs
         exporter_manager.create_exporters_from_list(
             exporter_names,
@@ -200,15 +227,15 @@ Examples:
             port=args.es_port,
             index_prefix=args.es_index_prefix
         )
-        
+
         # Prepare strategy parameters for metadata (generic - gets from strategy object)
         strategy_params = strategy.parameters.copy()
-        
+
         # Export results using all configured exporters
         backtest_id = exporter_manager.export_backtest_result(
             result=result,
             strategy_params=strategy_params,
-            symbol=args.symbol,
+            symbol=symbol,
             initial_capital=args.capital,
             commission=args.commission
         )

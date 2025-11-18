@@ -7,7 +7,8 @@
       "side": {"type": "keyword"},
       "price": {"type": "double"},
       "quantity": {"type": "double"},
-      "value": {"type": "double"}
+      "value": {"type": "double"},
+      "created_at": {"type": "date"}
     }
   }
 }
