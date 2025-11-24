@@ -2,3 +2,6 @@ data/*
 .idea/
 .venv/
 .claude/
+__pycache__/
+*.pyc
+*.pyo
