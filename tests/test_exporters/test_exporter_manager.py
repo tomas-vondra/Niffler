@@ -34,6 +34,13 @@ class TestExporterManager(unittest.TestCase):
         self.mock_result.sharpe_ratio = 1.234
         self.mock_result.win_rate = 65.5
         self.mock_result.total_trades = 25
+        self.mock_result.profit_factor = 2.5
+        self.mock_result.average_win = 150.0
+        self.mock_result.average_loss = 80.0
+        self.mock_result.largest_win = 500.0
+        self.mock_result.largest_loss = 200.0
+        self.mock_result.num_winning_trades = 16
+        self.mock_result.num_losing_trades = 9
     
     def test_init(self):
         """Test ExporterManager initialization."""
@@ -284,7 +291,14 @@ class TestExporterManager(unittest.TestCase):
             'max_drawdown': -5.2,
             'sharpe_ratio': 1.234,
             'win_rate': 65.5,
-            'total_trades': 25
+            'total_trades': 25,
+            'profit_factor': 2.5,
+            'average_win': 150.0,
+            'average_loss': 80.0,
+            'largest_win': 500.0,
+            'largest_loss': 200.0,
+            'num_winning_trades': 16,
+            'num_losing_trades': 9
         }
         
         self.assertEqual(metadata, expected_metadata)

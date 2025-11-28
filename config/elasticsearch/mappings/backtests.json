@@ -15,6 +15,13 @@
       "sharpe_ratio": {"type": "double"},
       "win_rate": {"type": "double"},
       "total_trades": {"type": "integer"},
+      "profit_factor": {"type": "double"},
+      "average_win": {"type": "double"},
+      "average_loss": {"type": "double"},
+      "largest_win": {"type": "double"},
+      "largest_loss": {"type": "double"},
+      "num_winning_trades": {"type": "integer"},
+      "num_losing_trades": {"type": "integer"},
       "commission": {"type": "double"},
       "created_at": {"type": "date"}
     }

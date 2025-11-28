@@ -173,7 +173,14 @@ class TestBacktestScript(unittest.TestCase):
             max_drawdown=0.0,
             sharpe_ratio=0.0,
             win_rate=0.0,
-            total_trades=0
+            total_trades=0,
+            profit_factor=0.0,
+            average_win=0.0,
+            average_loss=0.0,
+            largest_win=0.0,
+            largest_loss=0.0,
+            num_winning_trades=0,
+            num_losing_trades=0
         )
         mock_engine.run_backtest.return_value = mock_result
         mock_engine_class.return_value = mock_engine
@@ -242,7 +249,14 @@ class TestBacktestScript(unittest.TestCase):
             max_drawdown=-2.0,
             sharpe_ratio=1.5,
             win_rate=100.0,
-            total_trades=2
+            total_trades=2,
+            profit_factor=2.5,
+            average_win=100.0,
+            average_loss=0.0,
+            largest_win=100.0,
+            largest_loss=0.0,
+            num_winning_trades=1,
+            num_losing_trades=0
         )
         
         with patch('scripts.backtest.BacktestEngine') as mock_engine_class:
@@ -292,7 +306,14 @@ class TestBacktestScript(unittest.TestCase):
                             max_drawdown=0.0,
                             sharpe_ratio=0.0,
                             win_rate=0.0,
-                            total_trades=0
+                            total_trades=0,
+                            profit_factor=0.0,
+                            average_win=0.0,
+                            average_loss=0.0,
+                            largest_win=0.0,
+                            largest_loss=0.0,
+                            num_winning_trades=0,
+                            num_losing_trades=0
                         )
                         mock_engine.run_backtest.return_value = mock_result
                         mock_engine_class.return_value = mock_engine

@@ -148,7 +148,14 @@ class ExporterManager:
             'max_drawdown': result.max_drawdown,
             'sharpe_ratio': result.sharpe_ratio,
             'win_rate': result.win_rate,
-            'total_trades': result.total_trades
+            'total_trades': result.total_trades,
+            'profit_factor': result.profit_factor,
+            'average_win': result.average_win,
+            'average_loss': result.average_loss,
+            'largest_win': result.largest_win,
+            'largest_loss': result.largest_loss,
+            'num_winning_trades': result.num_winning_trades,
+            'num_losing_trades': result.num_losing_trades
         }
     
     def get_exporter_count(self) -> int:

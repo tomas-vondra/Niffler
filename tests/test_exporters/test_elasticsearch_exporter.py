@@ -16,6 +16,13 @@ from niffler.exporters.elasticsearch_exporter import ElasticsearchExporter
 from niffler.backtesting.backtest_result import BacktestResult
 from niffler.backtesting.trade import Trade, TradeSide
 
+# Check if elasticsearch is available
+try:
+    import elasticsearch
+    ELASTICSEARCH_AVAILABLE = True
+except ImportError:
+    ELASTICSEARCH_AVAILABLE = False
+
 
 class TestElasticsearchExporter(unittest.TestCase):
     """Test cases for ElasticsearchExporter."""
@@ -232,18 +239,19 @@ class TestElasticsearchExporter(unittest.TestCase):
             self.exporter._create_indices()
         
         # Verify that exists was checked for all indices
-        self.assertEqual(mock_es_client.indices.exists.call_count, 3)
-        
+        self.assertEqual(mock_es_client.indices.exists.call_count, 4)
+
         # Verify that create was called for all indices
-        self.assertEqual(mock_es_client.indices.create.call_count, 3)
-        
+        self.assertEqual(mock_es_client.indices.create.call_count, 4)
+
         # Verify that mappings were loaded for all index types
         mock_load_mapping.assert_any_call('backtests')
         mock_load_mapping.assert_any_call('portfolio')
         mock_load_mapping.assert_any_call('trades')
-        
+        mock_load_mapping.assert_any_call('positions')
+
         # Verify logging
-        self.assertEqual(mock_logger.call_count, 3)
+        self.assertEqual(mock_logger.call_count, 4)
     
     @patch.object(ElasticsearchExporter, '_load_mapping')
     def test_create_indices_already_exist(self, mock_load_mapping):
@@ -254,9 +262,9 @@ class TestElasticsearchExporter(unittest.TestCase):
         self.exporter.es_client = mock_es_client
         
         self.exporter._create_indices()
-        
+
         # Verify that exists was checked but create was not called
-        self.assertEqual(mock_es_client.indices.exists.call_count, 3)
+        self.assertEqual(mock_es_client.indices.exists.call_count, 4)
         mock_es_client.indices.create.assert_not_called()
         mock_load_mapping.assert_not_called()
     
@@ -287,7 +295,8 @@ class TestElasticsearchExporter(unittest.TestCase):
         # Check that created_at was added
         self.assertIn('created_at', call_args[1]['body'])
     
-    @patch('elasticsearch.helpers.bulk')
+    @unittest.skipIf(not ELASTICSEARCH_AVAILABLE, "elasticsearch package not installed")
+    @patch('niffler.exporters.elasticsearch_exporter.bulk')
     def test_export_portfolio_values(self, mock_bulk):
         """Test exporting portfolio values."""
         backtest_id = 'test-id-123'
@@ -314,7 +323,8 @@ class TestElasticsearchExporter(unittest.TestCase):
         self.assertEqual(first_action['_source']['backtest_id'], backtest_id)
         self.assertEqual(first_action['_source']['portfolio_value'], 10000.0)
     
-    @patch('elasticsearch.helpers.bulk')
+    @unittest.skipIf(not ELASTICSEARCH_AVAILABLE, "elasticsearch package not installed")
+    @patch('niffler.exporters.elasticsearch_exporter.bulk')
     def test_export_trades(self, mock_bulk):
         """Test exporting trades."""
         backtest_id = 'test-id-123'

@@ -21,3 +21,10 @@ class BacktestResult:
     sharpe_ratio: float
     win_rate: float
     total_trades: int
+    profit_factor: float
+    average_win: float = 0.0
+    average_loss: float = 0.0
+    largest_win: float = 0.0
+    largest_loss: float = 0.0
+    num_winning_trades: int = 0
+    num_losing_trades: int = 0

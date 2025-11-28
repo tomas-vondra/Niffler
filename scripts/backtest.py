@@ -61,6 +61,9 @@ def load_data(file_path: str, clean: bool = False) -> pd.DataFrame:
                 df.set_index(col, inplace=True)
                 break
 
+        # Normalize column names to lowercase
+        df.columns = df.columns.str.lower()
+
     # Validate required columns
     required_columns = ['open', 'high', 'low', 'close', 'volume']
     missing_columns = [col for col in required_columns if col not in df.columns]
