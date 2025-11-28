@@ -1,0 +1,14 @@
+{
+  "mappings": {
+    "properties": {
+      "backtest_id": {"type": "keyword"},
+      "timestamp": {"type": "date"},
+      "symbol": {"type": "keyword"},
+      "side": {"type": "keyword"},
+      "price": {"type": "double"},
+      "quantity": {"type": "double"},
+      "value": {"type": "double"},
+      "created_at": {"type": "date"}
+    }
+  }
+}

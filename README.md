@@ -15,7 +15,8 @@ Niffler is a personal quantitative trading framework that provides end-to-end fu
 - **🔍 Parameter Optimization**: Grid search and random search with parallel processing
 - **📊 Advanced Analysis**: Walk-forward and Monte Carlo robustness testing
 - **🛡️ Risk Management**: Position sizing, stop-loss management, and portfolio controls
-- **✅ Comprehensive Testing**: 60+ unit tests ensuring reliability
+- **📤 Flexible Exports**: Multi-format result export (console, CSV, Elasticsearch) for analysis and visualization
+- **✅ Comprehensive Testing**: 452 unit tests ensuring reliability
 
 ## Quick Start
 
@@ -43,8 +44,8 @@ python scripts/download_data.py --source ccxt --symbol BTC/USDT --timeframe 1d -
 # 2. Clean the data
 python scripts/preprocessor.py --input data/BTCUSDT_binance_1d_20240101_20241231.csv
 
-# 3. Run backtest
-python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20241231_cleaned.csv --strategy simple_ma --symbol BTC/USDT
+# 3. Run backtest with export to CSV
+python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20241231_cleaned.csv --strategy simple_ma --symbol BTC/USDT --exporters console,csv --csv-output-dir results/
 
 # 4. Optimize parameters  
 python scripts/optimize.py --data data/BTCUSDT_binance_1d_20240101_20241231_cleaned.csv --strategy simple_ma --method grid --output data/optimization_results.json
@@ -74,6 +75,15 @@ Niffler follows a systematic approach to quantitative trading strategy developme
 │ • Commission    │    │ • Random search │    │ • Monte Carlo   │
 │ • Risk controls │    │ • Parallel exec │    │ • Robustness    │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
+         │                        │                        │
+         v                        v                        v
+┌─────────────────┐
+│   Export        │
+│                 │
+│ • Console       │
+│ • CSV files     │
+│ • Elasticsearch │
+└─────────────────┘
 ```
 
 ### 1. Data Layer
@@ -93,6 +103,12 @@ Niffler follows a systematic approach to quantitative trading strategy developme
 - **Walk-Forward Analysis**: Tests temporal stability across rolling time windows
 - **Monte Carlo Analysis**: Tests performance across thousands of market scenarios
 
+### 6. Results Export
+**Export** backtest results to multiple formats for analysis and monitoring:
+- **Console**: Immediate human-readable feedback
+- **CSV Files**: Structured data for external analysis tools
+- **Elasticsearch**: Database integration for visualization dashboards
+
 ## Documentation
 
 Detailed documentation is available in the `docs/` directory:
@@ -103,6 +119,7 @@ Detailed documentation is available in the `docs/` directory:
 - **[Optimization](docs/optimization.md)** - Parameter optimization methods
 - **[Analysis](docs/analysis.md)** - Advanced robustness testing
 - **[Risk Management](docs/risk-management.md)** - Position sizing and risk controls
+- **[Exporters](docs/exporters.md)** - Result export system and configuration
 
 ## Architecture
 

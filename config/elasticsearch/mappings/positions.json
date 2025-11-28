@@ -1,0 +1,54 @@
+{
+  "mappings": {
+    "properties": {
+      "backtest_id": {
+        "type": "keyword"
+      },
+      "position_id": {
+        "type": "keyword"
+      },
+      "symbol": {
+        "type": "keyword"
+      },
+      "entry_timestamp": {
+        "type": "date"
+      },
+      "exit_timestamp": {
+        "type": "date"
+      },
+      "entry_price": {
+        "type": "double"
+      },
+      "exit_price": {
+        "type": "double"
+      },
+      "quantity": {
+        "type": "double"
+      },
+      "entry_value": {
+        "type": "double"
+      },
+      "exit_value": {
+        "type": "double"
+      },
+      "pnl": {
+        "type": "double"
+      },
+      "pnl_pct": {
+        "type": "double"
+      },
+      "duration_days": {
+        "type": "double"
+      },
+      "duration_hours": {
+        "type": "double"
+      },
+      "is_win": {
+        "type": "boolean"
+      },
+      "created_at": {
+        "type": "date"
+      }
+    }
+  }
+}

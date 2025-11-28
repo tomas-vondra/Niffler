@@ -1,0 +1,13 @@
+{
+  "mappings": {
+    "properties": {
+      "backtest_id": {"type": "keyword"},
+      "timestamp": {"type": "date"},
+      "portfolio_value": {"type": "double"},
+      "drawdown_pct": {"type": "double"},
+      "rolling_sharpe_30d": {"type": "double"},
+      "rolling_volatility_30d": {"type": "double"},
+      "created_at": {"type": "date"}
+    }
+  }
+}

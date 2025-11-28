@@ -221,7 +221,7 @@ class BacktestEngine:
         # Convert numpy array to pandas Series
         portfolio_series = pd.Series(portfolio_values, index=data.index)
         metrics = self._calculate_metrics(portfolio_series, trades)
-        
+
         return BacktestResult(
             strategy_name=strategy.name,
             symbol=symbol,
@@ -236,33 +236,55 @@ class BacktestEngine:
             max_drawdown=metrics['max_drawdown'],
             sharpe_ratio=metrics['sharpe_ratio'],
             win_rate=metrics['win_rate'],
-            total_trades=len(trades)
+            total_trades=len(trades),
+            profit_factor=metrics['profit_factor'],
+            average_win=metrics['average_win'],
+            average_loss=metrics['average_loss'],
+            largest_win=metrics['largest_win'],
+            largest_loss=metrics['largest_loss'],
+            num_winning_trades=metrics['num_winning_trades'],
+            num_losing_trades=metrics['num_losing_trades']
         )
     
     def _calculate_metrics(self, portfolio_values: pd.Series, trades: List[Trade]) -> Dict[str, float]:
         """Calculate performance metrics."""
         metrics = {}
-        
+
         # Calculate returns
         returns = portfolio_values.pct_change().dropna()
-        
+
         # Max drawdown
         running_max = portfolio_values.expanding().max()
         drawdown = (portfolio_values - running_max) / running_max
         metrics['max_drawdown'] = drawdown.min() * 100
-        
+
         # Sharpe ratio (assuming 252 trading days per year)
         if len(returns) > 1 and returns.std() > 0:
             metrics['sharpe_ratio'] = np.sqrt(252) * returns.mean() / returns.std()
         else:
             metrics['sharpe_ratio'] = 0.0
-        
-        # Win rate - calculate based on properly paired trades
+
+        # Win rate and profit factor - calculate based on properly paired trades
         if trades:
             metrics['win_rate'] = self._calculate_win_rate(trades)
+            metrics['profit_factor'] = self._calculate_profit_factor(trades)
+            trade_stats = self._calculate_trade_statistics(trades)
+            metrics['average_win'] = trade_stats['average_win']
+            metrics['average_loss'] = trade_stats['average_loss']
+            metrics['largest_win'] = trade_stats['largest_win']
+            metrics['largest_loss'] = trade_stats['largest_loss']
+            metrics['num_winning_trades'] = trade_stats['num_winning_trades']
+            metrics['num_losing_trades'] = trade_stats['num_losing_trades']
         else:
             metrics['win_rate'] = 0.0
-        
+            metrics['profit_factor'] = 0.0
+            metrics['average_win'] = 0.0
+            metrics['average_loss'] = 0.0
+            metrics['largest_win'] = 0.0
+            metrics['largest_loss'] = 0.0
+            metrics['num_winning_trades'] = 0
+            metrics['num_losing_trades'] = 0
+
         return metrics
     
     def _execute_buy_trade(self, timestamp: pd.Timestamp, symbol: str, price: float, 
@@ -310,12 +332,12 @@ class BacktestEngine:
         """Calculate win rate based on properly paired buy/sell trades."""
         if not trades:
             return 0.0
-        
+
         # Group trades by timestamp to properly pair them
         position_tracker = 0.0
         trade_pairs = []
         open_buys = []
-        
+
         for trade in trades:
             if trade.side == TradeSide.BUY:
                 # Create a copy to avoid mutating original trade data
@@ -333,10 +355,10 @@ class BacktestEngine:
                 # Match sells with buys on FIFO basis
                 remaining_to_sell = trade.quantity
                 sell_price = trade.price
-                
+
                 while remaining_to_sell > 0 and open_buys:
                     buy_trade = open_buys[0]
-                    
+
                     if buy_trade.quantity <= remaining_to_sell:
                         # Full buy trade is closed
                         trade_pairs.append((buy_trade.price, sell_price))
@@ -347,16 +369,111 @@ class BacktestEngine:
                         trade_pairs.append((buy_trade.price, sell_price))
                         buy_trade.quantity -= remaining_to_sell  # Now safe to modify copy
                         remaining_to_sell = 0
-                
+
                 position_tracker -= trade.quantity
-        
+
         # Calculate win rate from paired trades
         if not trade_pairs:
             return 0.0
-        
+
         winning_trades = sum(1 for buy_price, sell_price in trade_pairs if sell_price > buy_price)
         return (winning_trades / len(trade_pairs)) * 100
-    
+
+    def _calculate_profit_factor(self, trades: List[Trade]) -> float:
+        """
+        Calculate profit factor based on properly paired buy/sell trades.
+
+        Profit Factor = Gross Profit / Gross Loss
+
+        Returns:
+            Profit factor (0 if no losses, None if no winning trades)
+        """
+        if not trades:
+            return 0.0
+
+        # Pair buy/sell trades and calculate P&L for each position
+        open_position = None
+        gross_profit = 0.0
+        gross_loss = 0.0
+
+        for trade in trades:
+            if trade.side == TradeSide.BUY:
+                open_position = trade
+            elif trade.side == TradeSide.SELL and open_position is not None:
+                # Calculate P&L for this position
+                pnl = trade.value - open_position.value
+
+                if pnl > 0:
+                    gross_profit += pnl
+                else:
+                    gross_loss += abs(pnl)
+
+                open_position = None
+
+        # Calculate profit factor
+        if gross_loss > 0:
+            return gross_profit / gross_loss
+        elif gross_profit > 0:
+            return float('inf')  # All wins, no losses
+        else:
+            return 0.0  # No trades or all break-even
+
+    def _calculate_trade_statistics(self, trades: List[Trade]) -> Dict[str, float]:
+        """
+        Calculate detailed trade statistics from paired buy/sell trades.
+
+        Returns:
+            Dictionary containing average_win, average_loss, largest_win, largest_loss,
+            num_winning_trades, and num_losing_trades
+        """
+        if not trades:
+            return {
+                'average_win': 0.0,
+                'average_loss': 0.0,
+                'largest_win': 0.0,
+                'largest_loss': 0.0,
+                'num_winning_trades': 0,
+                'num_losing_trades': 0
+            }
+
+        # Pair buy/sell trades and calculate P&L for each position
+        open_position = None
+        winning_trades = []
+        losing_trades = []
+
+        for trade in trades:
+            if trade.side == TradeSide.BUY:
+                open_position = trade
+            elif trade.side == TradeSide.SELL and open_position is not None:
+                # Calculate P&L for this position
+                pnl = trade.value - open_position.value
+
+                if pnl > 0:
+                    winning_trades.append(pnl)
+                elif pnl < 0:
+                    losing_trades.append(abs(pnl))
+                # Ignore break-even trades (pnl == 0)
+
+                open_position = None
+
+        # Calculate statistics
+        num_winning = len(winning_trades)
+        num_losing = len(losing_trades)
+
+        average_win = sum(winning_trades) / num_winning if num_winning > 0 else 0.0
+        average_loss = sum(losing_trades) / num_losing if num_losing > 0 else 0.0
+        largest_win = max(winning_trades) if num_winning > 0 else 0.0
+        largest_loss = max(losing_trades) if num_losing > 0 else 0.0
+
+        return {
+            'average_win': average_win,
+            'average_loss': average_loss,
+            'largest_win': largest_win,
+            'largest_loss': largest_loss,
+            'num_winning_trades': num_winning,
+            'num_losing_trades': num_losing
+        }
+
     def _validate_inputs(self, strategy: BaseStrategy, data: pd.DataFrame, symbol: str) -> None:
         """Comprehensive input validation for backtest data."""
         # Validate strategy
