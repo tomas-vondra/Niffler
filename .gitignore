@@ -1,6 +1,9 @@
 # Data files
 data/*
 
+# Backtest / export output (bind-mounted into the container by docker-compose)
+results/
+
 # IDE directories
 .idea/
 .vscode/
@@ -58,10 +61,11 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
-# Environment variables
+# Environment variables (the committed template .env.example stays tracked)
 .env
 .env.local
 .env.*.local
+!.env.example
 
 # Optimization results
 optimization_results*.json

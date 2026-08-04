@@ -3,17 +3,29 @@
 ## Optimization Script Usage
 
 ```bash
-python scripts/optimize.py --data <data_file> --strategy <strategy_name> --method <optimization_method> [--trials <number>] [--sort-by <metric>] [--output <output_file>] [--clean]
+python scripts/optimize.py --data <data_file> --strategy <strategy_name> [--method <method>] [--trials <n>] [--sort-by <metric>] [--output <file>] [--clean] [...]
 ```
 
 **Arguments:**
-- `--data`: Path to CSV file containing historical market data
-- `--strategy`: Strategy to optimize (currently supports `simple_ma`)
-- `--method`: Optimization method (`grid` for grid search, `random` for random search)
-- `--trials`: (Optional) Number of trials for random search, default: 50
-- `--sort-by`: (Optional) Metric to sort results by (`total_return`, `sharpe_ratio`, `max_drawdown`, etc.)
-- `--output`: (Optional) Output JSON file for results, defaults to auto-generated filename
-- `--clean`: (Optional) Apply data cleaning pipeline before optimization
+- `--data`: Path to CSV file containing historical market data (**required**)
+- `--strategy`: Strategy to optimize (**required**; currently supports `simple_ma`)
+- `--method`: Optimization method — `grid` (default) or `random`
+- `--trials`: Number of trials for random search, default: **100**
+- `--sort-by`: Metric to sort results by, default: `total_return`
+- `--initial-capital`: Starting capital, default: 10000. (Spelled `--capital` in
+  `backtest.py` and `--initial_capital` in `analyze.py`; the three CLIs have not been
+  harmonised.)
+- `--commission`: Commission rate per trade, default: 0.001
+- `--clean`: Apply the data cleaning pipeline before optimization
+- `--jobs`: Number of parallel worker processes, default: auto-detect
+- `--seed`: Random seed for reproducible random search
+- `--top-n`: How many best results to print, default: 10
+- `--output`: Output JSON file for results, defaults to an auto-generated filename
+- `--log-level`: `DEBUG` / `INFO` (default) / `WARNING` / `ERROR`
+
+`optimize.py` exits non-zero when the data cannot be loaded or validated. It no longer
+re-wraps every error (including `FileNotFoundError`) as a generic `ValueError`, so the
+reported cause is the real one.
 
 ## Examples
 
@@ -118,6 +130,17 @@ Results can be sorted by any of these performance metrics:
 - `win_rate`: Percentage of profitable trades
 - `total_trades`: Number of trades executed
 
+#### `max_drawdown` sort direction (behaviour change)
+
+`max_drawdown` is expressed as a **negative** percentage (`-5.0` is a 5% drawdown), but it
+was configured as "lower is better". Sorting `-5 / -40 / -12` therefore put `-40` first, so
+`--sort-by max_drawdown` — and any walk-forward fold using
+`--optimization_metric max_drawdown`, which takes `results[0]` — selected the **worst**
+drawdown every time.
+
+It is now sorted highest-first, so the **shallowest** drawdown ranks first. Sorting by any
+other metric is unchanged.
+
 ### Output Format
 
 #### JSON Output Structure
@@ -126,6 +149,13 @@ Results are saved in structured JSON format containing:
 - **Parameter space definition**: Complete parameter ranges and types
 - **Results array**: All parameter combinations tested with their performance metrics
 - **Best results**: Top performing parameter combinations
+
+The file is written with `safe_json_dump` (`niffler/utils/json_utils.py`), so non-finite
+metrics are emitted as **`null`** rather than the non-standard `Infinity` / `NaN` literals
+that most JSON parsers reject. This matters here in particular: degenerate parameter
+combinations legitimately produce an infinite profit factor (no losing trades) or a NaN
+Sharpe ratio (zero variance), and the resulting file used to be unparseable by anything
+strict — including the `--params_file` path in `analyze.py`.
 
 #### Console Output
 Real-time optimization progress including:

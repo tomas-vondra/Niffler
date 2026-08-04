@@ -5,6 +5,7 @@ This is a temporary demo file - not part of the core codebase.
 """
 
 import sys
+import tempfile
 import pandas as pd
 from pathlib import Path
 
@@ -32,7 +33,7 @@ def create_test_data():
 
 def demo_exporters():
     """Demonstrate the new exporter functionality."""
-    print("🚀 Niffler Exporters Demo")
+    print("Niffler Exporters Demo")
     print("=" * 50)
     
     # Create test data
@@ -45,16 +46,17 @@ def demo_exporters():
     engine = BacktestEngine(initial_capital=10000, commission=0.001)
     result = engine.run_backtest(strategy, data, symbol="DEMO")
     
-    print(f"✅ Backtest completed: {result.total_trades} trades executed")
+    print(f"Backtest completed: {result.total_trades} trades executed")
     
     # Setup exporters
     manager = ExporterManager()
     
     # Add console exporter
-    manager.create_console_exporter()
-    
-    # Add CSV exporter to /tmp
-    manager.create_csv_exporter(output_dir="/tmp/niffler_demo")
+    manager.create_exporter_by_name("console")
+
+    # Add CSV exporter to a platform-appropriate temporary directory
+    output_dir = str(Path(tempfile.gettempdir()) / "niffler_demo")
+    manager.create_exporter_by_name("csv", output_dir=output_dir)
     
     # Export results
     strategy_params = {
@@ -63,20 +65,22 @@ def demo_exporters():
         'position_size': 1.0
     }
     
-    backtest_id = manager.export_backtest_result(
+    summary = manager.export_backtest_result(
         result=result,
         strategy_params=strategy_params,
         symbol="DEMO",
         initial_capital=10000,
         commission=0.001
     )
-    
-    print(f"\n🆔 Backtest ID: {backtest_id}")
-    print(f"📊 Exporters used: {', '.join(manager.get_exporter_names())}")
-    
-    return backtest_id
+
+    print(f"\nBacktest ID: {summary.backtest_id}")
+    print(f"Exporters that succeeded: {', '.join(summary.successes) or 'none'}")
+    for name, error in summary.failures:
+        print(f"Exporter FAILED - {name}: {error}")
+
+    return summary, output_dir
 
 
 if __name__ == "__main__":
-    demo_exporters()
-    print("\n✨ Demo completed! Check /tmp/niffler_demo for CSV files.")
+    _, demo_output_dir = demo_exporters()
+    print(f"\nDemo completed. CSV files are in {demo_output_dir}")

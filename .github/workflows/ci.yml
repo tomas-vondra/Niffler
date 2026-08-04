@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+# A newer push to the same branch/PR makes the in-flight run pointless.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint and test (Python 3.13)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.7.20"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install dependencies
+        # --locked fails if uv.lock is out of date with pyproject.toml, so a
+        # dependency change without a re-lock cannot slip through.
+        run: uv sync --locked
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Run tests
+        run: uv run python -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: Type check (advisory)
+        # Not blocking yet: [tool.mypy] in pyproject.toml is deliberately
+        # non-strict and the code base is still being annotated. Make this a
+        # required step once `uv run mypy` is clean.
+        continue-on-error: true
+        run: uv run mypy

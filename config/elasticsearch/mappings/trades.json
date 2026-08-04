@@ -8,6 +8,7 @@
       "price": {"type": "double"},
       "quantity": {"type": "double"},
       "value": {"type": "double"},
+      "commission": {"type": "double"},
       "created_at": {"type": "date"}
     }
   }

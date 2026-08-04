@@ -3,10 +3,97 @@ name = "niffler"
 version = "0.1.0"
 description = "Niffler is a Python-based trading application, meticulously designed to sniff out profitable opportunities in the market, much like its namesake."
 requires-python = ">=3.13"
+# Every dependency carries a lower AND an upper bound. Backtest results are only
+# comparable across time if the market-data stack is reproducible: an unpinned
+# data library can silently change the numbers a research run produces.
+# `uv.lock` pins the exact resolved versions; these ranges are the guard rails for
+# anyone resolving without the lock (pip install ., dependabot/renovate bumps).
 dependencies = [
-    "pandas>=2.3.1",
-    "ccxt",
-    "yfinance",
-    "python-dateutil",
+    "pandas>=2.3.1,<3.0.0",
+    "ccxt>=4.4.94,<5.0.0",
+    # yfinance ships breaking changes in *patch* releases - 0.2.51 flipped the
+    # `auto_adjust` default, which silently changed whether downloaded prices are
+    # split/dividend adjusted. Bump deliberately and re-run the downloader tests.
+    "yfinance>=0.2.65,<0.3.0",
+    "python-dateutil>=2.9.0,<3.0.0",
     "elasticsearch>=8.0.0,<9.0.0",
 ]
+
+[dependency-groups]
+# Tooling used by CI (.github/workflows/ci.yml). Pinned for the same reason as the
+# runtime deps: a linter that changes its rules on its own is a broken build
+# waiting to happen.
+dev = [
+    "ruff>=0.12.5,<0.13.0",
+    "mypy>=1.18.2,<2.0.0",
+    "types-python-dateutil>=2.9.0,<3.0.0",
+]
+
+# --------------------------------------------------------------------------------
+# Ruff - linting (and formatting config, not yet enforced)
+# --------------------------------------------------------------------------------
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+extend-exclude = [
+    ".venv",
+    ".venv_windows",
+    "data",
+    "results",
+]
+
+[tool.ruff.lint]
+# Deliberately pragmatic starting point: the rules below are the ones that catch
+# real defects (undefined names, broken comparisons, syntax errors) and the code
+# base is expected to stay clean against them.
+select = [
+    "E4", # import formatting
+    "E7", # statement-level mistakes (comparisons, lambda assignment, ...)
+    "E9", # syntax / IO errors
+    "F",  # pyflakes: undefined names, unused variables, bad f-strings
+    "C4", # flake8-comprehensions
+]
+# ADOPTION BACKLOG - these fire in the existing code base and are cosmetic rather
+# than dangerous. Remove them from this list one at a time, fix the fallout in a
+# dedicated commit, and keep CI green in between. Rough counts at the time of
+# writing (`ruff check --select E402,E722,F401,F541,F811,F841 --statistics .`):
+#   E402 32, F401 16, F541 15, F841 12, F811 1, E722 0
+ignore = [
+    "E402", # module import not at top of file (sys.path juggling in scripts/tests)
+    "E722", # bare except
+    "F401", # unused import
+    "F541", # f-string without placeholders
+    "F811", # redefinition of unused name
+    "F841", # unused local variable
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests legitimately import fixtures for their side effects and shadow names.
+"tests/**" = ["F401", "F811"]
+
+[tool.ruff.format]
+# Not enforced in CI yet - the repo has never been formatted and a repo-wide
+# reformat would drown every review. `preserve` keeps the existing mixed quoting
+# so that formatting a single file does not churn unrelated lines.
+quote-style = "preserve"
+
+# --------------------------------------------------------------------------------
+# Mypy - type checking, advisory
+# --------------------------------------------------------------------------------
+# Scoped to the `niffler` package only (scripts/ and tests/ are out of scope for
+# now) and intentionally non-strict, so the existing code base can adopt it
+# incrementally. CI runs this as a non-blocking step - tighten the settings below
+# as annotations improve, and only then make it blocking.
+[tool.mypy]
+python_version = "3.13"
+files = ["niffler"]
+# `niffler/` is a namespace package (no __init__.py at the top level).
+namespace_packages = true
+explicit_package_bases = true
+ignore_missing_imports = true
+implicit_optional = true
+warn_unused_configs = true
+warn_redundant_casts = true
+check_untyped_defs = false
+disallow_untyped_defs = false
+disallow_incomplete_defs = false

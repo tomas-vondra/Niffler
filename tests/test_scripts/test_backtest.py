@@ -14,8 +14,9 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 # Import the backtest script functions
-from scripts.backtest import load_data, main
+from scripts.backtest import load_data, main, report_export_outcome
 from niffler.backtesting import BacktestEngine, BacktestResult, Trade, TradeSide
+from niffler.exporters.exporter_manager import ExportSummary
 
 
 class TestBacktestScript(unittest.TestCase):
@@ -106,10 +107,9 @@ class TestBacktestScript(unittest.TestCase):
             load_data(incomplete_data_path)
         self.assertIn("Missing required columns", str(context.exception))
         
-    @patch('scripts.preprocessor.load_and_clean_csv')
-    def test_load_data_with_clean_flag(self, mock_load_clean):
-        """Test loading data with clean flag."""
-        # Mock the load_and_clean_csv function
+    @patch('niffler.data.create_default_manager')
+    def test_load_data_with_clean_flag(self, mock_create_manager):
+        """Test loading data with clean flag runs the preprocessing pipeline."""
         mock_data = pd.DataFrame({
             'open': [100.0] * 10,
             'high': [105.0] * 10,
@@ -117,24 +117,46 @@ class TestBacktestScript(unittest.TestCase):
             'close': [102.0] * 10,
             'volume': [1000.0] * 10
         }, index=pd.date_range('2024-01-01', periods=10, freq='D'))
-        
-        mock_load_clean.return_value = mock_data
-        
+
+        mock_manager = MagicMock()
+        mock_manager.run.return_value = mock_data
+        mock_create_manager.return_value = mock_manager
+
         data = load_data(self.sample_data_path, clean=True)
-        
+
         self.assertIsInstance(data, pd.DataFrame)
-        mock_load_clean.assert_called_once_with(self.sample_data_path)
-        
-    @patch('scripts.preprocessor.load_and_clean_csv')
-    def test_load_data_clean_returns_none(self, mock_load_clean):
-        """Test loading data when clean function returns None."""
-        mock_load_clean.return_value = None
-        
+        mock_create_manager.assert_called_once_with()
+        mock_manager.run.assert_called_once()
+
+    @patch('niffler.data.create_default_manager')
+    def test_load_data_clean_returns_none(self, mock_create_manager):
+        """Test loading data when the cleaning pipeline discards everything."""
+        mock_manager = MagicMock()
+        mock_manager.run.return_value = None
+        mock_create_manager.return_value = mock_manager
+
         with self.assertRaises(ValueError) as context:
             load_data(self.sample_data_path, clean=True)
-        self.assertIn("Failed to load and clean data", str(context.exception))
-        
-            
+        self.assertIn("Data cleaning removed all rows", str(context.exception))
+
+    def test_load_data_sorts_unsorted_timestamps(self):
+        """Test that rows are returned in chronological order."""
+        unsorted_path = os.path.join(self.temp_dir, "unsorted.csv")
+        dates = pd.date_range('2024-01-01', periods=5, freq='D')[::-1]
+        pd.DataFrame({
+            'timestamp': dates,
+            'open': [100.0] * 5,
+            'high': [105.0] * 5,
+            'low': [95.0] * 5,
+            'close': [102.0] * 5,
+            'volume': [1000.0] * 5
+        }).to_csv(unsorted_path, index=False)
+
+        data = load_data(unsorted_path)
+
+        self.assertTrue(data.index.is_monotonic_increasing)
+
+
     @patch('scripts.backtest.setup_logging')
     @patch('scripts.backtest.BacktestEngine')
     @patch('scripts.backtest.SimpleMAStrategy')
@@ -201,15 +223,15 @@ class TestBacktestScript(unittest.TestCase):
     def test_main_file_not_found(self, mock_load_data, mock_setup_logging):
         """Test main function with non-existent file."""
         mock_load_data.side_effect = FileNotFoundError("Data file not found")
-        
+
         with patch('builtins.print') as mock_print:
-            with patch('sys.exit') as mock_exit:
-                main()
-                
-                # Check that error was printed and exit was called
-                mock_print.assert_called_with("Error: Data file not found")
-                mock_exit.assert_called_with(1)
-                
+            exit_code = main()
+
+        # Check that the error was reported and a non-zero code returned
+        self.assertEqual(exit_code, 1)
+        mock_print.assert_called_with("Error: Data file not found", file=sys.stderr)
+
+
     @patch('scripts.backtest.setup_logging')
     @patch('scripts.backtest.load_data')
     @patch('sys.argv', ['backtest.py', '--data', 'test.csv', '--exporters', 'csv', '--csv-output-dir', '/tmp'])
@@ -345,6 +367,199 @@ class TestBacktestScript(unittest.TestCase):
                         pass  # Expected when argparse encounters invalid choice
                         
                     # The test passes if argparse handles the error gracefully
+
+
+class TestBacktestExportReporting(unittest.TestCase):
+    """Tests for turning export outcomes into a report and an exit code."""
+
+    def _make_result(self) -> BacktestResult:
+        """Build a minimal BacktestResult for main() to export."""
+        return BacktestResult(
+            strategy_name="TestStrategy",
+            symbol="TEST",
+            start_date=pd.Timestamp('2024-01-01'),
+            end_date=pd.Timestamp('2024-01-10'),
+            initial_capital=10000.0,
+            final_capital=10000.0,
+            total_return=0.0,
+            total_return_pct=0.0,
+            trades=[],
+            portfolio_values=pd.Series([10000] * 10, index=pd.date_range('2024-01-01', periods=10, freq='D')),
+            max_drawdown=0.0,
+            sharpe_ratio=0.0,
+            win_rate=0.0,
+            total_trades=0,
+            profit_factor=0.0,
+            average_win=0.0,
+            average_loss=0.0,
+            largest_win=0.0,
+            largest_loss=0.0,
+            num_winning_trades=0,
+            num_losing_trades=0
+        )
+
+    def test_report_export_outcome_all_successful(self):
+        """A summary without failures reports success and exits zero."""
+        summary = ExportSummary(successes=['CSVExporter'], failures=[], backtest_id='abc')
+
+        with patch('builtins.print') as mock_print:
+            exit_code = report_export_outcome(summary, ['CSVExporter'])
+
+        self.assertEqual(exit_code, 0)
+        printed = ' '.join(str(call_args) for call_args in mock_print.call_args_list)
+        self.assertIn('abc', printed)
+        self.assertIn('CSVExporter', printed)
+
+    def test_report_export_outcome_with_failures(self):
+        """A summary with failures reports them and exits non-zero."""
+        summary = ExportSummary(
+            successes=['ConsoleExporter'],
+            failures=[('CSVExporter', 'disk full')],
+            backtest_id='abc'
+        )
+
+        with patch('builtins.print') as mock_print:
+            exit_code = report_export_outcome(summary, ['ConsoleExporter', 'CSVExporter'])
+
+        self.assertEqual(exit_code, 1)
+        printed = ' '.join(str(call_args) for call_args in mock_print.call_args_list)
+        self.assertIn('disk full', printed)
+        self.assertIn('CSVExporter', printed)
+
+    def test_report_export_outcome_all_exporters_failed(self):
+        """Every exporter failing must not look like a successful run."""
+        summary = ExportSummary(
+            successes=[],
+            failures=[('CSVExporter', 'boom'), ('ConsoleExporter', 'boom')],
+            backtest_id='abc'
+        )
+
+        with patch('builtins.print'):
+            exit_code = report_export_outcome(summary, ['CSVExporter', 'ConsoleExporter'])
+
+        self.assertEqual(exit_code, 1)
+
+    def test_report_export_outcome_legacy_string_result(self):
+        """A manager that only returns a backtest id still works."""
+        with patch('builtins.print') as mock_print:
+            exit_code = report_export_outcome('legacy-id', ['CSVExporter'])
+
+        self.assertEqual(exit_code, 0)
+        printed = ' '.join(str(call_args) for call_args in mock_print.call_args_list)
+        self.assertIn('legacy-id', printed)
+
+    @patch('scripts.backtest.setup_logging')
+    @patch('scripts.backtest.ExporterManager')
+    @patch('scripts.backtest.BacktestEngine')
+    @patch('scripts.backtest.SimpleMAStrategy')
+    @patch('scripts.backtest.load_data')
+    @patch('sys.argv', ['backtest.py', '--data', 'test.csv', '--exporters', 'csv'])
+    def test_main_returns_non_zero_when_export_fails(self, mock_load_data, mock_strategy_class,
+                                                     mock_engine_class, mock_manager_class,
+                                                     mock_setup_logging):
+        """main() must not report success when every exporter failed."""
+        mock_load_data.return_value = pd.DataFrame({
+            'open': [100.0] * 10,
+            'high': [105.0] * 10,
+            'low': [95.0] * 10,
+            'close': [102.0] * 10,
+            'volume': [1000.0] * 10
+        }, index=pd.date_range('2024-01-01', periods=10, freq='D'))
+
+        mock_strategy = MagicMock()
+        mock_strategy.get_description.return_value = "Test Strategy"
+        mock_strategy_class.return_value = mock_strategy
+
+        mock_engine = MagicMock()
+        mock_engine.run_backtest.return_value = self._make_result()
+        mock_engine_class.return_value = mock_engine
+
+        mock_manager = MagicMock()
+        mock_manager.get_exporter_count.return_value = 1
+        mock_manager.get_exporter_names.return_value = ['CSVExporter']
+        mock_manager.export_backtest_result.return_value = ExportSummary(
+            successes=[],
+            failures=[('CSVExporter', 'permission denied')],
+            backtest_id='abc'
+        )
+        mock_manager_class.return_value = mock_manager
+
+        exit_code = main()
+
+        self.assertEqual(exit_code, 1)
+
+    @patch('scripts.backtest.setup_logging')
+    @patch('scripts.backtest.ExporterManager')
+    @patch('scripts.backtest.BacktestEngine')
+    @patch('scripts.backtest.SimpleMAStrategy')
+    @patch('scripts.backtest.load_data')
+    @patch('sys.argv', ['backtest.py', '--data', 'test.csv', '--exporters', 'csv'])
+    def test_main_returns_zero_when_export_succeeds(self, mock_load_data, mock_strategy_class,
+                                                    mock_engine_class, mock_manager_class,
+                                                    mock_setup_logging):
+        """main() returns 0 when every exporter succeeded."""
+        mock_load_data.return_value = pd.DataFrame({
+            'open': [100.0] * 10,
+            'high': [105.0] * 10,
+            'low': [95.0] * 10,
+            'close': [102.0] * 10,
+            'volume': [1000.0] * 10
+        }, index=pd.date_range('2024-01-01', periods=10, freq='D'))
+
+        mock_strategy = MagicMock()
+        mock_strategy.get_description.return_value = "Test Strategy"
+        mock_strategy_class.return_value = mock_strategy
+
+        mock_engine = MagicMock()
+        mock_engine.run_backtest.return_value = self._make_result()
+        mock_engine_class.return_value = mock_engine
+
+        mock_manager = MagicMock()
+        mock_manager.get_exporter_count.return_value = 1
+        mock_manager.get_exporter_names.return_value = ['CSVExporter']
+        mock_manager.export_backtest_result.return_value = ExportSummary(
+            successes=['CSVExporter'], failures=[], backtest_id='abc'
+        )
+        mock_manager_class.return_value = mock_manager
+
+        exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+
+    @patch('scripts.backtest.setup_logging')
+    @patch('scripts.backtest.ExporterManager')
+    @patch('scripts.backtest.BacktestEngine')
+    @patch('scripts.backtest.SimpleMAStrategy')
+    @patch('scripts.backtest.load_data')
+    @patch('sys.argv', ['backtest.py', '--data', 'test.csv', '--exporters', 'does-not-exist'])
+    def test_main_returns_non_zero_when_no_exporter_created(self, mock_load_data, mock_strategy_class,
+                                                            mock_engine_class, mock_manager_class,
+                                                            mock_setup_logging):
+        """An unusable --exporters value must not silently write nothing."""
+        mock_load_data.return_value = pd.DataFrame({
+            'open': [100.0] * 10,
+            'high': [105.0] * 10,
+            'low': [95.0] * 10,
+            'close': [102.0] * 10,
+            'volume': [1000.0] * 10
+        }, index=pd.date_range('2024-01-01', periods=10, freq='D'))
+
+        mock_strategy = MagicMock()
+        mock_strategy.get_description.return_value = "Test Strategy"
+        mock_strategy_class.return_value = mock_strategy
+
+        mock_engine = MagicMock()
+        mock_engine.run_backtest.return_value = self._make_result()
+        mock_engine_class.return_value = mock_engine
+
+        mock_manager = MagicMock()
+        mock_manager.get_exporter_count.return_value = 0
+        mock_manager_class.return_value = mock_manager
+
+        exit_code = main()
+
+        self.assertEqual(exit_code, 1)
+        mock_manager.export_backtest_result.assert_not_called()
 
 
 if __name__ == '__main__':

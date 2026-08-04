@@ -1,19 +1,23 @@
 import argparse
-import pandas as pd
 import os
 import sys
-import logging
 from pathlib import Path
+from typing import Any, List
 
-# Add the project root to Python path to enable imports
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
+import pandas as pd
 
-from niffler.backtesting import BacktestEngine, BacktestResult
+# Running "python scripts/backtest.py" puts scripts/ on sys.path but not the
+# repository root, so the root has to be added for "import niffler" to work.
+# When imported as scripts.backtest the root is already importable.
+if __package__ in (None, ''):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from niffler.backtesting import BacktestEngine
 from niffler.strategies.simple_ma_strategy import SimpleMAStrategy
 from niffler.risk import FixedRiskManager
 from niffler.exporters import ExporterManager
-from config.logging import setup_logging
+from niffler.config.logging import setup_logging
+from scripts.common import load_ohlcv_csv
 
 
 def extract_symbol_from_filename(file_path: str) -> str:
@@ -38,43 +42,62 @@ def extract_symbol_from_filename(file_path: str) -> str:
 
 
 def load_data(file_path: str, clean: bool = False) -> pd.DataFrame:
-    """Load CSV data and optionally apply cleaning pipeline."""
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"Data file not found: {file_path}")
+    """Load CSV data and optionally apply the cleaning pipeline.
 
-    if clean:
-        # Apply data cleaning pipeline
-        from scripts.preprocessor import load_and_clean_csv
-        df = load_and_clean_csv(file_path)
+    Args:
+        file_path: Path to the CSV file with OHLCV data.
+        clean: Whether to run the default preprocessing pipeline.
 
-        if df is None:
-            raise ValueError(f"Failed to load and clean data from {file_path}")
-    else:
-        # Load CSV file directly (assumes it's already cleaned)
-        df = pd.read_csv(file_path)
+    Returns:
+        DataFrame with lowercase OHLCV columns and a sorted datetime index.
 
-        # Try to parse timestamp/date column as index
-        timestamp_cols = ['timestamp', 'date', 'Date', 'Timestamp']
-        for col in timestamp_cols:
-            if col in df.columns:
-                df[col] = pd.to_datetime(df[col])
-                df.set_index(col, inplace=True)
-                break
-
-        # Normalize column names to lowercase
-        df.columns = df.columns.str.lower()
-
-    # Validate required columns
-    required_columns = ['open', 'high', 'low', 'close', 'volume']
-    missing_columns = [col for col in required_columns if col not in df.columns]
-    if missing_columns:
-        raise ValueError(f"Missing required columns: {missing_columns}")
-
-    return df
+    Raises:
+        FileNotFoundError: If the data file does not exist.
+        ValueError: If the file cannot be interpreted as OHLCV data.
+    """
+    return load_ohlcv_csv(file_path, clean=clean)
 
 
+def report_export_outcome(export_result: Any, exporter_names: List[str]) -> int:
+    """Print a per-exporter export report and derive the process exit code.
 
-def main():
+    Accepts either the ``ExportSummary`` returned by the current
+    ``ExporterManager`` or the bare backtest id returned by older versions.
+
+    Args:
+        export_result: Value returned by ExporterManager.export_backtest_result.
+        exporter_names: Names of the configured exporters, used as a fallback
+            when the manager only returns a backtest id.
+
+    Returns:
+        0 when every exporter succeeded, 1 when at least one failed.
+    """
+    successes = getattr(export_result, 'successes', None)
+    failures = getattr(export_result, 'failures', None)
+    backtest_id = getattr(export_result, 'backtest_id', export_result)
+
+    print(f"Backtest completed with ID: {backtest_id}")
+
+    if successes is None or failures is None:
+        # Legacy ExporterManager: no per-exporter outcome is available.
+        print(f"Exported using: {', '.join(exporter_names)}")
+        return 0
+
+    print("Export report:")
+    for name in successes:
+        print(f"  OK     {name}")
+    for name, error in failures:
+        print(f"  FAILED {name}: {error}")
+
+    if failures:
+        total = len(successes) + len(failures)
+        print(f"Error: {len(failures)} of {total} exporters failed", file=sys.stderr)
+        return 1
+
+    return 0
+
+
+def main() -> int:
     parser = argparse.ArgumentParser(
         description='Backtest trading strategies on historical data with optional risk management',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -112,7 +135,6 @@ Examples:
     
     # Output options
     # Get available exporters dynamically
-    from niffler.exporters import ExporterManager
     available_exporters = ','.join(ExporterManager.get_available_exporter_names())
     parser.add_argument('--exporters', type=str, default='console',
                        help=f'Comma-separated list of exporters to use: {available_exporters} (default: console)')
@@ -231,26 +253,28 @@ Examples:
             index_prefix=args.es_index_prefix
         )
 
+        if exporter_manager.get_exporter_count() == 0:
+            print(f"Error: no usable exporters created from '{args.exporters}'", file=sys.stderr)
+            return 1
+
         # Prepare strategy parameters for metadata (generic - gets from strategy object)
         strategy_params = strategy.parameters.copy()
 
         # Export results using all configured exporters
-        backtest_id = exporter_manager.export_backtest_result(
+        export_result = exporter_manager.export_backtest_result(
             result=result,
             strategy_params=strategy_params,
             symbol=symbol,
             initial_capital=args.capital,
             commission=args.commission
         )
-        
-        print(f"Backtest completed with ID: {backtest_id}")
-        if exporter_manager.get_exporter_count() > 1:
-            print(f"Exported using: {', '.join(exporter_manager.get_exporter_names())}")
-        
+
+        return report_export_outcome(export_result, exporter_manager.get_exporter_names())
+
     except Exception as e:
-        print(f"Error: {e}")
-        sys.exit(1)
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

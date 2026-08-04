@@ -6,6 +6,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Niffler is a Python-based trading application that helps identify profitable market opportunities. The project includes data acquisition, preprocessing, backtesting, strategy optimization, and advanced robustness analysis components.
 
+### Read this before changing numerical behaviour
+
+A correctness audit removed several sources of look-ahead bias and silent failure. The
+full list, with the reasoning, is in
+[README.md → What changed and why your old results differed](README.md#what-changed-and-why-your-old-results-differed).
+The short version, because these are easy to "helpfully" undo:
+
+| Invariant | Do not |
+|-----------|--------|
+| Signals fill at the **next bar's open** | Make `same_bar_close` the default or expose it on the CLI |
+| Annualisation is **inferred** from the index | Reintroduce a hardcoded `sqrt(252)` |
+| **One** FIFO pairing routine (`pair_trades`) | Add a second pairing loop in an exporter or analyzer |
+| Walk-forward **trains and tests on disjoint bars** | Restore fixed-parameter "walk-forward" as the default |
+| Monte Carlo bootstraps **returns**, in draw order | Call `sort_index()` on resampled blocks, or glue price levels |
+| Volume gaps fill with **0**; backward fill is opt-in | Restore a blanket `ffill().bfill()` |
+| `max_drawdown` is **negative** | Use `max()` for "worst" or treat it as lower-is-better |
+| Failures **raise** and exit non-zero | Log a message and return normally |
+
+Scope limits that are deliberate, not oversights: long-only, no slippage/spread model, no
+live trading, one strategy, Kelly risk manager is a stub.
+
 ## Development Setup
 
 ### Package Management
@@ -26,7 +47,20 @@ Niffler is a Python-based trading application that helps identify profitable mar
 - Run all tests: `python -m unittest discover -s tests -p "test_*.py"`
 - Run specific test module: `python -m unittest tests.test_downloaders.test_ccxt_downloader`
 - Run specific test class: `python -m unittest tests.test_backtesting.test_backtest_engine.TestBacktestEngine`
-- Uses built-in unittest framework (no pytest)
+- Uses built-in unittest framework (no pytest) — keep it that way
+- The suite size is quoted in exactly one place, [README.md](README.md#testing). Do not
+  restate a test count anywhere else; it rots immediately.
+
+### Linting and Type Checking
+- `ruff check .` must pass — CI enforces it (`.github/workflows/ci.yml`)
+- `ruff format` is configured but deliberately **not** enforced; do not run a repo-wide
+  reformat
+- `[tool.ruff.lint]` selects E4/E7/E9/F/C4. An "ADOPTION BACKLOG" ignore block in
+  `pyproject.toml` suppresses E402/E722/F401/F541/F811/F841 with current counts; remove them
+  one rule at a time rather than all at once
+- `mypy` is scoped to `files = ['niffler']`, non-strict, and advisory only
+  (`continue-on-error` in CI) — it currently hits an internal error on
+  `niffler/optimization/base_optimizer.py`
 
 ### Data Download
 Main functionality via `scripts/download_data.py`:
@@ -55,7 +89,8 @@ Strategy backtesting via `scripts/backtest.py`:
 
 ```bash
 # Run backtest with Simple MA strategy (console output)
-python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv --strategy simple_ma --initial_capital 10000 --commission 0.001
+# NB: the flag is --capital, not --initial_capital
+python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv --strategy simple_ma --capital 10000 --commission 0.001
 
 # Run backtest with CSV export
 python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv --strategy simple_ma --exporters csv --csv-output-dir results/
@@ -82,17 +117,30 @@ python scripts/optimize.py --data data/BTCUSDT_binance_1d.csv --strategy simple_
 
 # Sort results by Sharpe ratio and save to custom file
 python scripts/optimize.py --data data/BTCUSDT_binance_1d.csv --strategy simple_ma --sort-by sharpe_ratio --output my_results.json
+
+# Reproducible parallel random search
+python scripts/optimize.py --data data/BTCUSDT_binance_1d.csv --strategy simple_ma --method random --trials 200 --seed 42 --jobs 4
 ```
+
+Note: `--sort-by max_drawdown` now ranks the **shallowest** drawdown first. `max_drawdown`
+is a negative percentage, and it used to be flagged "lower is better", which selected the
+worst parameter set every time (including inside walk-forward folds).
 
 ### Strategy Analysis
 Advanced robustness testing via `scripts/analyze.py`:
 
 ```bash
-# Walk-forward analysis with specific parameters
-python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma --params '{"short_window": 10, "long_window": 30}'
+# Walk-forward analysis (parameters are re-optimised per fold, so --params is NOT needed)
+python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma
 
-# Load parameters from optimization results
-python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma --params_file optimization_results.json
+# Walk-forward with custom windows and a random per-fold optimizer selecting on Sharpe
+python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma \
+  --train_window 12 --test_window 6 --step 6 --anchored \
+  --optimization_method random --optimization_metric sharpe_ratio
+
+# The old fixed-parameter behaviour - NOT a validation, requires --params, warns loudly
+python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma \
+  --mode segmented_in_sample --params '{"short_window": 10, "long_window": 30}'
 
 # Monte Carlo analysis with 1000 simulations
 python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_carlo --strategy simple_ma --params '{"short_window": 10, "long_window": 30}' --simulations 1000
@@ -111,9 +159,23 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
 - `niffler/data/preprocessors/` - Data cleaning and validation pipeline
   - `preprocessor_manager.py` - Orchestrates the preprocessing pipeline
   - Individual processors for infinite values, NaN handling, OHLC validation, etc.
+- `niffler/data/exceptions.py` - Typed data-layer exceptions
+  (`NifflerDataError` → `DownloadError`, `NoDataAvailableError`, `InvalidTimeframeError`),
+  re-exported from `niffler.data`. `NoDataAvailableError` is deliberately **not** a subclass
+  of `DownloadError`
 - `niffler/backtesting/` - Strategy backtesting framework
-  - `backtest_engine.py` - Core backtesting engine with portfolio management
-  - `trade.py` - Trade execution and tracking
+  - `backtest_engine.py` - Core backtesting engine; `run_backtest` decomposes into
+    `_extract_signal_columns`, `_apply_risk_management`, `_process_stop_loss`,
+    `_process_buy`, `_process_sell`
+  - `portfolio.py` - `Portfolio` owns cash / position / entry price / stop / side and the
+    operations on them (`apply_buy`, `apply_sell`, `open_position`, `add_to_position`,
+    `close_position`, `market_value`, `position_fraction`, `unrealized_pnl`, `is_flat`).
+    The engine holds no parallel mutable state
+  - `round_trip.py` - `pair_trades()` → `List[RoundTrip]`, the **single** FIFO trade-pairing
+    routine (correct partial fills both directions, pro-rata commission, P&L net of entry
+    and exit commission). Used by engine statistics *and* the Elasticsearch position export
+  - `trade.py` - Trade execution and tracking (`Trade` carries an optional `commission`
+    field, defaulted, as its last positional field)
   - `backtest_result.py` - Performance metrics and results
 - `niffler/strategies/` - Trading strategy implementations
   - `base_strategy.py` - Abstract base class for strategies
@@ -126,22 +188,49 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
   - `parameter_space.py` - Defines parameter ranges for strategies
   - `optimization_result.py` - Stores and analyzes optimization results
 - `niffler/analysis/` - Advanced strategy validation framework
-  - `walk_forward_analyzer.py` - Temporal robustness testing across rolling time windows
-  - `monte_carlo_analyzer.py` - Market scenario robustness testing via bootstrap sampling
-  - `analysis_result.py` - Unified result container with stability metrics
+  - `walk_forward_analyzer.py` - Real anchored/rolling walk-forward: per-fold optimisation
+    on a training window, evaluation on the following untouched test window
+    (`WalkForwardWindow`, `WalkForwardFold`, `MODE_WALK_FORWARD`,
+    `MODE_SEGMENTED_IN_SAMPLE`)
+  - `monte_carlo_analyzer.py` - Market scenario robustness via **return-series** block
+    bootstrap with a reconstructed synthetic price path
+  - `analysis_result.py` - Unified result container with stability metrics, failure
+    accounting (`attempted_runs`, `failed_runs`, `failure_rate`, `is_survivorship_biased`)
+    and the shared `log_failure_rate()` / `FAILURE_RATE_WARNING_THRESHOLD`
 - `niffler/risk/` - Risk management framework
   - `base_risk_manager.py` - Abstract base class for risk management systems
   - `fixed_risk_manager.py` - Fixed position sizing and stop-loss risk management
-  - `kelly_risk_manager.py` - Kelly criterion-based optimal position sizing (pending implementation)
+  - `kelly_risk_manager.py` - **Stub.** The class and constructor exist; all three abstract
+    methods raise `NotImplementedError`. `FixedRiskManager` is the only usable one
 - `niffler/exporters/` - Modular result export system
   - `base_exporter.py` - Abstract base class for result exporters
   - `console_exporter.py` - Human-readable console output
   - `csv_exporter.py` - CSV file export for analysis tools
   - `elasticsearch_exporter.py` - Elasticsearch integration for visualization
-  - `exporter_manager.py` - Multi-exporter coordination and registry
-- `config/logging.py` - Unified logging configuration
+  - `exporter_manager.py` - Multi-exporter coordination, registry and `ExportSummary`
+  - `json_utils.py` - Compatibility re-export of `niffler/utils/json_utils.py`
+- `niffler/utils/` - Layer-neutral helpers. **Nothing here may import from the
+  backtesting / optimization / exporters layers**, so importing a helper never drags an
+  optional third-party dependency (the Elasticsearch client) along with it
+  - `json_utils.py` - `sanitize_numeric_values`, `safe_json_dumps`, `safe_json_dump`
+    (inf/NaN → `null`, numpy scalars → Python numbers, `allow_nan=False`)
+- `niffler/config/logging.py` - Unified logging configuration (the real implementation).
+  `setup_logging` validates the level against a whitelist and creates the log file's parent
+  directory on demand
+- `config/logging.py` - Thin backwards-compatible re-export shim for the old
+  `from config.logging import setup_logging` path. New code imports
+  `niffler.config.logging`
 - `config/elasticsearch/mappings/` - Elasticsearch schema definitions
+  (`backtests`, `portfolio`, `trades`, `positions`)
 - `scripts/` - Command-line interfaces for core functionality
+  - `common.py` - **The** shared OHLCV CSV loader (`load_ohlcv_csv`) used by `backtest.py`,
+    `analyze.py` and `optimize.py`. Header normalisation, timestamp-column detection
+    (`timestamp`/`date`/`datetime`/`time` plus pandas' unnamed index column), datetime
+    parsing, required-column and duplicate-timestamp validation, index sorting, optional
+    `--clean` pass. Do not add a fourth loader
+  - Every `main()` returns an `int` exit code and is invoked as `sys.exit(main())`
+  - Scripts insert into `sys.path` only under `if __package__ in (None, '')`, so importing
+    them as `scripts.<name>` (tests, discovery) touches nothing
 
 ### Data Storage
 - Format: CSV files with standardized columns (timestamp, open, high, low, close, volume)
@@ -150,37 +239,95 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
 
 ## Key Implementation Details
 
+### Backtest Execution Model
+- **Execution timing**: a signal from bar *i* fills at the **open of bar i+1**
+  (`execution_timing='next_bar_open'`, the default). A signal on the final bar never fills.
+  `same_bar_close` is the old, look-ahead-biased behaviour, opt-in only and not exposed on
+  the CLI
+- **Annualisation**: `periods_per_year` is inferred from the index (median bar spacing +
+  weekend-presence check), not hardcoded to 252. Daily crypto → 365, daily equities → 252,
+  hourly crypto → 8760, weekly → ~52, monthly → ~12. Override with
+  `BacktestEngine(periods_per_year=...)`
+- **Trade statistics** derive from `pair_trades()` only. `_calculate_win_rate` and
+  `_calculate_profit_factor` are thin wrappers over it — do not reintroduce a second
+  pairing loop
+- **Exits**: `RiskDecision.position_size` sizes *entries* only. A sell uses the strategy's
+  own `position_size` (a fraction of held units); the risk manager can veto an exit via
+  `allow_trade` but cannot resize it
+- **Scaling in**: a buy while already positioned takes a quantity-weighted average entry
+  price and only ever tightens the stop (a `None` stop leaves the existing one armed)
+- **Stops**: probed against the bar's traded range (low for longs, high for shorts) and
+  filled at `min(open, stop)` for a long, so a gap-through fills at the open
+- **Long only.** A `-1` signal with no open position is a no-op. No shorting, no slippage
+  or spread model, no live trading
+
 ### Data Sources
-- **CCXT**: Cryptocurrency exchange data with pagination support
-- **Yahoo Finance**: Traditional financial data via yfinance library
+- **CCXT**: Cryptocurrency exchange data with pagination, bounded retries and exponential
+  backoff. A give-up mid-download returns the candles already fetched flagged
+  `df.attrs['partial']` / `['partial_reason']` rather than discarding them
+- **Yahoo Finance**: Traditional financial data via yfinance. `auto_adjust` is passed
+  **explicitly on every call** (default `True` = back-adjusted for splits and dividends)
+  because yfinance flipped its own default in 0.2.51. The convention used is recorded on
+  `df.attrs['auto_adjust']`
 
 ### Data Preprocessing Pipeline
 - **Infinite Value Removal**: Replaces ±∞ with NaN for calculation safety
-- **NaN Handling**: Forward-fill with backward-fill fallback for missing values
-- **OHLC Validation**: Ensures High ≥ Low and Open/Close within High/Low range
+- **NaN Handling**: explicit per-column gap policy — price columns forward-fill, **volume /
+  flow columns fill with 0** (never a stale value), everything else forward-fills.
+  **Backward fill is opt-in** (`allow_backward_fill=True`) because it is look-ahead;
+  unresolvable leading rows are dropped. Fabricated cells/rows are counted and reported on
+  `self.last_stats` and `result.attrs['nan_fill']`
+- **OHLC Validation**: High ≥ Low and Open/Close within High/Low range. `mode='drop'`
+  (default), `'repair'` (clamp high/low, keep the sampling grid) or `'flag'`. Counts are
+  reported on `result.attrs['ohlc_validation']` and any drop logs a warning with the
+  affected percentage
 - **Time Gap Detection**: Identifies missing periods and calculates data completeness
 - **Data Quality Checks**: Validates positive prices, non-negative volume, removes duplicates
 
 ### Error Handling
-- Comprehensive error handling in download_data.py and preprocessor.py
-- Proper logging and user feedback
-- Graceful handling of network errors and invalid inputs
-- Data validation prevents corrupted data from breaking downstream analysis
+- Downloaders **raise** typed exceptions rather than returning `None` (see
+  `niffler/data/exceptions.py`); `BaseDownloader.download` is annotated `-> pd.DataFrame`
+- Scripts report and exit non-zero. Broad `except Exception` is acceptable only at a CLI
+  boundary that reports a message and exits; library code catches specific types
+- `ExporterManager.export_backtest_result` returns an `ExportSummary`; exporters raise
+  `ExportError` rather than logging "skipping" and returning normally
+- Analyzers count failed folds/simulations and warn about survivorship bias above 5%
 
 ### Analysis Framework Architecture
 The analysis framework provides two main approaches for testing strategy robustness:
 
 #### Walk-Forward Analysis
-- **Purpose**: Tests temporal robustness by validating pre-optimized parameters across rolling time windows
-- **Process**: Uses fixed parameters obtained from optimization and tests them on sequential out-of-sample periods
-- **Key Metrics**: Period-by-period performance, temporal stability, return consistency
-- **Use Case**: Validate that optimized parameters work consistently across different time periods
+- **Purpose**: Measures how much of a fitted edge survives on data the optimizer never saw
+- **Process**: each fold optimises on a training window and backtests the chosen parameters
+  on the immediately following test window. `train_end == test_start`, so no bar is ever
+  both trained and tested on. The per-fold optimizer always runs with `n_jobs=1` so
+  fold-level and optimizer-level pools never nest
+- **Key Metrics**: per-fold in-sample vs out-of-sample return, **walk-forward efficiency
+  ratio**, temporal stability, failure accounting, out-of-sample overlap
+- **Modes**: `walk_forward` (default, genuinely out-of-sample; raises `ValueError` without a
+  `parameter_space`) and `segmented_in_sample` (the old fixed-parameter behaviour — it
+  validates nothing, requires `optimal_parameters`, logs a warning and marks every fold
+  in-sample)
+- **Overlap caveat**: with the defaults (`test_window_months=6`, `step_months=3`)
+  consecutive out-of-sample windows overlap 50%. Repeated bars are counted once in
+  `combined_sharpe_ratio` and the overlap is reported/warned, but per-fold counters still
+  treat each fold as one sample
 
-#### Monte Carlo Analysis  
-- **Purpose**: Tests market scenario robustness using bootstrap sampling of historical data
-- **Process**: Runs hundreds/thousands of simulations with block bootstrap sampling to preserve time series structure
-- **Key Metrics**: Return distribution statistics, VaR/CVaR, percentile analysis, skewness/kurtosis
-- **Use Case**: Assess strategy performance across various market scenarios and estimate risk metrics
+#### Monte Carlo Analysis
+- **Purpose**: Tests market scenario robustness using block bootstrap sampling
+- **Process**: block-bootstraps the **return** series (not price levels), concatenates
+  blocks in draw order (**never** `sort_index()` — that made the old version a no-op),
+  compounds them from the real starting price into a synthetic close path, scales O/H/L
+  around it and stamps a fresh evenly-spaced `DatetimeIndex`
+- **Reproducibility**: each simulation derives `random_seed + simulation_id`, passed
+  explicitly into the worker (spawn-based platforms do not inherit seeded generators), and
+  results are re-ordered by simulation id before returning. Seeded `n_jobs=1` and
+  `n_jobs=8` runs are byte-identical
+- **Key Metrics**: Return distribution statistics, VaR/CVaR, percentile analysis,
+  skewness/kurtosis
+- **Shared discipline**: both analyzers return `(results, failed_count)` from their runner
+  methods, report failure rates, and trim over-large result sets by keeping the **most
+  recent** half — never the best-performing half, which amputates the left tail
 
 ### Risk Management Framework
 The risk management system provides position sizing, stop-loss calculation, and portfolio-level risk controls:
@@ -192,11 +339,13 @@ The risk management system provides position sizing, stop-loss calculation, and 
 - **Portfolio Controls**: Maximum positions, exposure limits, risk per trade caps
 - **Use Case**: Conservative risk management with predictable position sizes
 
-#### Kelly Risk Manager (Planned)
+#### Kelly Risk Manager (NOT IMPLEMENTED)
 - **Purpose**: Optimal position sizing based on historical strategy performance
-- **Method**: Uses Kelly Criterion formula: f* = (bp - q) / b
-- **Features**: Fractional Kelly, lookback period analysis, volatility-based stops
-- **Status**: Framework implemented, core calculations pending integration with backtest engine
+- **Method**: Would use the Kelly Criterion formula: f* = (bp - q) / b
+- **Status**: **Stub.** `calculate_position_size()`, `calculate_stop_loss()` and
+  `should_close_position()` all raise `NotImplementedError`. It is not selectable from the
+  `backtest.py` CLI (`--risk-manager` accepts `none` and `fixed` only) and must not be
+  described as working
 
 #### Risk Management Features
 - **Position Tracking**: Real-time monitoring of all open positions
@@ -226,24 +375,31 @@ The modular export system enables flexible output of backtest results to multipl
 - **Elasticsearch Integration**: Optimized bulk operations with configurable index mappings
 
 #### Configuration
-- **Environment Variables**: Default settings via `.env` file
+- **Environment Variables**: Default settings via `.env` file (an empty value counts as unset)
   - `ELASTICSEARCH_HOST` - Elasticsearch server hostname
   - `ELASTICSEARCH_PORT` - Elasticsearch server port  
   - `ELASTICSEARCH_INDEX_PREFIX` - Index naming prefix
+  - `ELASTICSEARCH_SCHEME` - `http` (default) or `https`
+  - `ELASTICSEARCH_API_KEY` - API key auth; takes precedence over basic auth
+  - `ELASTICSEARCH_USERNAME` / `ELASTICSEARCH_PASSWORD` - basic auth (both required)
+  - `ELASTICSEARCH_TIMEOUT` - Request timeout in seconds (default 30)
+  - `ELASTICSEARCH_VERIFY_CERTS` - TLS certificate verification for https (default true)
 - **Command-line Overrides**: Runtime configuration via `--es-host`, `--es-port`, `--es-index-prefix`
 - **Mapping Files**: Elasticsearch schema definitions in `config/elasticsearch/mappings/`
+- **Failure Reporting**: `ExporterManager.export_backtest_result` returns an `ExportSummary`
+  (`successes`, `failures`, `backtest_id`, `ok`). Exporters raise rather than skipping
+  silently, and `scripts/backtest.py` prints a per-exporter report and exits 1 on any failure
 
 ### Testing Approach
 - Mock external dependencies (ccxt, yfinance, elasticsearch)
 - Test both successful operations and error conditions
 - Validate argument parsing and data output formats
-- Comprehensive testing: 452 total tests including:
-  - 70 unit tests for exporters package (console, CSV, Elasticsearch, manager)
-  - 36 tests for analysis framework (Monte Carlo, walk-forward)
-  - 18 tests for backtesting engine
-  - 48 tests for data management (downloaders, preprocessors)
-  - 54 tests for optimization framework
-  - 18 tests for risk management
-  - 208 tests for scripts and CLI interfaces
+- Test packages mirror the source layout: `tests/test_backtesting`, `test_analysis`,
+  `test_downloaders`, `test_preprocessors`, `test_optimization`, `test_risk`,
+  `test_exporters`, `test_scripts`
 - Integration and functional testing to ensure end-to-end workflow reliability
-- Isolated testing with proper mocking and teardown procedures
+- Isolated testing with proper mocking and teardown procedures — tests must not leave files
+  in the repository root
+- **When fixing a bug, add the test that would have caught it**, and verify by reverting the
+  fix and watching that test fail. Every audit fix in this codebase was validated that way
+- The suite size lives in [README.md](README.md#testing) and nowhere else

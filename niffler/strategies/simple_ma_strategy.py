@@ -9,6 +9,10 @@ class SimpleMAStrategy(BaseStrategy):
     
     Generates buy signals when short MA crosses above long MA,
     and sell signals when short MA crosses below long MA.
+
+    Signals are computed from the closing price of the bar they belong to. That
+    is intentional and bias-free: BacktestEngine defers execution to the next
+    bar's open, so a signal is never filled at a price the strategy already saw.
     """
     
     def __init__(self, short_window: int = 10, long_window: int = 30, 

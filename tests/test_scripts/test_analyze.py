@@ -234,6 +234,12 @@ class TestAnalyzeScript(unittest.TestCase):
         mock_result.n_periods = 3
         mock_result.combined_metrics = {'avg_return': 100.0, 'std_return': 50.0}
         mock_result.stability_metrics = {'temporal_stability': 0.8}
+        mock_result.metadata = {
+            'folds': [
+                {'fold_number': 1, 'parameters': {'short_window': 5, 'long_window': 20},
+                 'train_return_pct': 20.0, 'test_return_pct': 10.0, 'efficiency_ratio': 0.5},
+            ]
+        }
         mock_result.to_dataframe.return_value = pd.DataFrame({
             'start_date': [datetime(2023, 1, 1), datetime(2023, 7, 1)],
             'end_date': [datetime(2023, 6, 30), datetime(2023, 12, 31)],
@@ -249,17 +255,22 @@ class TestAnalyzeScript(unittest.TestCase):
         # Mock args
         args = Mock()
         args.strategy = 'simple_ma'
+        args.mode = 'walk_forward'
+        args.anchored = False
+        args.train_window = 12
         args.test_window = 6
         args.step = 3
         args.initial_capital = 10000
         args.commission = 0.001
+        args.optimization_method = 'grid'
+        args.optimization_metric = 'total_return'
         args.n_jobs = 1
         args.symbol = 'TEST'
-        
+
         # Capture stdout
         with patch('sys.stdout', new_callable=StringIO) as mock_stdout:
             result = analyze.run_walk_forward_analysis(args, self.test_data, self.test_params)
-        
+
         # Verify analyzer was called correctly
         mock_analyzer_class.assert_called_once()
         mock_analyzer.analyze.assert_called_once_with(self.test_data, 'TEST')
@@ -483,7 +494,51 @@ class TestAnalyzeScript(unittest.TestCase):
         
         # Verify save_results was called
         mock_save_results.assert_called_once_with(mock_result, 'results.json')
-    
+
+    @patch('analyze.setup_logging')
+    @patch('analyze.load_data')
+    @patch('analyze.save_results')
+    @patch('analyze.run_walk_forward_analysis')
+    @patch('sys.argv', ['analyze.py', '--data', 'test.csv', '--analysis', 'walk_forward',
+                       '--strategy', 'simple_ma', '--params', '{"short_window": 10, "long_window": 20}',
+                       '--output', 'results.json'])
+    def test_main_reports_failure_when_results_cannot_be_saved(self, mock_run_wf, mock_save_results,
+                                                               mock_load_data, mock_setup_logging):
+        """A failed save must not be reported as a successful analysis."""
+        mock_load_data.return_value = self.test_data
+        mock_run_wf.return_value = Mock()
+        mock_save_results.side_effect = OSError("disk full")
+
+        with patch('analyze.load_parameters') as mock_load_params:
+            mock_load_params.return_value = self.test_params
+            with patch('sys.stdout', new_callable=StringIO) as mock_stdout:
+                exit_code = analyze.main()
+
+        self.assertEqual(exit_code, 1)
+        self.assertNotIn('Analysis completed successfully!', mock_stdout.getvalue())
+
+    def test_save_results_propagates_write_errors(self):
+        """save_results must raise instead of silently swallowing IO errors."""
+        mock_result = Mock()
+        mock_result.analysis_type = 'walk_forward'
+        mock_result.strategy_name = 'SimpleMAStrategy'
+        mock_result.symbol = 'TEST'
+        mock_result.analysis_start_date = datetime(2023, 1, 1)
+        mock_result.analysis_end_date = datetime(2023, 12, 31)
+        mock_result.n_periods = 1
+        mock_result.combined_metrics = {}
+        mock_result.stability_metrics = {}
+        mock_result.analysis_parameters = {}
+        mock_result.metadata = None
+        mock_result.get_summary_statistics.return_value = {}
+        mock_result.get_performance_consistency.return_value = {}
+        mock_result.to_dataframe.return_value = pd.DataFrame({'period': [1]})
+
+        with patch('builtins.open', side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                analyze.save_results(mock_result, 'unwritable.json')
+
+
     @patch('analyze.setup_logging')
     @patch('analyze.load_data')
     @patch('sys.argv', ['analyze.py', '--data', 'test.csv', '--analysis', 'walk_forward', 
@@ -492,10 +547,11 @@ class TestAnalyzeScript(unittest.TestCase):
         """Test main function with error handling."""
         # Make load_data raise an exception
         mock_load_data.side_effect = Exception("Test error")
-        
-        with self.assertRaises(SystemExit):
-            with patch('sys.stderr', new_callable=StringIO):
-                analyze.main()
+
+        with patch('sys.stderr', new_callable=StringIO):
+            exit_code = analyze.main()
+
+        self.assertEqual(exit_code, 1)
     
     def test_main_invalid_analysis_type(self):
         """Test main function with invalid analysis type."""
@@ -559,7 +615,8 @@ class TestAnalyzeIntegration(unittest.TestCase):
         mock_result.n_periods = 1
         mock_result.combined_metrics = {'avg_return': 150.0, 'profitable_periods_pct': 100.0}
         mock_result.stability_metrics = {'temporal_stability': 0.85, 'return_volatility': 25.0}
-        
+        mock_result.metadata = {}
+
         # Mock dataframe
         df = pd.DataFrame({
             'start_date': [datetime(2023, 1, 1)],
