@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 from datetime import datetime
 import pandas as pd
 
-from niffler.exporters.exporter_manager import ExporterManager
+from niffler.exporters.exporter_manager import ExporterManager, ExportSummary
 from niffler.exporters.base_exporter import BaseExporter
 from niffler.exporters.console_exporter import ConsoleExporter
 from niffler.exporters.csv_exporter import CSVExporter
@@ -148,21 +148,25 @@ class TestExporterManager(unittest.TestCase):
         self.assertIsInstance(self.manager.exporters[0], ConsoleExporter)
         self.assertIsInstance(self.manager.exporters[1], CSVExporter)
     
-    @patch('builtins.print')
-    def test_create_exporters_from_list_with_unknown(self, mock_print):
-        """Test creating exporters with unknown type in list."""
+    def test_create_exporters_from_list_with_unknown(self):
+        """An unknown exporter is recorded as a failure, not silently skipped."""
         exporter_names = ['console', 'unknown', 'csv']
-        
-        self.manager.create_exporters_from_list(exporter_names, output_dir='/tmp/test')
-        
+
+        with patch('niffler.exporters.exporter_manager.logger') as mock_logger:
+            failures = self.manager.create_exporters_from_list(
+                exporter_names, output_dir='/tmp/test'
+            )
+
         # Should create console and csv exporters, skip unknown
         self.assertEqual(len(self.manager.exporters), 2)
         self.assertIsInstance(self.manager.exporters[0], ConsoleExporter)
         self.assertIsInstance(self.manager.exporters[1], CSVExporter)
-        
-        # Should print warning
-        mock_print.assert_called_once()
-        self.assertIn('Warning:', str(mock_print.call_args))
+
+        # The unknown exporter must be reported, not merely printed and forgotten
+        self.assertEqual([name for name, _ in failures], ['unknown'])
+        self.assertEqual(self.manager.creation_failures, failures)
+        mock_logger.error.assert_called_once()
+        self.assertIn('unknown', str(mock_logger.error.call_args))
     
     def test_export_backtest_result(self):
         """Test exporting backtest result with multiple exporters."""
@@ -177,14 +181,19 @@ class TestExporterManager(unittest.TestCase):
         initial_capital = 10000.0
         commission = 0.001
         
-        backtest_id = self.manager.export_backtest_result(
+        summary = self.manager.export_backtest_result(
             self.mock_result, strategy_params, symbol, initial_capital, commission
         )
-        
-        # Check that backtest_id is returned
+
+        # Check that a summary with a generated backtest_id is returned
+        self.assertIsInstance(summary, ExportSummary)
+        backtest_id = summary.backtest_id
         self.assertIsInstance(backtest_id, str)
         self.assertEqual(len(backtest_id), 36)  # UUID length
-        
+        self.assertTrue(summary.ok)
+        self.assertEqual(summary.failures, [])
+        self.assertEqual(len(summary.successes), 2)
+
         # Check that both exporters were called
         mock_exporter1.export_backtest_result.assert_called_once()
         mock_exporter2.export_backtest_result.assert_called_once()
@@ -212,13 +221,15 @@ class TestExporterManager(unittest.TestCase):
         initial_capital = 10000.0
         commission = 0.001
         
-        backtest_id = self.manager.export_backtest_result(
+        summary = self.manager.export_backtest_result(
             self.mock_result, strategy_params, symbol, initial_capital, commission,
             backtest_id=custom_id
         )
-        
-        self.assertEqual(backtest_id, custom_id)
-        
+
+        self.assertEqual(summary.backtest_id, custom_id)
+        self.assertTrue(summary.ok)
+
+
         # Check that exporter was called with custom ID
         args = mock_exporter.export_backtest_result.call_args
         self.assertEqual(args[0][1], custom_id)
@@ -229,29 +240,131 @@ class TestExporterManager(unittest.TestCase):
         mock_exporter1 = Mock(spec=BaseExporter)
         mock_exporter1.export_backtest_result.side_effect = Exception("Export failed")
         mock_exporter1.logger = Mock()
-        
+
         mock_exporter2 = Mock(spec=BaseExporter)
-        
+
         self.manager.add_exporter(mock_exporter1)
         self.manager.add_exporter(mock_exporter2)
-        
+
         strategy_params = {'param1': 'value1'}
         symbol = 'BTC-USD'
         initial_capital = 10000.0
         commission = 0.001
-        
+
         # Should not raise exception, but continue with other exporters
-        backtest_id = self.manager.export_backtest_result(
+        summary = self.manager.export_backtest_result(
             self.mock_result, strategy_params, symbol, initial_capital, commission
         )
-        
+
         # Both exporters should have been called
         mock_exporter1.export_backtest_result.assert_called_once()
         mock_exporter2.export_backtest_result.assert_called_once()
-        
+
         # Error should have been logged
         mock_exporter1.logger.error.assert_called_once()
-    
+
+        # The failure must be visible to the caller, not silently swallowed
+        self.assertFalse(summary.ok)
+        self.assertEqual(summary.failures, [('BaseExporter', 'Export failed')])
+        self.assertEqual(summary.successes, ['BaseExporter'])
+
+    def test_export_backtest_result_summary_reports_exporter_names(self):
+        """Summary uses the exporter class names for successes and failures."""
+        class FailingExporter(BaseExporter):
+            def export_backtest_result(self, result, backtest_id, metadata):
+                raise RuntimeError("disk full")
+
+        class WorkingExporter(BaseExporter):
+            def export_backtest_result(self, result, backtest_id, metadata):
+                return None
+
+        self.manager.add_exporter(WorkingExporter())
+        self.manager.add_exporter(FailingExporter())
+
+        summary = self.manager.export_backtest_result(
+            self.mock_result, {}, 'BTC-USD', 10000.0, 0.001
+        )
+
+        self.assertEqual(summary.successes, ['WorkingExporter'])
+        self.assertEqual(summary.failures, [('FailingExporter', 'disk full')])
+        self.assertFalse(summary.ok)
+
+    def test_export_backtest_result_no_exporters(self):
+        """An empty exporter list still yields a successful, empty summary."""
+        summary = self.manager.export_backtest_result(
+            self.mock_result, {}, 'BTC-USD', 10000.0, 0.001
+        )
+
+        self.assertTrue(summary.ok)
+        self.assertEqual(summary.successes, [])
+        self.assertEqual(summary.failures, [])
+
+    def test_export_backtest_result_exporter_without_logger(self):
+        """A failing exporter that exposes no logger falls back to the module logger."""
+        broken_exporter = Mock(spec=BaseExporter)
+        broken_exporter.export_backtest_result.side_effect = Exception("boom")
+        self.manager.add_exporter(broken_exporter)
+
+        summary = self.manager.export_backtest_result(
+            self.mock_result, {}, 'BTC-USD', 10000.0, 0.001
+        )
+
+        self.assertFalse(summary.ok)
+        self.assertEqual(summary.failures, [('BaseExporter', 'boom')])
+
+    def test_unreachable_elasticsearch_is_reported_as_a_failure(self):
+        """A cluster that cannot be reached must not be reported as a successful export.
+
+        Regression test: the exporter used to log "Cannot connect ... skipping export"
+        and return normally, so the manager counted it as a success and the CLI exited 0
+        while nothing had been indexed.
+        """
+        self.mock_result.portfolio_values = pd.Series(
+            [10000.0, 10100.0],
+            index=[datetime(2024, 1, 1), datetime(2024, 1, 2)]
+        )
+        self.mock_result.trades = []
+
+        exporter = ElasticsearchExporter(host='127.0.0.1', port=9)
+        self.manager.add_exporter(exporter)
+
+        with patch.object(ElasticsearchExporter, '_connect', return_value=False):
+            summary = self.manager.export_backtest_result(
+                self.mock_result, {}, 'BTC-USD', 10000.0, 0.001
+            )
+
+        self.assertFalse(summary.ok)
+        self.assertEqual(summary.successes, [])
+        self.assertEqual(len(summary.failures), 1)
+        name, error = summary.failures[0]
+        self.assertEqual(name, 'ElasticsearchExporter')
+        self.assertIn('http://127.0.0.1:9', error)
+
+    def test_export_summary_ok_property(self):
+        """ExportSummary.ok is driven purely by the failure list."""
+        self.assertTrue(ExportSummary(successes=['A'], failures=[], backtest_id='id').ok)
+        self.assertFalse(
+            ExportSummary(successes=[], failures=[('A', 'err')], backtest_id='id').ok
+        )
+
+    def test_create_exporter_by_name_elasticsearch_auth_params(self):
+        """Authentication and TLS options are forwarded to the Elasticsearch exporter."""
+        exporter = self.manager.create_exporter_by_name(
+            'elasticsearch',
+            host='secure-host',
+            scheme='https',
+            api_key='secret-key',
+            timeout=5,
+            verify_certs=False
+        )
+
+        self.assertEqual(exporter.scheme, 'https')
+        self.assertEqual(exporter.url, 'https://secure-host:9200')
+        self.assertEqual(exporter.timeout, 5)
+        self.assertFalse(exporter.verify_certs)
+        self.assertEqual(exporter._auth_mode(), 'api_key')
+
+
     def test_generate_backtest_id(self):
         """Test backtest ID generation."""
         id1 = self.manager._generate_backtest_id()
@@ -332,6 +445,76 @@ class TestExporterManager(unittest.TestCase):
         names = self.manager.get_exporter_names()
         expected_names = ['ConsoleExporter', 'CSVExporter']
         self.assertEqual(sorted(names), sorted(expected_names))
+
+
+class TestExporterCreationFailuresAreReported(unittest.TestCase):
+    """An exporter that never got built must not be reported as a success."""
+
+    def setUp(self):
+        self.manager = ExporterManager()
+
+        self.result = Mock(spec=BacktestResult)
+        self.result.strategy_name = "Simple MA Strategy"
+        self.result.start_date = datetime(2024, 1, 1)
+        self.result.end_date = datetime(2024, 12, 31)
+        self.result.final_capital = 11500.0
+        self.result.total_return = 1500.0
+        self.result.total_return_pct = 15.0
+        self.result.max_drawdown = -5.0
+        self.result.sharpe_ratio = 1.2
+        self.result.win_rate = 60.0
+        self.result.total_trades = 10
+        self.result.profit_factor = 1.5
+        self.result.average_win = 250.0
+        self.result.average_loss = 100.0
+        self.result.largest_win = 500.0
+        self.result.largest_loss = 200.0
+        self.result.num_winning_trades = 6
+        self.result.num_losing_trades = 4
+        self.result.symbol = 'BTC-USD'
+        self.result.initial_capital = 10000.0
+        self.result.trades = []
+        self.result.portfolio_values = pd.Series(
+            [10000.0, 10500.0, 11500.0],
+            index=pd.date_range('2024-01-01', periods=3, freq='D')
+        )
+
+    def _export(self):
+        return self.manager.export_backtest_result(
+            result=self.result, strategy_params={}, symbol='BTC-USD',
+            initial_capital=10000.0, commission=0.001
+        )
+
+    def test_constructor_failure_lands_in_the_export_summary(self):
+        """An Elasticsearch exporter rejected by its own validation must be visible."""
+        with patch('niffler.exporters.exporter_manager.logger'):
+            self.manager.create_exporters_from_list(['console', 'elasticsearch'],
+                                                    scheme='ftp')
+
+        self.assertEqual(self.manager.get_exporter_names(), ['ConsoleExporter'])
+
+        summary = self._export()
+
+        self.assertFalse(summary.ok)
+        self.assertEqual(summary.successes, ['ConsoleExporter'])
+        self.assertEqual([name for name, _ in summary.failures], ['elasticsearch'])
+
+    def test_all_exporters_created_yields_an_ok_summary(self):
+        self.manager.create_exporters_from_list(['console'])
+
+        summary = self._export()
+
+        self.assertTrue(summary.ok)
+        self.assertEqual(summary.failures, [])
+
+    def test_clear_exporters_forgets_creation_failures(self):
+        with patch('niffler.exporters.exporter_manager.logger'):
+            self.manager.create_exporters_from_list(['console', 'unknown'])
+
+        self.manager.clear_exporters()
+        self.manager.create_exporters_from_list(['console'])
+
+        self.assertTrue(self._export().ok)
 
 
 if __name__ == '__main__':

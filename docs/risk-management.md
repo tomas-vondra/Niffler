@@ -46,7 +46,9 @@ The `FixedRiskManager` provides predictable risk management using fixed percenta
 
 **Position Sizing Logic:**
 - **Buy signals (signal=1)**: Returns `position_size_pct`
-- **Sell signals (signal=-1)**: Returns current position size (full closure)
+- **Sell signals (signal=-1)**: Returns current position size (full closure). **The backtest
+  engine no longer applies this to exits** — see
+  [Entries vs exits](#entries-vs-exits-behaviour-change) below
 - **Hold signals (signal=0)**: Returns 0 (no action)
 
 **Stop Loss Calculation:**
@@ -72,9 +74,15 @@ risk_manager = FixedRiskManager(
 )
 ```
 
-#### Kelly Risk Manager ❌ FRAMEWORK ONLY
+#### Kelly Risk Manager ❌ NOT IMPLEMENTED — DO NOT USE
 
-The `KellyRiskManager` framework exists but **core calculations are not implemented**:
+`KellyRiskManager` is a **stub**. The class and its constructor parameters exist; all three
+abstract methods raise `NotImplementedError`, so attaching it to a strategy will crash the
+first time the engine consults it. It is deliberately not offered by
+`backtest.py --risk-manager`, which accepts `none` and `fixed` only. `FixedRiskManager` is
+the only working risk manager.
+
+The parameters below describe what it *would* take, not what it does:
 
 **Planned Parameters:**
 - `lookback_periods`: 50 - Historical periods for Kelly calculation
@@ -111,11 +119,47 @@ The risk management system integrates with the backtesting engine through:
    - `risk_amount`: Estimated risk amount for the trade
    - `reason`: Explanation for the decision
 
+#### Entries vs exits (behaviour change)
+
+`RiskDecision.position_size` is an **entry** sizing target, expressed as a fraction of
+portfolio *value*. It is applied to buys only.
+
+It used to be applied to sells as well, where the engine reinterpreted it as a fraction of
+the held *units*. Because `FixedRiskManager.calculate_position_size()` returns the current
+position for a sell, and the engine passed a portfolio *value* fraction as
+`current_position`, a risk-managed exit liquidated only a small slice of the position. Over
+repeated exit signals the strategy never actually got flat — it degenerated into
+buy-and-hold with exposure creep, which flattered results in a rising market.
+
+Exits now use the strategy's own `position_size` column (a fraction of held units). A risk
+manager can still **veto** an exit through `allow_trade`, but it cannot resize one.
+
+Every risk-managed backtest with exit signals therefore changes: returns, drawdown, win rate
+and trade counts all move, and positions now genuinely close.
+
+#### Units versus value
+
+`current_position` (passed to `evaluate_trade`) and `position_size` (passed to
+`update_position_state`) are both **portfolio value fractions**, computed on demand as
+`Portfolio.position_fraction(price) = position * price / market_value(price)`. An all-in buy
+therefore records ~1.0, not ~0.01. Computing this on demand also removed a genuine
+`UnboundLocalError` that fired when a risk manager was attached and the very first bar
+produced a buy.
+
 #### Position Management
 - **State Tracking**: Risk manager maintains real-time position information
 - **Portfolio Monitoring**: Tracks total exposure and position count
 - **Stop Loss Monitoring**: Evaluates positions for stop loss triggers via `should_close_position()`
 - **Position Updates**: Updates tracking when positions change
+- **Stop tightening only**: scaling into a position never weakens an existing stop. A buy
+  order carrying no stop leaves the existing one armed; a supplied stop is adopted only if
+  it is tighter. Previously a second buy overwrote the stop with `None` and left the
+  position permanently unprotected
+- **Stops are probed against the bar's traded range** (the low for a long, the high for a
+  short), not just the execution price, and fill at `min(open, stop)` for a long so a
+  gap-through fills at the open rather than at an unreachable stop price. A triggered stop
+  that cannot execute because the residual is below `min_order_value` logs a WARNING instead
+  of looking identical to "stop not hit"
 
 #### Risk Controls Applied
 - **Position Size Validation**: Ensures position sizes within limits

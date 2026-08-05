@@ -13,12 +13,26 @@ import json
 import sys
 from pathlib import Path
 
-# Add parent directory to path for imports
-sys.path.append(str(Path(__file__).parent.parent))
+# Running "python scripts/analyze.py" puts scripts/ on sys.path but not the
+# repository root, so the root has to be added for "import niffler" to work.
+# When imported as scripts.analyze the root is already importable.
+if __package__ in (None, ''):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from config.logging import setup_logging
-from niffler.analysis import WalkForwardAnalyzer, MonteCarloAnalyzer
+from niffler.config.logging import setup_logging
+from niffler.analysis import (
+    WalkForwardAnalyzer,
+    MonteCarloAnalyzer,
+    MODE_WALK_FORWARD,
+    MODE_SEGMENTED_IN_SAMPLE,
+)
+from niffler.optimization.base_optimizer import BaseOptimizer
+from niffler.optimization.optimizer_factory import (
+    get_available_optimizers,
+    get_parameter_space,
+)
 from niffler.strategies.simple_ma_strategy import SimpleMAStrategy
+from scripts.common import load_ohlcv_csv
 
 
 def create_parser():
@@ -28,17 +42,20 @@ def create_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Walk-forward analysis with specific parameters
-  python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma --params '{"short_window": 10, "long_window": 30}'
+  # Walk-forward analysis (parameters are re-optimised on every training window)
+  python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma
 
-  # Load parameters from optimization results
-  python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma --params_file optimization_results.json
+  # Walk-forward with custom windows
+  python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma --train_window 12 --test_window 6 --step 3
+
+  # Re-run one fixed parameter set over consecutive in-sample slices (NOT a validation)
+  python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --mode segmented_in_sample --strategy simple_ma --params '{"short_window": 10, "long_window": 30}'
 
   # Monte Carlo analysis with specific parameters
   python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_carlo --strategy simple_ma --params '{"short_window": 10, "long_window": 30}' --simulations 500
 
-  # Walk-forward with custom windows
-  python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma --params '{"short_window": 10, "long_window": 30}' --test_window 6 --step 3
+  # Load parameters from optimization results
+  python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_carlo --strategy simple_ma --params_file optimization_results.json
         """
     )
     
@@ -63,11 +80,16 @@ Examples:
         help='Trading strategy to analyze'
     )
     
-    # Parameter specification (one of these is required)
-    param_group = parser.add_mutually_exclusive_group(required=True)
+    # Parameter specification.
+    #
+    # Required for monte_carlo and for walk-forward's segmented_in_sample mode. Real
+    # walk-forward re-optimises the parameters on every training window, so a fixed
+    # parameter set is meaningless there and must not be demanded from the user.
+    param_group = parser.add_mutually_exclusive_group(required=False)
     param_group.add_argument(
         '--params',
-        help='Strategy parameters as JSON string (e.g., \'{"short_window": 10, "long_window": 30}\')'
+        help='Strategy parameters as JSON string (e.g., \'{"short_window": 10, "long_window": 30}\'). '
+             'Required for --analysis monte_carlo and for --mode segmented_in_sample.'
     )
     param_group.add_argument(
         '--params_file',
@@ -90,6 +112,43 @@ Examples:
     )
     
     # Walk-forward specific arguments
+    parser.add_argument(
+        '--mode',
+        choices=[MODE_WALK_FORWARD, MODE_SEGMENTED_IN_SAMPLE],
+        default=MODE_WALK_FORWARD,
+        help=("Walk-forward mode. 'walk_forward' (default) re-optimises the parameters on "
+              "each training window and reports genuinely out-of-sample results. "
+              "'segmented_in_sample' re-runs one fixed --params set over consecutive "
+              "slices of the same data and validates nothing.")
+    )
+
+    parser.add_argument(
+        '--train_window',
+        type=int,
+        default=12,
+        help='Training window in months for walk-forward analysis (default: 12)'
+    )
+
+    parser.add_argument(
+        '--anchored',
+        action='store_true',
+        help='Anchor every training window to the first bar instead of rolling it forward'
+    )
+
+    parser.add_argument(
+        '--optimization_method',
+        choices=get_available_optimizers(),
+        default='grid',
+        help='Optimizer used on each walk-forward training window (default: grid)'
+    )
+
+    parser.add_argument(
+        '--optimization_metric',
+        choices=list(BaseOptimizer.METRICS_CONFIG.keys()),
+        default='total_return',
+        help='Metric the per-fold optimizer selects parameters by (default: total_return)'
+    )
+
     parser.add_argument(
         '--test_window',
         type=int,
@@ -162,40 +221,28 @@ Examples:
 
 
 def load_data(file_path: str) -> pd.DataFrame:
-    """Load and validate data from CSV file."""
+    """Load and validate OHLCV data from a CSV file.
+
+    Args:
+        file_path: Path to the CSV file with OHLCV data.
+
+    Returns:
+        DataFrame with lowercase OHLCV columns and a sorted datetime index.
+
+    Raises:
+        FileNotFoundError: If the data file does not exist.
+        ValueError: If the file cannot be interpreted as OHLCV data.
+    """
     try:
-        data = pd.read_csv(file_path)
-        
-        # Convert timestamp column to datetime index
-        if 'timestamp' in data.columns:
-            data['timestamp'] = pd.to_datetime(data['timestamp'])
-            data.set_index('timestamp', inplace=True)
-        elif data.index.name == 'timestamp':
-            data.index = pd.to_datetime(data.index)
-        else:
-            # Try to parse index as datetime
-            try:
-                data.index = pd.to_datetime(data.index)
-            except:
-                raise ValueError("Data must have a 'timestamp' column or datetime index")
-        
-        # Validate required columns
-        required_columns = ['open', 'high', 'low', 'close', 'volume']
-        missing_columns = [col for col in required_columns if col not in data.columns]
-        if missing_columns:
-            raise ValueError(f"Missing required columns: {missing_columns}")
-        
-        # Sort by index
-        data = data.sort_index()
-        
-        logging.info(f"Loaded {len(data)} rows of data from {file_path}")
-        logging.info(f"Date range: {data.index[0]} to {data.index[-1]}")
-        
-        return data
-        
-    except Exception as e:
+        data = load_ohlcv_csv(file_path)
+    except (FileNotFoundError, ValueError) as e:
         logging.error(f"Error loading data from {file_path}: {e}")
         raise
+
+    logging.info(f"Loaded {len(data)} rows of data from {file_path}")
+    logging.info(f"Date range: {data.index[0]} to {data.index[-1]}")
+
+    return data
 
 
 def load_parameters(args) -> dict:
@@ -257,36 +304,74 @@ def validate_parameters(strategy_class, parameters: dict):
     """Validate that parameters are compatible with the strategy."""
     try:
         # Try to create strategy instance to validate parameters
-        strategy = strategy_class(**parameters)
+        strategy_class(**parameters)
         logging.info("Parameter validation successful")
     except Exception as e:
         raise ValueError(f"Invalid parameters for {strategy_class.__name__}: {e}")
 
 
-def run_walk_forward_analysis(args, data: pd.DataFrame, parameters: dict):
-    """Run walk-forward analysis."""
+def run_walk_forward_analysis(args, data: pd.DataFrame, parameters: dict = None):
+    """Run walk-forward analysis.
+
+    In the default ``walk_forward`` mode the strategy parameters are re-optimised on
+    every training window, so ``parameters`` is unused; the search space comes from the
+    strategy's registered parameter space. In ``segmented_in_sample`` mode the supplied
+    fixed ``parameters`` are re-run over consecutive slices instead.
+
+    Args:
+        args: Parsed command line arguments.
+        data: OHLCV data with a DatetimeIndex.
+        parameters: Fixed strategy parameters, required only for segmented_in_sample mode.
+
+    Returns:
+        The AnalysisResult produced by WalkForwardAnalyzer.
+
+    Raises:
+        ValueError: If the configuration or the parameters are invalid.
+    """
     logging.info("Running Walk-forward Analysis")
-    
+
     # Get strategy class
     strategy_class = get_strategy_class(args.strategy)
-    
-    # Validate parameters
-    validate_parameters(strategy_class, parameters)
-    
+
+    segmented = args.mode == MODE_SEGMENTED_IN_SAMPLE
+    parameter_space = None
+
+    if segmented:
+        if not parameters:
+            raise ValueError(
+                f"--mode {MODE_SEGMENTED_IN_SAMPLE} requires --params or --params_file"
+            )
+        validate_parameters(strategy_class, parameters)
+    else:
+        parameter_space = get_parameter_space(args.strategy)
+        if parameters:
+            logging.warning(
+                "Ignoring --params in walk_forward mode: parameters are re-optimised on "
+                "every training window. Use --mode segmented_in_sample to pin them."
+            )
+            parameters = None
+
     # Create analyzer
     analyzer = WalkForwardAnalyzer(
         strategy_class=strategy_class,
+        parameter_space=parameter_space,
         optimal_parameters=parameters,
+        mode=args.mode,
+        anchored=args.anchored,
+        train_window_months=args.train_window,
         test_window_months=args.test_window,
         step_months=args.step,
         initial_capital=args.initial_capital,
         commission=args.commission,
+        optimization_method=args.optimization_method,
+        optimization_metric=args.optimization_metric,
         n_jobs=args.n_jobs
     )
-    
+
     # Run analysis
     result = analyzer.analyze(data, args.symbol)
-    
+
     # Print summary
     print("\n" + "="*60)
     print("WALK-FORWARD ANALYSIS RESULTS")
@@ -295,11 +380,18 @@ def run_walk_forward_analysis(args, data: pd.DataFrame, parameters: dict):
     print(f"Symbol: {result.symbol}")
     print(f"Analysis Period: {result.analysis_start_date.date()} to {result.analysis_end_date.date()}")
     print(f"Number of Periods: {result.n_periods}")
-    
-    print(f"\nParameters Used: {parameters}")
+
+    print(f"\nMode: {args.mode}")
+    if segmented:
+        print("  WARNING: segmented_in_sample results are NOT out-of-sample.")
+        print(f"Parameters Used: {parameters}")
+    else:
+        print(f"Training Windows: {args.train_window} months "
+              f"({'anchored' if args.anchored else 'rolling'})")
+        print(f"Optimizer: {args.optimization_method} on {args.optimization_metric}")
     print(f"Test Windows: {args.test_window} months")
     print(f"Step Size: {args.step} months")
-    
+
     print(f"\nCombined Metrics:")
     for metric, value in result.combined_metrics.items():
         if isinstance(value, (int, float)):
@@ -314,6 +406,19 @@ def run_walk_forward_analysis(args, data: pd.DataFrame, parameters: dict):
         else:
             print(f"  {metric}: {value}")
     
+    # Show per-fold parameters and in-sample vs out-of-sample performance
+    folds = (result.metadata or {}).get('folds') or []
+    if folds:
+        print(f"\nFold-by-Fold (parameters chosen on train, measured on test):")
+        for fold in folds:
+            efficiency = fold.get('efficiency_ratio')
+            efficiency_text = 'n/a' if efficiency is None else f"{efficiency:.3f}"
+            train_return = fold.get('train_return_pct')
+            train_text = 'n/a' if train_return is None else f"{train_return:.2f}%"
+            print(f"  #{fold.get('fold_number')}: {fold.get('parameters')} "
+                  f"IS={train_text} OOS={fold.get('test_return_pct', 0.0):.2f}% "
+                  f"efficiency={efficiency_text}")
+
     # Show period-by-period results
     df = result.to_dataframe()
     print(f"\nPeriod-by-Period Results:")
@@ -323,7 +428,7 @@ def run_walk_forward_analysis(args, data: pd.DataFrame, parameters: dict):
         print(df[available_cols].round(4))
     else:
         print(df.round(4))
-    
+
     return result
 
 
@@ -399,8 +504,17 @@ def run_monte_carlo_analysis(args, data: pd.DataFrame, parameters: dict):
 
 
 
-def save_results(result, output_file: str):
-    """Save analysis results to JSON file."""
+def save_results(result, output_file: str) -> None:
+    """Save analysis results to a JSON file.
+
+    Args:
+        result: Analysis result object to serialise.
+        output_file: Path of the JSON file to write.
+
+    Raises:
+        OSError: If the file cannot be written.
+        TypeError: If the result cannot be serialised to JSON.
+    """
     try:
         # Convert result to dictionary
         output_data = {
@@ -433,27 +547,46 @@ def save_results(result, output_file: str):
             json.dump(output_data, f, indent=2, default=str)
         
         logging.info(f"Results saved to {output_file}")
-        
-    except Exception as e:
-        logging.error(f"Error saving results: {e}")
+
+    except (OSError, TypeError, ValueError) as e:
+        # Never swallow this: main() reports the analysis as failed instead of
+        # claiming success while no file was written.
+        logging.error(f"Error saving results to {output_file}: {e}")
+        raise
 
 
-def main():
-    """Main function."""
+def main() -> int:
+    """Run the requested analysis.
+
+    Returns:
+        Process exit code: 0 on success, 1 on failure.
+    """
     parser = create_parser()
     args = parser.parse_args()
-    
+
     # Setup logging
     log_level = "DEBUG" if args.verbose else "INFO"
     setup_logging(level=log_level)
-    
+
     try:
         # Load data
         data = load_data(args.data)
-        
-        # Load parameters
-        parameters = load_parameters(args)
-        
+
+        # Load parameters. A fixed parameter set is only meaningful for Monte Carlo and
+        # for the segmented in-sample mode; real walk-forward refits them per fold.
+        if args.params or args.params_file:
+            parameters = load_parameters(args)
+        elif args.analysis == 'monte_carlo':
+            raise ValueError(
+                "--params or --params_file is required for --analysis monte_carlo"
+            )
+        elif args.mode == MODE_SEGMENTED_IN_SAMPLE:
+            raise ValueError(
+                f"--params or --params_file is required for --mode {MODE_SEGMENTED_IN_SAMPLE}"
+            )
+        else:
+            parameters = None
+
         # Run analysis
         if args.analysis == 'walk_forward':
             result = run_walk_forward_analysis(args, data, parameters)
@@ -467,11 +600,12 @@ def main():
             save_results(result, args.output)
         
         print(f"\nAnalysis completed successfully!")
-        
+        return 0
+
     except Exception as e:
         logging.error(f"Analysis failed: {e}")
-        sys.exit(1)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

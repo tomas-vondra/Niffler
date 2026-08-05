@@ -4,14 +4,38 @@ Exporter Manager
 Coordinates multiple exporters for backtesting results with unique identification.
 """
 
+import logging
 import uuid
-import os
-from typing import Dict, Any, List, Type, Callable
+from dataclasses import dataclass
+from typing import Dict, Any, List, Tuple
 from .base_exporter import BaseExporter
 from .console_exporter import ConsoleExporter
 from .csv_exporter import CSVExporter
 from .elasticsearch_exporter import ElasticsearchExporter
 from ..backtesting.backtest_result import BacktestResult
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ExportSummary:
+    """
+    Outcome of a multi-exporter export run.
+
+    Attributes:
+        successes: Class names of the exporters that completed successfully
+        failures: (exporter class name, error message) pairs for exporters that failed
+        backtest_id: The backtest ID that was used for this export run
+    """
+
+    successes: List[str]
+    failures: List[Tuple[str, str]]
+    backtest_id: str
+
+    @property
+    def ok(self) -> bool:
+        """True when every configured exporter succeeded."""
+        return not self.failures
 
 
 class ExporterManager:
@@ -27,6 +51,10 @@ class ExporterManager:
     def __init__(self):
         """Initialize the exporter manager."""
         self.exporters: List[BaseExporter] = []
+        # (requested name, error) for exporters that could not even be constructed.
+        # Carried into every ExportSummary so a misconfigured exporter cannot be
+        # mistaken for one that ran.
+        self.creation_failures: List[Tuple[str, str]] = []
     
     @classmethod
     def get_available_exporter_names(cls) -> List[str]:
@@ -58,7 +86,8 @@ class ExporterManager:
             if 'output_dir' in kwargs:
                 filtered_kwargs['output_dir'] = kwargs['output_dir']
         elif name == 'elasticsearch':
-            for key in ['host', 'port', 'index_prefix']:
+            for key in ['host', 'port', 'index_prefix', 'scheme', 'api_key',
+                        'username', 'password', 'timeout', 'verify_certs']:
                 if key in kwargs:
                     filtered_kwargs[key] = kwargs[key]
         # console exporter doesn't take specific parameters beyond config
@@ -71,20 +100,49 @@ class ExporterManager:
         self.add_exporter(exporter)
         return exporter
     
-    def create_exporters_from_list(self, exporter_names: List[str], **kwargs) -> None:
-        """Create multiple exporters from a list of names."""
+    def create_exporters_from_list(self, exporter_names: List[str],
+                                   **kwargs) -> List[Tuple[str, str]]:
+        """
+        Create multiple exporters from a list of names.
+
+        An exporter whose constructor rejects its configuration (an unknown name, an
+        invalid Elasticsearch scheme, an unparsable port) is recorded rather than
+        quietly skipped: the failures are returned, kept on ``creation_failures`` and
+        folded into every subsequent :class:`ExportSummary`, so a run that was asked
+        for an exporter it never built cannot report success.
+
+        Args:
+            exporter_names: Names of the exporter types to create
+            **kwargs: Configuration forwarded to each exporter constructor
+
+        Returns:
+            List of (requested name, error message) pairs for the exporters that
+            could not be created; empty when every requested exporter was built
+        """
+        failures: List[Tuple[str, str]] = []
         for name in exporter_names:
             try:
                 self.create_exporter_by_name(name, **kwargs)
-            except ValueError as e:
-                print(f"Warning: {e}, skipping")
-    
+            except Exception as e:
+                logger.error(f"Could not create exporter '{name}': {e}")
+                failures.append((name, str(e)))
+
+        self.creation_failures.extend(failures)
+        return failures
+
+
     def export_backtest_result(self, result: BacktestResult, strategy_params: Dict[str, Any],
                               symbol: str, initial_capital: float, commission: float,
-                              backtest_id: str = None) -> str:
+                              backtest_id: str = None) -> ExportSummary:
         """
         Export backtest results using all configured exporters.
-        
+
+        Each exporter is isolated: a failing exporter never prevents the others from
+        running, but every failure is recorded in the returned summary so the caller
+        can report it (or exit non-zero) instead of silently losing data. Exporters
+        that could not be constructed at all (see :meth:`create_exporters_from_list`)
+        are reported as failures too.
+
         Args:
             result: BacktestResult object containing all backtest data
             strategy_params: Strategy parameters used in the backtest
@@ -92,28 +150,50 @@ class ExporterManager:
             initial_capital: Initial capital amount
             commission: Commission rate
             backtest_id: Optional custom backtest ID (generates one if not provided)
-            
+
         Returns:
-            The backtest ID that was used
+            ExportSummary describing which exporters succeeded, which failed and the
+            backtest ID that was used
         """
         # Generate backtest ID if not provided
         if backtest_id is None:
             backtest_id = self._generate_backtest_id()
-        
+
         # Create metadata
         metadata = self._create_metadata(
             result, strategy_params, symbol, initial_capital, commission
         )
-        
+
+        successes: List[str] = []
+        # Exporters that never got constructed failed just as surely as ones that
+        # raised while exporting - both mean the data did not reach their sink.
+        failures: List[Tuple[str, str]] = list(self.creation_failures)
+
         # Export using all exporters
         for exporter in self.exporters:
+            exporter_name = exporter.__class__.__name__
             try:
                 exporter.export_backtest_result(result, backtest_id, metadata)
+                successes.append(exporter_name)
             except Exception as e:
-                exporter.logger.error(f"Export failed for {exporter.__class__.__name__}: {e}")
-                # Continue with other exporters even if one fails
-        
-        return backtest_id
+                # Continue with other exporters even if one fails, but record the failure
+                exporter_logger = getattr(exporter, 'logger', None) or logger
+                exporter_logger.error(f"Export failed for {exporter_name}: {e}")
+                failures.append((exporter_name, str(e)))
+
+        summary = ExportSummary(
+            successes=successes, failures=failures, backtest_id=backtest_id
+        )
+
+        if not summary.ok:
+            requested = len(self.exporters) + len(self.creation_failures)
+            logger.error(
+                f"{len(failures)} of {requested} exporter(s) failed for "
+                f"backtest {backtest_id}: "
+                f"{', '.join(name for name, _ in failures)}"
+            )
+
+        return summary
     
     def _generate_backtest_id(self) -> str:
         """Generate a unique backtest ID."""
@@ -163,8 +243,9 @@ class ExporterManager:
         return len(self.exporters)
     
     def clear_exporters(self) -> None:
-        """Remove all exporters."""
+        """Remove all exporters and forget any recorded construction failures."""
         self.exporters.clear()
+        self.creation_failures.clear()
     
     def get_exporter_names(self) -> List[str]:
         """Get the names of all configured exporters."""
