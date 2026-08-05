@@ -165,9 +165,9 @@ class TestOhlcValidatorPreprocessor(unittest.TestCase):
         data_with_nan = self.valid_ohlc_data.copy()
         data_with_nan.loc[self.sample_dates[0], 'high'] = np.nan
         data_with_nan.loc[self.sample_dates[1], 'low'] = np.nan
-        
+
         result = self.preprocessor.process(data_with_nan)
-        
+
         # OhlcValidator doesn't remove rows with NaN values, only invalid OHLC relationships
         # NaN values are passed through unchanged
         self.assertEqual(len(result), 5)
@@ -175,6 +175,109 @@ class TestOhlcValidatorPreprocessor(unittest.TestCase):
         self.assertIn(self.sample_dates[1], result.index)
         self.assertTrue(pd.isna(result.loc[self.sample_dates[0], 'high']))
         self.assertTrue(pd.isna(result.loc[self.sample_dates[1], 'low']))
+
+    def test_stats_report_dropped_rows_and_rules(self):
+        """Dropping rows must be reported, not silent."""
+        invalid_data = self.valid_ohlc_data.copy()
+        invalid_data.loc[self.sample_dates[0], 'high'] = 90.0  # High < Low and High < Open/Close
+
+        result = self.preprocessor.process(invalid_data)
+        stats = result.attrs['ohlc_validation']
+
+        self.assertEqual(stats['mode'], 'drop')
+        self.assertEqual(stats['original_rows'], 5)
+        self.assertEqual(stats['final_rows'], 4)
+        self.assertEqual(stats['invalid_rows'], 1)
+        self.assertEqual(stats['dropped_rows'], 1)
+        self.assertEqual(stats['repaired_rows'], 0)
+        self.assertAlmostEqual(stats['invalid_ratio'], 0.2)
+        self.assertEqual(stats['rule_violations']['high_lt_low'], 1)
+        self.assertEqual(stats['rule_violations']['low_gt_close'], 0)
+        self.assertEqual(self.preprocessor.last_stats, stats)
+
+    def test_stats_on_valid_data(self):
+        """Valid data reports zero violations without touching the frame."""
+        result = self.preprocessor.process(self.valid_ohlc_data)
+        stats = result.attrs['ohlc_validation']
+
+        self.assertEqual(stats['invalid_rows'], 0)
+        self.assertEqual(stats['dropped_rows'], 0)
+        self.assertEqual(stats['final_rows'], 5)
+        # The caller's frame must not be annotated
+        self.assertNotIn('ohlc_validation', self.valid_ohlc_data.attrs)
+
+    def test_repair_mode_keeps_rows(self):
+        """Repair mode clamps High/Low instead of punching a hole in the series."""
+        invalid_data = self.valid_ohlc_data.copy()
+        invalid_data.loc[self.sample_dates[0], 'high'] = 90.0  # High < Low/Open/Close
+
+        preprocessor = OhlcValidatorPreprocessor(mode='repair')
+        result = preprocessor.process(invalid_data)
+
+        self.assertEqual(len(result), 5)
+        self.assertIn(self.sample_dates[0], result.index)
+        # High clamped to max(open, high, low, close) = max(100, 90, 95, 102)
+        self.assertEqual(result.loc[self.sample_dates[0], 'high'], 102.0)
+        # Low clamped to min(...) = 90
+        self.assertEqual(result.loc[self.sample_dates[0], 'low'], 90.0)
+        self.assertEqual(result.attrs['ohlc_validation']['repaired_rows'], 1)
+        self.assertEqual(result.attrs['ohlc_validation']['dropped_rows'], 0)
+
+    def test_repair_mode_output_passes_validation(self):
+        """A repaired frame contains no remaining OHLC violations."""
+        invalid_data = self.valid_ohlc_data.copy()
+        invalid_data.loc[self.sample_dates[1], 'low'] = 110.0
+        invalid_data.loc[self.sample_dates[3], 'high'] = 50.0
+
+        repaired = OhlcValidatorPreprocessor(mode='repair').process(invalid_data)
+        rechecked = OhlcValidatorPreprocessor(mode='flag').process(repaired)
+
+        self.assertEqual(rechecked.attrs['ohlc_validation']['invalid_rows'], 0)
+
+    def test_flag_mode_changes_nothing(self):
+        """Flag mode reports violations but leaves the data untouched."""
+        invalid_data = self.valid_ohlc_data.copy()
+        invalid_data.loc[self.sample_dates[0], 'high'] = 90.0
+
+        result = OhlcValidatorPreprocessor(mode='flag').process(invalid_data)
+
+        pd.testing.assert_frame_equal(result, invalid_data)
+        self.assertEqual(result.attrs['ohlc_validation']['invalid_rows'], 1)
+        self.assertEqual(result.attrs['ohlc_validation']['dropped_rows'], 0)
+
+    def test_repair_mode_does_not_mutate_input(self):
+        """Repair mode works on a copy of the caller's DataFrame."""
+        invalid_data = self.valid_ohlc_data.copy()
+        invalid_data.loc[self.sample_dates[0], 'high'] = 90.0
+        before = invalid_data.copy()
+
+        OhlcValidatorPreprocessor(mode='repair').process(invalid_data)
+
+        pd.testing.assert_frame_equal(invalid_data, before)
+
+    def test_large_drop_fraction_emits_warning(self):
+        """A large fraction of the data can never vanish without a WARNING."""
+        invalid_data = self.valid_ohlc_data.copy()
+        invalid_data.loc[self.sample_dates[0], 'high'] = 90.0
+        invalid_data.loc[self.sample_dates[1], 'high'] = 90.0
+        invalid_data.loc[self.sample_dates[2], 'high'] = 90.0
+
+        logging.disable(logging.NOTSET)
+        try:
+            with self.assertLogs(level='WARNING') as captured:
+                result = self.preprocessor.process(invalid_data)
+        finally:
+            logging.disable(logging.CRITICAL)
+
+        self.assertEqual(len(result), 2)
+        messages = ' '.join(captured.output)
+        self.assertIn('HIGH OHLC INVALID RATE', messages)
+        self.assertIn('60.00%', messages)
+
+    def test_invalid_mode_rejected(self):
+        """An unknown mode is rejected at construction time."""
+        with self.assertRaises(ValueError):
+            OhlcValidatorPreprocessor(mode='delete-everything')
 
 
 if __name__ == '__main__':

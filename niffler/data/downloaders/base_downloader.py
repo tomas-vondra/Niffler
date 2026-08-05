@@ -1,5 +1,4 @@
 import pandas as pd
-from typing import Optional
 from abc import ABC, abstractmethod
 
 
@@ -8,13 +7,22 @@ class BaseDownloader(ABC):
     Abstract base class for market data downloaders.
     All data downloaders should inherit from this class.
     """
-    
+
     def __init__(self, name: str):
         self.name = name
-        
+
     @abstractmethod
-    def download(self, **kwargs) -> Optional[pd.DataFrame]:
-        """Download market data."""
+    def download(self, **kwargs) -> pd.DataFrame:
+        """Download market data.
+
+        Implementations never signal failure with a falsy return value: they
+        raise :class:`~niffler.data.exceptions.NoDataAvailableError` when the
+        source genuinely has nothing, and
+        :class:`~niffler.data.exceptions.DownloadError` when the download broke.
+
+        Returns:
+            DataFrame with the downloaded market data.
+        """
         pass
         
     @abstractmethod

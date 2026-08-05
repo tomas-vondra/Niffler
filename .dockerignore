@@ -1,0 +1,66 @@
+# Build context exclusions. The Dockerfile does `COPY . .`, so anything not
+# listed here ends up inside the image: keep this in sync with .gitignore.
+
+# Version control
+.git
+.gitattributes
+.gitignore
+
+# CI / tooling config that the image does not need
+.github
+.claude
+.idea
+.vscode
+*.iml
+
+# Virtual environments (huge, platform-specific, and rebuilt by `uv sync`)
+.venv
+.venv_windows
+venv
+env
+ENV
+
+# Local data and generated results - never bake market data or backtest output
+# into an image. These are bind-mounted at runtime instead.
+data
+results
+optimization_results*.json
+*.log
+
+# Python caches and build output
+__pycache__
+**/__pycache__
+*.py[cod]
+*$py.class
+*.so
+build
+dist
+*.egg-info
+.eggs
+
+# Tool caches
+.mypy_cache
+.ruff_cache
+.pytest_cache
+.tox
+.cache
+htmlcov
+.coverage
+.coverage.*
+coverage.xml
+.hypothesis
+.ipynb_checkpoints
+
+# Secrets and local environment overrides
+.env
+.env.local
+.env.*.local
+
+# Docker files themselves
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# OS noise
+.DS_Store
+Thumbs.db

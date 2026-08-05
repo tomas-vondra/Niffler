@@ -21,11 +21,12 @@ class ConsoleExporter(BaseExporter):
             result: BacktestResult object containing all backtest data
             backtest_id: Unique identifier for this backtest run
             metadata: Additional metadata about the backtest
+
+        Raises:
+            ExportError: If the result does not contain exportable data
         """
-        if not self.validate_result(result):
-            self.logger.error("Invalid backtest result, skipping console export")
-            return
-        
+        self.require_valid_result(result, "console")
+
         self._print_backtest_results(result, backtest_id)
     
     def _print_backtest_results(self, result: BacktestResult, backtest_id: str) -> None:

@@ -23,84 +23,61 @@ Examples:
 
 import argparse
 import sys
-import os
 import pandas as pd
 import logging
 from datetime import datetime
+from pathlib import Path
 
-# Add project root to Python path
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, project_root)
+# Running "python scripts/optimize.py" puts scripts/ on sys.path but not the
+# repository root, so the root has to be added for "import niffler" to work.
+# When imported as scripts.optimize the root is already importable.
+if __package__ in (None, ''):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from config.logging import setup_logging
+from niffler.config.logging import setup_logging
 from niffler.optimization.optimizer_factory import (
     create_optimizer,
-    get_strategy_class, 
+    get_strategy_class,
     get_parameter_space,
     get_available_optimizers,
     STRATEGY_CLASSES
 )
-from niffler.data.preprocessors.preprocessor_manager import PreprocessorManager
+from scripts.common import load_ohlcv_csv
 
 
 def load_and_validate_data(file_path: str, clean_data: bool = False) -> pd.DataFrame:
     """
     Load and validate price data for optimization.
-    
+
     Args:
         file_path: Path to CSV file with OHLCV data
         clean_data: Whether to apply data preprocessing
-        
+
     Returns:
         Validated DataFrame with datetime index
-        
+
     Raises:
         FileNotFoundError: If data file doesn't exist
         ValueError: If data format is invalid
     """
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"Data file not found: {file_path}")
-    
-    try:
-        # Load data
-        data = pd.read_csv(file_path)
-        
-        # Validate required columns
-        required_columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
-        missing_columns = [col for col in required_columns if col not in data.columns]
-        if missing_columns:
-            raise ValueError(f"Missing required columns: {missing_columns}")
-        
-        # Convert timestamp to datetime and set as index
-        data['timestamp'] = pd.to_datetime(data['timestamp'])
-        data.set_index('timestamp', inplace=True)
-        
-        # Sort by timestamp
-        data.sort_index(inplace=True)
-        
-        # Clean data if requested
-        if clean_data:
-            logging.info("Applying data preprocessing...")
-            from niffler.data.preprocessors.preprocessor_manager import create_default_manager
-            manager = create_default_manager()
-            data = manager.run(data)
-        
-        # Validate data quality
-        if data.empty:
-            raise ValueError("Data file is empty")
-        
-        if data.isnull().any().any():
-            logging.warning("Data contains NaN values - consider using --clean flag")
-        
-        logging.info(f"Loaded {len(data)} data points from {data.index[0]} to {data.index[-1]}")
-        return data
-        
-    except Exception as e:
-        raise ValueError(f"Error loading data from {file_path}: {e}")
+    if clean_data:
+        logging.info("Applying data preprocessing...")
+
+    data = load_ohlcv_csv(file_path, clean=clean_data)
+
+    if data.isnull().any().any():
+        logging.warning("Data contains NaN values - consider using --clean flag")
+
+    logging.info(f"Loaded {len(data)} data points from {data.index[0]} to {data.index[-1]}")
+    return data
 
 
-def main():
-    """Main function for parameter optimization."""
+def main() -> int:
+    """Main function for parameter optimization.
+
+    Returns:
+        Process exit code: 0 on success, 1 on failure.
+    """
     parser = argparse.ArgumentParser(
         description="Optimize trading strategy parameters",
         formatter_class=argparse.RawDescriptionHelpFormatter,

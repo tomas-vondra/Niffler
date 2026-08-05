@@ -1,15 +1,43 @@
+# ==============================================================================
+# LOCAL DEVELOPMENT STACK - NOT SAFE TO EXPOSE
+# ==============================================================================
+# This stack is configured for a single developer machine and trades security for
+# convenience: Elasticsearch runs with X-Pack security DISABLED (no authentication,
+# no TLS) and Grafana defaults to admin/admin.
+#
+# Every published port is therefore bound to ${NIFFLER_BIND_HOST}, which defaults
+# to 127.0.0.1 - the services are reachable from this machine only, never from the
+# LAN or a public interface. An open, unauthenticated Elasticsearch on a routable
+# address is one of the most reliably exploited services on the internet; bots
+# sweep for it and wipe or ransom the indices within hours.
+#
+# BEFORE RUNNING THIS ANYWHERE NON-LOCAL you must, at minimum:
+#   1. Set xpack.security.enabled=true, provision ELASTIC_PASSWORD / TLS certs and
+#      point the exporter at https:// with credentials
+#      (see niffler/exporters/elasticsearch_exporter.py).
+#   2. Set GF_SECURITY_ADMIN_USER / GF_SECURITY_ADMIN_PASSWORD to real secrets
+#      (via .env or your secret manager - never commit them).
+#   3. Only then consider changing NIFFLER_BIND_HOST, and put the whole stack
+#      behind a firewall / reverse proxy with TLS.
+#
+# Copy .env.example to .env to override any of the values below. Without a .env
+# the defaults give a working local stack with zero extra setup.
+# ==============================================================================
+
 services:
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
     container_name: niffler-elasticsearch
     environment:
       - discovery.type=single-node
+      # Local-only convenience: no auth, no TLS. See the header before exposing.
       - xpack.security.enabled=false
       - xpack.security.enrollment.enabled=false
       - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
     ports:
-      - "9200:9200"
-      - "9300:9300"
+      # Loopback-bound by default - see the header of this file.
+      - "${NIFFLER_BIND_HOST:-127.0.0.1}:9200:9200"
+      - "${NIFFLER_BIND_HOST:-127.0.0.1}:9300:9300"
     volumes:
       - elasticsearch_data:/usr/share/elasticsearch/data
     networks:
@@ -24,11 +52,14 @@ services:
     image: grafana/grafana:11.4.0
     container_name: niffler-grafana
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_SECURITY_ADMIN_USER=admin
+      # Credentials come from the environment (.env), never from this file.
+      # The admin/admin defaults exist only so a fresh clone works offline; change
+      # them via .env the moment this is reachable by anyone else.
+      - GF_SECURITY_ADMIN_USER=${GF_SECURITY_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD:-admin}
       - GF_AUTH_ANONYMOUS_ENABLED=false
     ports:
-      - "3000:3000"
+      - "${NIFFLER_BIND_HOST:-127.0.0.1}:3000:3000"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./config/grafana/provisioning:/etc/grafana/provisioning
@@ -47,11 +78,15 @@ services:
   kibana:
     image: docker.elastic.co/kibana/kibana:8.15.0
     container_name: niffler-kibana
+    # Kibana is the optional debugging UI (Grafana is the primary one), so it is
+    # opt-in: `docker compose --profile debug up -d`.
+    profiles:
+      - debug
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
       - xpack.security.enabled=false
     ports:
-      - "5601:5601"
+      - "${NIFFLER_BIND_HOST:-127.0.0.1}:5601:5601"
     networks:
       - niffler-network
     depends_on:
@@ -71,8 +106,13 @@ services:
       - ELASTICSEARCH_PORT=9200
       - ELASTICSEARCH_INDEX_PREFIX=niffler
     volumes:
+      # Bind mounts, written by the image's unprivileged `niffler` user (UID 1000).
+      # On a Linux host whose own UID is not 1000, either rebuild with
+      # `--build-arg UID=$(id -u) --build-arg GID=$(id -g)` or uncomment the
+      # `user:` line below.
       - ./data:/app/data
       - ./results:/app/results
+    # user: "${UID:-1000}:${GID:-1000}"
     networks:
       - niffler-network
     depends_on:

@@ -5,7 +5,6 @@ import signal
 from typing import Dict, Any, List, Optional, Type, Tuple
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing as mp
-import json
 from datetime import datetime
 from decimal import Decimal, getcontext
 import threading
@@ -13,6 +12,7 @@ import random
 
 from niffler.strategies.base_strategy import BaseStrategy
 from niffler.backtesting.backtest_engine import BacktestEngine
+from niffler.utils.json_utils import safe_json_dump
 from .parameter_space import ParameterSpace
 from .optimization_result import OptimizationResult
 
@@ -34,7 +34,10 @@ class BaseOptimizer(ABC):
     METRICS_CONFIG = {
         'total_return': (True, lambda r: r.backtest_result.total_return_pct),
         'sharpe_ratio': (True, lambda r: r.backtest_result.sharpe_ratio if r.backtest_result.sharpe_ratio is not None else float('-inf')),
-        'max_drawdown': (False, lambda r: r.backtest_result.max_drawdown),  # Lower is better
+        # max_drawdown is a negative percentage (-40 is worse than -5), so the best
+        # result is the LARGEST value. Sorting ascending here would rank the deepest
+        # drawdown first and hand walk-forward analysis an adversarial parameter set.
+        'max_drawdown': (True, lambda r: r.backtest_result.max_drawdown),
         'win_rate': (True, lambda r: r.backtest_result.win_rate),
         'total_trades': (True, lambda r: r.backtest_result.total_trades)
     }
@@ -300,7 +303,18 @@ class BaseOptimizer(ABC):
             return None
     
     def save_results(self, results: List[OptimizationResult], filename: str) -> None:
-        """Save optimization results to JSON file."""
+        """
+        Save optimization results to a JSON file.
+
+        Metrics such as ``sharpe_ratio`` or ``win_rate`` can legitimately be ``inf`` or
+        ``NaN`` for degenerate parameter combinations. Those values are sanitised to
+        ``null`` via :func:`niffler.utils.json_utils.safe_json_dump`, which also
+        forces ``allow_nan=False``, so the file is always valid RFC 8259 JSON.
+
+        Args:
+            results: Optimization results to serialise
+            filename: Destination path for the JSON file
+        """
         output_data = {
             'metadata': {
                 'optimizer_class': self.__class__.__name__,
@@ -329,7 +343,7 @@ class BaseOptimizer(ABC):
             output_data['results'].append(result_data)
         
         with open(filename, 'w') as f:
-            json.dump(output_data, f, indent=2)
+            safe_json_dump(output_data, f, indent=2)
         
         logging.info(f"Optimization results saved to {filename}")
     

@@ -31,6 +31,15 @@
       "exit_value": {
         "type": "double"
       },
+      "entry_commission": {
+        "type": "double"
+      },
+      "exit_commission": {
+        "type": "double"
+      },
+      "gross_pnl": {
+        "type": "double"
+      },
       "pnl": {
         "type": "double"
       },

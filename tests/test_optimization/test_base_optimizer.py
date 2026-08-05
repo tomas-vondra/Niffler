@@ -1,5 +1,9 @@
 import unittest
 from unittest.mock import Mock, patch, MagicMock
+import json
+import os
+import shutil
+import tempfile
 import pandas as pd
 import threading
 import signal
@@ -443,15 +447,183 @@ class TestBaseOptimizer(unittest.TestCase):
         )
         
         optimizer.save_results([result], 'test_results.json')
-        
+
         # Verify that json.dump was called
         mock_json_dump.assert_called_once()
-        
+
         # Check the structure of saved data
         saved_data = mock_json_dump.call_args[0][0]
         self.assertIn('metadata', saved_data)
         self.assertIn('results', saved_data)
         self.assertEqual(len(saved_data['results']), 1)
+
+
+class TestSaveResultsJsonValidity(unittest.TestCase):
+    """save_results must always produce standards-compliant JSON.
+
+    Degenerate parameter combinations legitimately produce inf/NaN metrics (a strategy
+    with no losing trades has an infinite profit factor, one with no returns has a NaN
+    Sharpe). Writing those as the non-standard Infinity/NaN literals produced files that
+    json.load, Elasticsearch and every JavaScript consumer reject.
+    """
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+
+        self.parameter_space = ParameterSpace({
+            'param1': {'type': 'int', 'min': 10, 'max': 20, 'step': 5}
+        })
+
+        self.data = pd.DataFrame({
+            'open': [100.0, 101.0, 102.0],
+            'high': [101.0, 102.0, 103.0],
+            'low': [99.0, 100.0, 101.0],
+            'close': [100.5, 101.5, 102.5],
+            'volume': [1000, 1100, 1200]
+        }, index=pd.date_range('2024-01-01', periods=3, freq='D'))
+
+        self.optimizer = TestOptimizer(
+            strategy_class=MockStrategy,
+            parameter_space=self.parameter_space,
+            data=self.data
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _result_with(self, **metrics) -> OptimizationResult:
+        backtest_result = Mock()
+        backtest_result.total_return = metrics.get('total_return', 100.0)
+        backtest_result.total_return_pct = metrics.get('total_return_pct', 1.0)
+        backtest_result.sharpe_ratio = metrics.get('sharpe_ratio', 1.0)
+        backtest_result.max_drawdown = metrics.get('max_drawdown', -1.0)
+        backtest_result.total_trades = metrics.get('total_trades', 5)
+        backtest_result.win_rate = metrics.get('win_rate', 50.0)
+        return OptimizationResult(parameters={'param1': 10}, backtest_result=backtest_result)
+
+    def test_non_finite_metrics_are_written_as_null(self):
+        """inf/-inf/NaN metrics become JSON null instead of invalid literals."""
+        path = os.path.join(self.temp_dir, 'results.json')
+        result = self._result_with(
+            sharpe_ratio=float('nan'),
+            total_return=float('inf'),
+            max_drawdown=float('-inf')
+        )
+
+        self.optimizer.save_results([result], path)
+
+        with open(path) as f:
+            raw = f.read()
+        self.assertNotIn('Infinity', raw)
+        self.assertNotIn('NaN', raw)
+
+        # Strict parsers must accept the file.
+        data = json.loads(raw, parse_constant=_reject_constant)
+        metrics = data['results'][0]['metrics']
+        self.assertIsNone(metrics['sharpe_ratio'])
+        self.assertIsNone(metrics['total_return'])
+        self.assertIsNone(metrics['max_drawdown'])
+
+    def test_finite_metrics_round_trip_unchanged(self):
+        """Ordinary metrics are unaffected by the sanitisation."""
+        path = os.path.join(self.temp_dir, 'results.json')
+
+        self.optimizer.save_results([self._result_with(sharpe_ratio=1.25)], path)
+
+        with open(path) as f:
+            data = json.load(f)
+        self.assertEqual(data['results'][0]['metrics']['sharpe_ratio'], 1.25)
+        self.assertEqual(data['metadata']['n_combinations'], 1)
+
+
+def _reject_constant(name):
+    """json.load hook that fails on Infinity/-Infinity/NaN literals."""
+    raise AssertionError(f"Non-standard JSON constant written: {name}")
+
+
+class TestSortByMaxDrawdown(unittest.TestCase):
+    """max_drawdown is negative, so the best result is the one closest to zero."""
+
+    def setUp(self):
+        self.parameter_space = ParameterSpace({
+            'param1': {'type': 'int', 'min': 10, 'max': 20, 'step': 5}
+        })
+        self.data = pd.DataFrame({
+            'open': [100.0, 101.0, 102.0],
+            'high': [101.0, 102.0, 103.0],
+            'low': [99.0, 100.0, 101.0],
+            'close': [100.5, 101.5, 102.5],
+            'volume': [1000, 1100, 1200]
+        }, index=pd.date_range('2024-01-01', periods=3, freq='D'))
+
+    def _optimizer(self, sort_by):
+        return TestOptimizer(
+            strategy_class=MockStrategy,
+            parameter_space=self.parameter_space,
+            data=self.data,
+            sort_by=sort_by
+        )
+
+    @staticmethod
+    def _result(max_drawdown):
+        backtest_result = Mock()
+        backtest_result.total_return = 100.0
+        backtest_result.total_return_pct = 1.0
+        backtest_result.sharpe_ratio = 1.0
+        backtest_result.max_drawdown = max_drawdown
+        backtest_result.total_trades = 5
+        backtest_result.win_rate = 50.0
+        result = Mock(spec=OptimizationResult)
+        result.parameters = {'param1': 10}
+        result.backtest_result = backtest_result
+        return result
+
+    def test_shallowest_drawdown_ranks_first(self):
+        optimizer = self._optimizer('max_drawdown')
+        results = [self._result(-5.0), self._result(-40.0), self._result(-12.0)]
+
+        ordered = optimizer._sort_and_log_results(results)
+
+        self.assertEqual([r.backtest_result.max_drawdown for r in ordered],
+                         [-5.0, -12.0, -40.0])
+
+    def test_walk_forward_selection_does_not_pick_the_worst_drawdown(self):
+        """`results[0]` is what walk-forward analysis fits each fold with."""
+        optimizer = self._optimizer('max_drawdown')
+
+        ordered = optimizer._sort_and_log_results(
+            [self._result(-40.0), self._result(-3.0)]
+        )
+
+        self.assertEqual(ordered[0].backtest_result.max_drawdown, -3.0)
+
+    def test_total_return_sorting_is_unchanged(self):
+        optimizer = self._optimizer('total_return')
+        low, high = self._result(-5.0), self._result(-5.0)
+        low.backtest_result.total_return_pct = 1.0
+        high.backtest_result.total_return_pct = 9.0
+
+        ordered = optimizer._sort_and_log_results([low, high])
+
+        self.assertEqual(ordered[0].backtest_result.total_return_pct, 9.0)
+
+
+class TestOptimizerImportIsolation(unittest.TestCase):
+    """The optimization layer must not drag in the exporters or the ES client."""
+
+    def test_importing_the_optimizer_does_not_import_exporters(self):
+        import subprocess
+        import sys as _sys
+
+        code = (
+            "import sys; import niffler.optimization.base_optimizer; "
+            "print('elasticsearch' in sys.modules, 'niffler.exporters' in sys.modules)"
+        )
+        completed = subprocess.run([_sys.executable, '-c', code],
+                                   capture_output=True, text=True)
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout.strip(), 'False False')
 
 
 if __name__ == '__main__':

@@ -10,17 +10,47 @@ Niffler provides two visualization tools:
 
 ## Quick Start
 
+### 0. Configure (optional)
+
+The stack ships with working local defaults, so `docker compose up -d` needs no setup.
+Copy `.env.example` to `.env` to override them:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `NIFFLER_BIND_HOST` | `127.0.0.1` | Interface the published ports bind to |
+| `GF_SECURITY_ADMIN_USER` | `admin` | Grafana admin user |
+| `GF_SECURITY_ADMIN_PASSWORD` | `admin` | Grafana admin password |
+
+**All ports bind to `127.0.0.1` only.** Elasticsearch has no authentication and Grafana
+ships with a default password, so the stack is safe on a laptop and unsafe on a network.
+Before changing `NIFFLER_BIND_HOST`, enable Elasticsearch X-Pack security and TLS, set real
+Grafana credentials, and put the stack behind a firewall or reverse proxy.
+
 ### 1. Start Services
 
 Start Elasticsearch and Grafana (default):
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 Start with Kibana for debugging:
 ```bash
-docker-compose --profile debug up -d
+docker compose --profile debug up -d
 ```
+
+> **The `debug` profile is now actually enforced.** These docs always told you to use
+> `--profile debug` for Kibana, but the compose file did not declare the profile, so Kibana
+> started with a plain `up -d` regardless. The `kibana` service now carries
+> `profiles: [debug]`, so a plain `docker compose up -d` starts **Elasticsearch and Grafana
+> only** — matching what this page has always said. Verify with:
+>
+> ```bash
+> docker compose config --services                  # elasticsearch, grafana, niffler
+> docker compose --profile debug config --services  # ... and kibana
+> ```
+
+The examples below use `docker compose` (the Compose V2 subcommand). If you are on the
+legacy standalone binary, substitute `docker-compose`; the arguments are identical.
 
 ### 2. Run a Backtest
 
@@ -37,7 +67,7 @@ python scripts/backtest.py \
 
 **Grafana (Primary):**
 - URL: http://localhost:3000
-- Login: admin / admin
+- Login: `$GF_SECURITY_ADMIN_USER` / `$GF_SECURITY_ADMIN_PASSWORD` (defaults: admin / admin)
 - Dashboards are auto-provisioned
 
 **Kibana (Optional, for debugging):**
@@ -69,10 +99,12 @@ uv run python visualization/clean_elasticsearch.py
 uv run python visualization/clean_elasticsearch.py --force
 ```
 
-**What gets deleted:**
+**What gets deleted:** everything matching `niffler-*`, which today means
+
 - `niffler-backtests` - Backtest metadata
 - `niffler-portfolio-values` - Portfolio time-series
-- `niffler-trades` - Trade records
+- `niffler-trades` - Trade records (now including a `commission` field)
+- `niffler-positions` - Completed round trips
 
 **Note:** Indices auto-recreate on next backtest run.
 
@@ -83,7 +115,7 @@ uv run python visualization/clean_elasticsearch.py --force
 Create Kibana data views automatically for data exploration.
 
 **Prerequisites:**
-- Kibana running: `docker-compose --profile debug up -d kibana`
+- Kibana running: `docker compose --profile debug up -d kibana`
 - Indices exist (run a backtest first)
 
 **Run setup:**
@@ -104,7 +136,7 @@ uv run python visualization/setup_kibana.py
 
 ```bash
 # 1. Start services
-docker-compose up -d
+docker compose up -d
 
 # 2. Clean old data (optional, for fresh start)
 uv run python visualization/clean_elasticsearch.py --force
@@ -116,7 +148,7 @@ python scripts/backtest.py \
   --exporters elasticsearch
 
 # 4. View in Grafana
-# Open http://localhost:3000 (admin/admin)
+# Open http://localhost:3000 (default login admin/admin, override via .env)
 ```
 
 ### Debugging Workflow
@@ -125,7 +157,7 @@ When you need to see raw data in Kibana:
 
 ```bash
 # 1. Start services with Kibana
-docker-compose --profile debug up -d
+docker compose --profile debug up -d
 
 # 2. Run backtest (if needed)
 python scripts/backtest.py \
@@ -150,13 +182,13 @@ uv run python visualization/setup_kibana.py
 
 ```bash
 # Start all services (ES + Grafana)
-docker-compose up -d
+docker compose up -d
 
 # Start with Kibana (debug mode)
-docker-compose --profile debug up -d
+docker compose --profile debug up -d
 
 # Stop all services
-docker-compose down
+docker compose down
 
 # View logs
 docker logs niffler-elasticsearch
@@ -164,11 +196,11 @@ docker logs niffler-grafana
 docker logs niffler-kibana
 
 # Restart specific service
-docker-compose restart grafana
-docker-compose restart elasticsearch
+docker compose restart grafana
+docker compose restart elasticsearch
 
 # Stop Kibana only
-docker-compose stop kibana
+docker compose stop kibana
 ```
 
 ### Health Checks
@@ -225,7 +257,7 @@ Grafana includes 3 pre-configured dashboards:
 ### Accessing Dashboards
 
 1. Open http://localhost:3000
-2. Login: `admin` / `admin`
+2. Login with `GF_SECURITY_ADMIN_USER` / `GF_SECURITY_ADMIN_PASSWORD` (defaults `admin` / `admin`)
 3. Click "Dashboards" icon (four squares) in left sidebar
 4. Select any Niffler dashboard
 
@@ -239,7 +271,7 @@ For permanent changes:
 1. Edit dashboard in Grafana
 2. Export JSON: Settings → JSON Model → Copy
 3. Save to `config/grafana/dashboards/`
-4. Restart Grafana: `docker-compose restart grafana`
+4. Restart Grafana: `docker compose restart grafana`
 
 ---
 
@@ -257,7 +289,7 @@ Use Kibana for:
 
 1. **Start Kibana:**
    ```bash
-   docker-compose --profile debug up -d kibana
+   docker compose --profile debug up -d kibana
    ```
 
 2. **Setup data views:**
@@ -308,7 +340,31 @@ Grafana  Kibana
 
 - **niffler-backtests** - One document per backtest with metadata and metrics
 - **niffler-portfolio-values** - Time-series data of portfolio value evolution
-- **niffler-trades** - Individual trade records with timestamps
+- **niffler-trades** - Individual trade records with timestamps and `commission`
+- **niffler-positions** - One document per completed round trip (`quantity`, `entry_price`,
+  `exit_price`, `pnl`, `gross_pnl`, `entry_commission`, `exit_commission`, `is_win`).
+  These now reconcile with the `win_rate` and `total_return` reported for the same
+  `backtest_id`; a previous hand-rolled pairing loop made them disagree
+
+Mappings live in `config/elasticsearch/mappings/`.
+
+### Authentication and TLS
+
+The local stack runs with no authentication, but the exporter supports both. Configure via
+environment variables (`.env`) — there are no CLI flags for credentials, which also keeps
+them out of shell history:
+
+`ELASTICSEARCH_SCHEME` (`http`/`https`), `ELASTICSEARCH_API_KEY`,
+`ELASTICSEARCH_USERNAME` / `ELASTICSEARCH_PASSWORD`, `ELASTICSEARCH_TIMEOUT` (default 30s),
+`ELASTICSEARCH_VERIFY_CERTS`. API key wins over basic auth. Full table in
+[docs/exporters.md](../docs/exporters.md#configuration).
+
+### Export failures are visible now
+
+`python scripts/backtest.py --exporters elasticsearch` **exits 1** and prints
+`FAILED ElasticsearchExporter: Cannot connect to Elasticsearch at <url>` when the cluster is
+unreachable. It used to log "skipping export", report success and exit 0 — so a stopped
+container looked like a successful run with no data in Grafana.
 
 ---
 
@@ -338,8 +394,8 @@ docker logs niffler-kibana
 
 **Solution:**
 ```bash
-docker-compose stop kibana
-docker-compose --profile debug up -d kibana
+docker compose stop kibana
+docker compose --profile debug up -d kibana
 ```
 
 ### Elasticsearch Connection Refused
@@ -351,7 +407,7 @@ docker ps | grep elasticsearch
 
 **Solution:**
 ```bash
-docker-compose restart elasticsearch
+docker compose restart elasticsearch
 sleep 30
 curl http://localhost:9200/_cluster/health
 ```
@@ -362,7 +418,7 @@ curl http://localhost:9200/_cluster/health
 
 ### Development
 
-1. **Start services:** `docker-compose up -d`
+1. **Start services:** `docker compose up -d`
 2. **Run backtests:** Export to Elasticsearch
 3. **View in Grafana:** Primary analysis
 4. **Use Kibana:** When debugging issues
@@ -410,10 +466,10 @@ Backtest → Elasticsearch → Grafana (primary) + Kibana (debug)
 
 ```bash
 # Start everything
-docker-compose up -d
+docker compose up -d
 
 # Start with debugging
-docker-compose --profile debug up -d
+docker compose --profile debug up -d
 
 # Clean data
 uv run python visualization/clean_elasticsearch.py --force
@@ -425,7 +481,7 @@ python scripts/backtest.py --data <file> --strategy <strategy> --exporters elast
 uv run python visualization/setup_kibana.py
 
 # View dashboards
-# Grafana: http://localhost:3000 (admin/admin)
+# Grafana: http://localhost:3000 (default login admin/admin, override via .env)
 # Kibana:  http://localhost:5601
 
 # Health checks
@@ -434,7 +490,7 @@ curl http://localhost:3000/api/health       # Grafana
 curl http://localhost:5601/api/status       # Kibana
 
 # Stop everything
-docker-compose down
+docker compose down
 ```
 
 ---
