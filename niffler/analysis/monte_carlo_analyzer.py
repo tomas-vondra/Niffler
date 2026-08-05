@@ -8,6 +8,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from niffler.strategies.base_strategy import BaseStrategy
 from niffler.backtesting.backtest_engine import BacktestEngine
+from niffler.backtesting.cost_model import CostModel
 from .analysis_result import AnalysisResult, log_failure_rate
 
 
@@ -36,7 +37,8 @@ class MonteCarloAnalyzer:
                  commission: float = 0.001,
                  n_jobs: Optional[int] = None,
                  max_results_in_memory: int = 10000,
-                 random_seed: Optional[int] = None):
+                 random_seed: Optional[int] = None,
+                 cost_model: Optional[CostModel] = None):
         """
         Initialize Monte Carlo Analyzer.
         
@@ -53,6 +55,9 @@ class MonteCarloAnalyzer:
             random_seed: Base random seed. Each simulation derives its own seed from it
                 (``random_seed + simulation_id``) so sequential and parallel runs - and
                 therefore Windows spawn-based workers - reproduce identical results.
+            cost_model: Transaction cost model applied to every fill of every
+                simulated path, so the distribution describes the market the
+                strategy would actually trade in.
         """
         self.strategy_class = strategy_class
         self.optimal_parameters = optimal_parameters
@@ -64,6 +69,7 @@ class MonteCarloAnalyzer:
         self.n_jobs = n_jobs or min(mp.cpu_count(), 4)  # Default to max 4 processes
         self.max_results_in_memory = max_results_in_memory
         self.random_seed = random_seed
+        self.cost_model = cost_model
 
         # Seed the global generators too, so any strategy code that reaches for them is
         # reproducible as well. The bootstrap itself uses the explicit generator below.
@@ -79,7 +85,8 @@ class MonteCarloAnalyzer:
         self._strategy = self.strategy_class(**self.optimal_parameters)
         self._backtest_engine = BacktestEngine(
             initial_capital=self.initial_capital,
-            commission=self.commission
+            commission=self.commission,
+            cost_model=self.cost_model
         )
     
     def _validate_parameters(self) -> None:
@@ -188,6 +195,8 @@ class MonteCarloAnalyzer:
                 'bootstrap_sample_pct': self.bootstrap_sample_pct,
                 'block_size_days': self.block_size_days,
                 'random_seed': self.random_seed,
+                'cost_model': (self.cost_model.description
+                               if self.cost_model is not None else None),
                 'success_rate': len(results) / attempted
             },
             stability_metrics=distribution_stats,
@@ -270,7 +279,7 @@ class MonteCarloAnalyzer:
                             data, symbol, i, self.strategy_class, self.optimal_parameters,
                             self.bootstrap_sample_pct, self.block_size_days,
                             self.initial_capital, self.commission,
-                            self._simulation_seed(i)
+                            self._simulation_seed(i), self.cost_model
                         )
                         future_to_sim_id[future] = i
                     except Exception as e:
@@ -365,7 +374,8 @@ class MonteCarloAnalyzer:
                                      strategy_class: Type[BaseStrategy], optimal_parameters: Dict[str, Any],
                                      bootstrap_sample_pct: float, block_size_days: int,
                                      initial_capital: float, commission: float,
-                                     random_seed: Optional[int] = None) -> Optional[Any]:
+                                     random_seed: Optional[int] = None,
+                                     cost_model: Optional[CostModel] = None) -> Optional[Any]:
         """
         Static method for parallel processing (must be picklable).
 
@@ -382,6 +392,7 @@ class MonteCarloAnalyzer:
             random_seed: Seed for THIS simulation. Must be passed explicitly: on spawn
                 based platforms (Windows) the worker process does not inherit the
                 parent's seeded global generators.
+            cost_model: Transaction cost model applied to every fill
 
         Returns:
             The backtest result, or None if the simulation could not be run
@@ -397,7 +408,8 @@ class MonteCarloAnalyzer:
                 initial_capital=initial_capital,
                 commission=commission,
                 n_jobs=1,  # Single job for static method
-                random_seed=random_seed
+                random_seed=random_seed,
+                cost_model=cost_model
             )
 
             # Run the simulation with the seed derived for it, so the worker reproduces

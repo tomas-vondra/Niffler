@@ -23,9 +23,12 @@ The short version, because these are easy to "helpfully" undo:
 | Volume gaps fill with **0**; backward fill is opt-in | Restore a blanket `ffill().bfill()` |
 | `max_drawdown` is **negative** | Use `max()` for "worst" or treat it as lower-is-better |
 | Failures **raise** and exit non-zero | Log a message and return normally |
+| Transaction costs are **always adverse** and apply to stops | Let a model return a negative cost, price a stop exit at the raw stop, or size a buy on the pre-slippage price |
 
-Scope limits that are deliberate, not oversights: long-only, no slippage/spread model, no
-live trading, one strategy, Kelly risk manager is a stub.
+Scope limits that are deliberate, not oversights: long-only, no live trading, one strategy,
+Kelly risk manager is a stub. Slippage/spread/market impact **are** modelled now
+(`niffler/backtesting/cost_model.py`) but default to off, and a run with no cost model
+labels itself as frictionless.
 
 ## Development Setup
 
@@ -174,8 +177,13 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
   - `round_trip.py` - `pair_trades()` → `List[RoundTrip]`, the **single** FIFO trade-pairing
     routine (correct partial fills both directions, pro-rata commission, P&L net of entry
     and exit commission). Used by engine statistics *and* the Elasticsearch position export
-  - `trade.py` - Trade execution and tracking (`Trade` carries an optional `commission`
-    field, defaulted, as its last positional field)
+  - `cost_model.py` - Transaction cost models: `FillRequest`, the abstract `CostModel`,
+    and `ZeroCostModel` (the default) / `FixedSlippageModel` / `VolumeShareSlippageModel`.
+    Subclasses implement `adverse_fraction`, **not** `fill_price`: the base class owns the
+    sign, so no parameterisation can produce a favourable fill. `max_fillable_quantity`
+    caps how much of a bar one order may take
+  - `trade.py` - Trade execution and tracking (`Trade` carries optional `commission` and
+    `slippage_cost` fields, defaulted, as its last positional fields)
   - `backtest_result.py` - Performance metrics and results
 - `niffler/strategies/` - Trading strategy implementations
   - `base_strategy.py` - Abstract base class for strategies
@@ -223,8 +231,10 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
 - `config/elasticsearch/mappings/` - Elasticsearch schema definitions
   (`backtests`, `portfolio`, `trades`, `positions`)
 - `scripts/` - Command-line interfaces for core functionality
-  - `common.py` - **The** shared OHLCV CSV loader (`load_ohlcv_csv`) used by `backtest.py`,
-    `analyze.py` and `optimize.py`. Header normalisation, timestamp-column detection
+  - `common.py` - **The** shared OHLCV CSV loader (`load_ohlcv_csv`) *and* the shared
+    transaction-cost CLI (`add_cost_model_arguments`, `build_cost_model`,
+    `report_cost_model`), used by `backtest.py`, `analyze.py` and `optimize.py`. A cost
+    flag belonging to a different `--cost-model` is an error, never silently ignored.Header normalisation, timestamp-column detection
     (`timestamp`/`date`/`datetime`/`time` plus pandas' unnamed index column), datetime
     parsing, required-column and duplicate-timestamp validation, index sorting, optional
     `--clean` pass. Do not add a fourth loader
@@ -258,8 +268,18 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
   price and only ever tightens the stop (a `None` stop leaves the existing one armed)
 - **Stops**: probed against the bar's traded range (low for longs, high for shorts) and
   filled at `min(open, stop)` for a long, so a gap-through fills at the open
-- **Long only.** A `-1` signal with no open position is a no-op. No shorting, no slippage
-  or spread model, no live trading
+- **Transaction costs**: every fill goes through `BacktestEngine.cost_model`, which
+  defaults to `ZeroCostModel` so pre-existing numbers stay reproducible. Costs are always
+  adverse (a buy pays up, a sell gives up), apply to **stop exits too** (the reference price
+  is `min(open, stop)` for a long and the model may only worsen it), and the buy budget is
+  solved against the **slipped** price so cash can never go negative. A model that caps
+  participation truncates the order to a logged **partial fill** rather than dropping it; a
+  bar with no usable volume is unfillable for the volume model and logs `ORDER NOT FILLED`.
+  The impact term is evaluated on the pre-slippage order size, which over-charges slightly
+  and never under-charges. `--cost-model` is threaded through `backtest.py`, `optimize.py`
+  and `analyze.py` so a strategy is fitted and validated in the market it is traded in
+- **Long only.** A `-1` signal with no open position is a no-op. No shorting, no live
+  trading
 
 ### Data Sources
 - **CCXT**: Cryptocurrency exchange data with pagination, bounded retries and exponential

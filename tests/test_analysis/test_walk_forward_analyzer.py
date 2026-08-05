@@ -804,7 +804,7 @@ class TestWalkForwardParallelExecution(WalkForwardTestBase):
         args = executor.submit.call_args_list[0][0]
         self.assertIs(args[0], WalkForwardAnalyzer._run_single_fold_static)
         # The positional payload must line up with _run_single_fold_static's signature.
-        self.assertEqual(len(args) - 1, 11)
+        self.assertEqual(len(args) - 1, 12)
         self.assertIs(args[1], self.test_data)
         self.assertIs(args[2], windows[0])
         self.assertEqual(args[3], "TEST")
@@ -815,6 +815,7 @@ class TestWalkForwardParallelExecution(WalkForwardTestBase):
         self.assertEqual(args[9], analyzer.optimization_metric)
         self.assertEqual(args[10], analyzer.initial_capital)
         self.assertEqual(args[11], analyzer.commission)
+        self.assertIs(args[12], analyzer.cost_model)
 
     @patch('niffler.analysis.walk_forward_analyzer.as_completed')
     @patch('niffler.analysis.walk_forward_analyzer.ProcessPoolExecutor')

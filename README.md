@@ -12,6 +12,8 @@ Niffler is a personal quantitative trading framework that provides end-to-end fu
 - **🧹 Data Processing**: Comprehensive cleaning and validation pipeline
 - **🎯 Strategy Framework**: Extensible strategy development with risk management integration  
 - **⚡ Backtesting Engine**: Realistic simulation with commission handling and portfolio management
+- **💸 Transaction Costs**: Optional spread, slippage, square-root market impact and a
+  participation cap; a run without them labels itself frictionless
 - **🔍 Parameter Optimization**: Grid search and random search with parallel processing
 - **📊 Advanced Analysis**: Walk-forward and Monte Carlo robustness testing
 - **🛡️ Risk Management**: Position sizing, stop-loss management, and portfolio controls
@@ -276,8 +278,11 @@ Being explicit, so nobody discovers these the expensive way:
 - **No live trading.** There is no broker/exchange order path. Backtesting and analysis only.
 - **No shorting.** The engine is long-only; a `-1` signal with no open position is a no-op.
   `Portfolio` is the right place to add it.
-- **No slippage or spread model.** Fills happen at the exact bar open. Commission is
-  modelled; market impact, bid/ask spread and partial-fill risk are not.
+- **No slippage or spread model *by default*.** `--cost-model none` is the default and
+  fills at the exact bar open in unlimited size; such a run prints a frictionless warning.
+  `--cost-model fixed|volume` adds spread, slippage, square-root market impact and a
+  participation cap. What is still missing: intra-bar execution timing, a real order book,
+  borrow costs and financing.
 - **One strategy ships:** `simple_ma` (moving-average crossover). The framework is
   extensible; the library is not stocked.
 - **Kelly risk manager is a stub.** `KellyRiskManager` exists as a class, but
@@ -303,6 +308,27 @@ Detailed documentation is available in the `docs/` directory:
 - **[Analysis](docs/analysis.md)** - Advanced robustness testing
 - **[Risk Management](docs/risk-management.md)** - Position sizing and risk controls
 - **[Exporters](docs/exporters.md)** - Result export system and configuration
+
+### Transaction costs
+
+A backtest with no cost model is a claim about a frictionless market, so it says so:
+
+```bash
+# Frictionless (default) - prints a prominent warning
+python scripts/backtest.py --data data/BTCUSDT_binance_1d.csv --strategy simple_ma
+
+# Constant cost per fill: 5 bps of slippage plus a 1 bp half spread
+python scripts/backtest.py --data data/BTCUSDT_binance_1d.csv --strategy simple_ma \
+  --cost-model fixed --slippage-bps 5 --half-spread-bps 1
+
+# Size-dependent: half spread plus square-root impact, capped at 10% of a bar's volume
+python scripts/backtest.py --data data/BTCUSDT_binance_1d.csv --strategy simple_ma \
+  --cost-model volume --half-spread-bps 1 --impact-coefficient 0.1 --max-participation 0.1
+```
+
+The same flags exist on `optimize.py` and `analyze.py`, because fitting parameters in a
+frictionless market and then trading them in a real one selects for the parameter set most
+sensitive to costs. Details in [Backtesting](docs/backtesting.md#transaction-costs).
 
 ## Architecture
 
@@ -361,7 +387,7 @@ The suite is the source of truth for its own size. Run it:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-At the time of writing this reports **698 tests, 0 failures, 0 errors**. Treat that as a
+At the time of writing this reports **787 tests, 0 failures, 0 errors**. Treat that as a
 sanity check, not a spec — if the command disagrees with this paragraph, believe the
 command. It is the only place in the documentation that quotes a count.
 

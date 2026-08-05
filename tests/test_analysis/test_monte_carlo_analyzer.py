@@ -321,8 +321,12 @@ class TestMonteCarloSeeding(MonteCarloTestBase):
                        return_value=futures):
                 analyzer._run_simulations_parallel(self.test_data, "TEST")
 
-        submitted_seeds = [call.args[-1] for call in executor.submit.call_args_list]
+        # The cost model is appended after the seed, so the seed is second to last.
+        submitted_seeds = [call.args[-2] for call in executor.submit.call_args_list]
         self.assertEqual(submitted_seeds, [500, 501, 502])
+
+        submitted_cost_models = [call.args[-1] for call in executor.submit.call_args_list]
+        self.assertEqual(submitted_cost_models, [analyzer.cost_model] * 3)
 
     def test_static_worker_is_seeded_by_its_argument(self):
         """

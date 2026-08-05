@@ -23,6 +23,9 @@
       "num_winning_trades": {"type": "integer"},
       "num_losing_trades": {"type": "integer"},
       "commission": {"type": "double"},
+      "cost_model": {"type": "keyword"},
+      "total_commission": {"type": "double"},
+      "total_slippage": {"type": "double"},
       "created_at": {"type": "date"}
     }
   }

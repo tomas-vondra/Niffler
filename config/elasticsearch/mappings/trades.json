@@ -9,6 +9,7 @@
       "quantity": {"type": "double"},
       "value": {"type": "double"},
       "commission": {"type": "double"},
+      "slippage_cost": {"type": "double"},
       "created_at": {"type": "date"}
     }
   }

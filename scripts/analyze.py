@@ -32,7 +32,12 @@ from niffler.optimization.optimizer_factory import (
     get_parameter_space,
 )
 from niffler.strategies.simple_ma_strategy import SimpleMAStrategy
-from scripts.common import load_ohlcv_csv
+from scripts.common import (
+    add_cost_model_arguments,
+    build_cost_model,
+    load_ohlcv_csv,
+    report_cost_model,
+)
 
 
 def create_parser():
@@ -110,6 +115,9 @@ Examples:
         default=0.001,
         help='Commission rate for trades (default: 0.001)'
     )
+
+    # Transaction costs (slippage, spread, liquidity)
+    add_cost_model_arguments(parser)
     
     # Walk-forward specific arguments
     parser.add_argument(
@@ -310,7 +318,8 @@ def validate_parameters(strategy_class, parameters: dict):
         raise ValueError(f"Invalid parameters for {strategy_class.__name__}: {e}")
 
 
-def run_walk_forward_analysis(args, data: pd.DataFrame, parameters: dict = None):
+def run_walk_forward_analysis(args, data: pd.DataFrame, parameters: dict = None,
+                              cost_model=None):
     """Run walk-forward analysis.
 
     In the default ``walk_forward`` mode the strategy parameters are re-optimised on
@@ -322,6 +331,8 @@ def run_walk_forward_analysis(args, data: pd.DataFrame, parameters: dict = None)
         args: Parsed command line arguments.
         data: OHLCV data with a DatetimeIndex.
         parameters: Fixed strategy parameters, required only for segmented_in_sample mode.
+        cost_model: Transaction cost model applied to every fill, in the per-fold
+            optimisation as well as the out-of-sample evaluation.
 
     Returns:
         The AnalysisResult produced by WalkForwardAnalyzer.
@@ -366,7 +377,8 @@ def run_walk_forward_analysis(args, data: pd.DataFrame, parameters: dict = None)
         commission=args.commission,
         optimization_method=args.optimization_method,
         optimization_metric=args.optimization_metric,
-        n_jobs=args.n_jobs
+        n_jobs=args.n_jobs,
+        cost_model=cost_model
     )
 
     # Run analysis
@@ -432,8 +444,19 @@ def run_walk_forward_analysis(args, data: pd.DataFrame, parameters: dict = None)
     return result
 
 
-def run_monte_carlo_analysis(args, data: pd.DataFrame, parameters: dict):
-    """Run Monte Carlo analysis."""
+def run_monte_carlo_analysis(args, data: pd.DataFrame, parameters: dict,
+                            cost_model=None):
+    """Run Monte Carlo analysis.
+
+    Args:
+        args: Parsed command line arguments.
+        data: OHLCV data with a DatetimeIndex.
+        parameters: Fixed strategy parameters to simulate.
+        cost_model: Transaction cost model applied to every fill of every path.
+
+    Returns:
+        The AnalysisResult produced by MonteCarloAnalyzer.
+    """
     logging.info("Running Monte Carlo Analysis")
     
     # Get strategy class
@@ -452,7 +475,8 @@ def run_monte_carlo_analysis(args, data: pd.DataFrame, parameters: dict):
         initial_capital=args.initial_capital,
         commission=args.commission,
         n_jobs=args.n_jobs,
-        random_seed=args.random_seed
+        random_seed=args.random_seed,
+        cost_model=cost_model
     )
     
     # Run analysis
@@ -587,11 +611,15 @@ def main() -> int:
         else:
             parameters = None
 
+        # Transaction costs, shared by both analyses.
+        cost_model = build_cost_model(args)
+        report_cost_model(cost_model)
+
         # Run analysis
         if args.analysis == 'walk_forward':
-            result = run_walk_forward_analysis(args, data, parameters)
+            result = run_walk_forward_analysis(args, data, parameters, cost_model)
         elif args.analysis == 'monte_carlo':
-            result = run_monte_carlo_analysis(args, data, parameters)
+            result = run_monte_carlo_analysis(args, data, parameters, cost_model)
         else:
             raise ValueError(f"Unknown analysis type: {args.analysis}")
         

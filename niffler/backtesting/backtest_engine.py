@@ -6,6 +6,7 @@ from niffler.strategies.base_strategy import BaseStrategy
 from .trade import Trade, TradeSide
 from .backtest_result import BacktestResult
 from .portfolio import Portfolio
+from .cost_model import CostModel, FillRequest, ZeroCostModel
 from .round_trip import RoundTrip, QUANTITY_EPSILON, pair_trades
 
 
@@ -22,6 +23,16 @@ class BacktestEngine:
     behaviour and exists only for comparison; it must not be used to evaluate a
     strategy. Because execution timing is enforced here, strategies stay free to
     compute their signals from the closing price of the bar they see.
+
+    Transaction costs
+    -----------------
+    Every fill is priced by a :class:`~niffler.backtesting.cost_model.CostModel`.
+    It defaults to :class:`~niffler.backtesting.cost_model.ZeroCostModel` -
+    frictionless, so numbers produced before transaction costs existed stay
+    reproducible - and a configured model can only make fills worse: a buy pays
+    up, a sell gives up, stop exits included. A model may also cap how much of a
+    bar's volume one order takes; the order is then truncated to a partial fill
+    and logged, never silently dropped.
     """
 
     #: Supported execution-timing policies.
@@ -35,7 +46,8 @@ class BacktestEngine:
 
     def __init__(self, initial_capital: float = 10000.0, commission: float = 0.001,
                  min_order_value: float = 1.0, execution_timing: str = 'next_bar_open',
-                 periods_per_year: Optional[float] = None):
+                 periods_per_year: Optional[float] = None,
+                 cost_model: Optional[CostModel] = None):
         """
         Initialize the backtest engine.
 
@@ -52,9 +64,14 @@ class BacktestEngine:
                 daily bars including weekends -> 365, daily bars without
                 weekends -> 252, intraday bars -> bars per day times the same
                 calendar figure (e.g. hourly crypto -> 8760).
+            cost_model: Transaction cost model applied to every fill. When None
+                (default) a ZeroCostModel is used: fills happen at the exact
+                reference price in unlimited size, which is frictionless and
+                therefore not realistic.
 
         Raises:
             ValueError: If any parameter is outside its valid range
+            TypeError: If cost_model is not a CostModel
         """
         if initial_capital <= 0:
             raise ValueError("Initial capital must be positive")
@@ -68,12 +85,17 @@ class BacktestEngine:
             )
         if periods_per_year is not None and periods_per_year <= 0:
             raise ValueError("Periods per year must be positive")
+        if cost_model is not None and not isinstance(cost_model, CostModel):
+            raise TypeError(
+                f"cost_model must be a CostModel, got {type(cost_model).__name__}"
+            )
 
         self.initial_capital = initial_capital
         self.commission = commission
         self.min_order_value = min_order_value
         self.execution_timing = execution_timing
         self.periods_per_year = periods_per_year
+        self.cost_model: CostModel = cost_model if cost_model is not None else ZeroCostModel()
 
     @property
     def execution_lag(self) -> int:
@@ -120,6 +142,8 @@ class BacktestEngine:
         close_prices = data['close'].to_numpy(dtype=float)
         low_prices = data['low'].to_numpy(dtype=float)
         high_prices = data['high'].to_numpy(dtype=float)
+        # Liquidity of the bar the order fills on, not of the signal bar.
+        volumes = data['volume'].to_numpy(dtype=float)
         timestamps = data.index
 
         for i in range(len(data)):
@@ -144,19 +168,24 @@ class BacktestEngine:
                 portfolio=portfolio,
             )
 
+            bar_volume = float(volumes[i])
+
             # An existing position is checked against its stop before new orders.
             stop_loss_triggered = self._process_stop_loss(
                 strategy, portfolio, trades, timestamp, symbol, execution_price,
-                bar_low=float(low_prices[i]), bar_high=float(high_prices[i])
+                bar_low=float(low_prices[i]), bar_high=float(high_prices[i]),
+                bar_volume=bar_volume
             )
 
             if not stop_loss_triggered:
                 if signal == 1 and portfolio.cash > 0:
                     self._process_buy(strategy, portfolio, trades, timestamp, symbol,
-                                      execution_price, position_size, stop_loss_price)
+                                      execution_price, position_size, stop_loss_price,
+                                      bar_volume=bar_volume)
                 elif signal == -1 and portfolio.position > 0:
                     self._process_sell(strategy, portfolio, trades, timestamp, symbol,
-                                       execution_price, position_size)
+                                       execution_price, position_size,
+                                       bar_volume=bar_volume)
 
             # Mark to market at the bar's close, AFTER trades
             portfolio_values[i] = portfolio.market_value(float(close_prices[i]))
@@ -188,7 +217,9 @@ class BacktestEngine:
             largest_win=metrics['largest_win'],
             largest_loss=metrics['largest_loss'],
             num_winning_trades=metrics['num_winning_trades'],
-            num_losing_trades=metrics['num_losing_trades']
+            num_losing_trades=metrics['num_losing_trades'],
+            total_commission=float(sum(trade.commission for trade in trades)),
+            total_slippage=float(sum(trade.slippage_cost for trade in trades))
         )
 
     def _extract_signal_columns(self, signals_df: pd.DataFrame,
@@ -293,7 +324,8 @@ class BacktestEngine:
     def _process_stop_loss(self, strategy: BaseStrategy, portfolio: Portfolio,
                            trades: List[Trade], timestamp: pd.Timestamp, symbol: str,
                            price: float, bar_low: Optional[float] = None,
-                           bar_high: Optional[float] = None) -> bool:
+                           bar_high: Optional[float] = None,
+                           bar_volume: Optional[float] = None) -> bool:
         """
         Close the open position if the risk manager says the stop was hit.
 
@@ -310,6 +342,12 @@ class BacktestEngine:
         reached first - and the entry bar itself, which is checked before the entry
         fills and so never against the entry's own stop.
 
+        Transaction costs apply to stops too, and only ever make them worse:
+        ``min(open, stop)`` is the *reference* price handed to the cost model, so a
+        long's stop fills at or below it and never above. A liquidity cap can leave
+        part of the position unsold; the remainder stays open with its stop armed
+        rather than being conjured away.
+
         Args:
             strategy: Strategy being tested
             portfolio: Current portfolio state
@@ -319,6 +357,7 @@ class BacktestEngine:
             price: Execution price for this bar
             bar_low: Lowest price traded on this bar; falls back to `price`
             bar_high: Highest price traded on this bar; falls back to `price`
+            bar_volume: Volume traded on this bar, for liquidity-aware cost models
 
         Returns:
             True if a stop-loss exit was executed on this bar
@@ -347,19 +386,41 @@ class BacktestEngine:
         fill_price = min(price, portfolio.stop_loss) if is_long else max(price, portfolio.stop_loss)
 
         stop_trade = self._execute_sell_trade(timestamp, symbol, fill_price, 1.0,
-                                              portfolio.position)
+                                              portfolio.position, bar_volume=bar_volume)
         if stop_trade is None:
-            # The stop was hit but the residual position is too small to sell.
-            # Staying silent here is indistinguishable from "stop not hit".
+            # The stop was hit but the exit did not execute - the residual position
+            # is below the minimum order value, or the cost model reports the bar
+            # cannot absorb it. Staying silent here is indistinguishable from
+            # "stop not hit".
             logging.warning(
                 f"STOP LOSS NOT EXECUTED: {reason}; position {portfolio.position:.6f} units "
-                f"at ${fill_price:.2f} is worth ${portfolio.position * fill_price:.2f}, below "
-                f"the minimum order value of ${self.min_order_value:.2f}. Position stays open."
+                f"at ${fill_price:.2f} is worth ${portfolio.position * fill_price:.2f}, which "
+                f"is either below the minimum order value of ${self.min_order_value:.2f} or "
+                f"more than the bar can absorb. Position stays open."
             )
             return False
 
         trades.append(stop_trade)
         portfolio.apply_sell(stop_trade)
+
+        if not portfolio.is_flat:
+            # A liquidity cap kept the stop from filling in full. Reporting the
+            # partial exit beats pretending the whole position was liquidated.
+            logging.warning(
+                f"STOP LOSS PARTIALLY FILLED: sold {stop_trade.quantity:.6f} of "
+                f"{stop_trade.quantity + portfolio.position:.6f} units at "
+                f"${stop_trade.price:.2f} - {reason}. {portfolio.position:.6f} units "
+                f"remain open with the stop still armed."
+            )
+            strategy.risk_manager.update_position_state(
+                symbol=symbol,
+                position_size=portfolio.position_fraction(price),
+                entry_price=portfolio.entry_price,
+                stop_loss_price=portfolio.stop_loss,
+                entry_timestamp=timestamp
+            )
+            return True
+
         portfolio.position = 0.0
         portfolio.close_position()
         strategy.risk_manager.clear_position(symbol)
@@ -370,7 +431,8 @@ class BacktestEngine:
     def _process_buy(self, strategy: BaseStrategy, portfolio: Portfolio,
                      trades: List[Trade], timestamp: pd.Timestamp, symbol: str,
                      price: float, position_size: float,
-                     stop_loss_price: Optional[float]) -> None:
+                     stop_loss_price: Optional[float],
+                     bar_volume: Optional[float] = None) -> None:
         """
         Execute a buy order and update portfolio and risk-manager state.
 
@@ -385,21 +447,27 @@ class BacktestEngine:
             trades: Trade log to append to
             timestamp: Current bar timestamp
             symbol: Traded symbol
-            price: Execution price for this bar
+            price: Reference price for this bar; the cost model prices the
+                actual fill against it
             position_size: Fraction of available cash to deploy
             stop_loss_price: Stop-loss level for the new position, if any
+            bar_volume: Volume traded on this bar, for liquidity-aware cost models
         """
-        trade = self._execute_buy_trade(timestamp, symbol, price, position_size, portfolio.cash)
+        trade = self._execute_buy_trade(timestamp, symbol, price, position_size,
+                                        portfolio.cash, bar_volume=bar_volume)
         if trade is None:
             return
 
         trades.append(trade)
         # Risk state first: scaling in has to average against the units held so
-        # far, so it must be recorded before apply_buy adds the new ones.
+        # far, so it must be recorded before apply_buy adds the new ones. The cost
+        # basis is the price actually paid, not the reference price the order was
+        # benchmarked against, so stop distances measure from the real fill.
         if portfolio.is_flat:
-            portfolio.open_position(entry_price=price, stop_loss=stop_loss_price, side=1)
+            portfolio.open_position(entry_price=trade.price, stop_loss=stop_loss_price,
+                                    side=1)
         else:
-            portfolio.add_to_position(entry_price=price, quantity=trade.quantity,
+            portfolio.add_to_position(entry_price=trade.price, quantity=trade.quantity,
                                       stop_loss=stop_loss_price)
         portfolio.apply_buy(trade)
 
@@ -420,7 +488,8 @@ class BacktestEngine:
 
     def _process_sell(self, strategy: BaseStrategy, portfolio: Portfolio,
                       trades: List[Trade], timestamp: pd.Timestamp, symbol: str,
-                      price: float, position_size: float) -> None:
+                      price: float, position_size: float,
+                      bar_volume: Optional[float] = None) -> None:
         """
         Execute a sell order and update portfolio and risk-manager state.
 
@@ -430,11 +499,14 @@ class BacktestEngine:
             trades: Trade log to append to
             timestamp: Current bar timestamp
             symbol: Traded symbol
-            price: Execution price for this bar
+            price: Reference price for this bar; the cost model prices the
+                actual fill against it
             position_size: Fraction of the open position to liquidate
+            bar_volume: Volume traded on this bar, for liquidity-aware cost models
         """
         trade = self._execute_sell_trade(timestamp, symbol, price,
-                                         min(position_size, 1.0), portfolio.position)
+                                         min(position_size, 1.0), portfolio.position,
+                                         bar_volume=bar_volume)
         if trade is None:
             return
 
@@ -558,25 +630,61 @@ class BacktestEngine:
         return bars_per_day * days_per_year
 
     def _execute_buy_trade(self, timestamp: pd.Timestamp, symbol: str, price: float,
-                           position_size: float, available_cash: float) -> Optional[Trade]:
+                           position_size: float, available_cash: float,
+                           bar_volume: Optional[float] = None) -> Optional[Trade]:
         """
         Execute a buy trade if conditions are met.
+
+        The cash budget is solved against the price the order *fills* at, not
+        against the reference price: sizing on the reference price and paying
+        slippage on top would spend cash the portfolio does not have, and could
+        drive it negative on a full-capital order.
+
+        The order's market footprint is measured at the reference price, i.e.
+        before slippage shrinks the quantity. That is deliberate: it is the larger
+        of the two candidate sizes, so a size-dependent impact term is never
+        under-charged, and the sizing stays one pass instead of a fixed point.
 
         Args:
             timestamp: Bar timestamp of the fill
             symbol: Traded symbol
-            price: Fill price
+            price: Reference price the fill is benchmarked against
             position_size: Fraction of available cash to deploy
             available_cash: Cash available for the trade
+            bar_volume: Volume traded on the execution bar, for liquidity-aware
+                cost models
 
         Returns:
-            The Trade, or None if it fails the minimum order value / cash checks
+            The Trade, or None if it fails the minimum order value / cash checks,
+            or if the bar cannot absorb any of the order
         """
         # Calculate max investment accounting for commission
         max_investment_with_commission = available_cash * position_size
+        if max_investment_with_commission <= 0:
+            return None
+
         # Solve for trade_value where trade_value + (trade_value * commission) = max_investment
         trade_value = max_investment_with_commission / (1 + self.commission)
-        shares_to_buy = trade_value / price
+
+        request = FillRequest(side=1, reference_price=price,
+                              quantity=trade_value / price, bar_volume=bar_volume,
+                              timestamp=timestamp)
+
+        # Liquidity before price: a bar that cannot absorb the order has no fill
+        # price to quote, so asking for one would be asking a nonsense question.
+        fillable = self._fillable_quantity(request, symbol, 'BUY')
+        if fillable <= 0:
+            return None
+
+        fill_price = self.cost_model.fill_price(request)
+
+        shares_to_buy = trade_value / fill_price
+        if shares_to_buy > fillable:
+            # A truncated order buys fewer units and therefore spends less cash.
+            self._log_partial_fill(request, shares_to_buy, fillable, symbol, 'BUY')
+            shares_to_buy = fillable
+            trade_value = shares_to_buy * fill_price
+
         commission_cost = trade_value * self.commission
         total_cost = trade_value + commission_cost
 
@@ -586,30 +694,99 @@ class BacktestEngine:
                 timestamp=timestamp,
                 symbol=symbol,
                 side=TradeSide.BUY,
-                price=price,
+                price=fill_price,
                 quantity=shares_to_buy,
                 value=trade_value,
-                commission=commission_cost
+                commission=commission_cost,
+                slippage_cost=(fill_price - price) * shares_to_buy
             )
         return None
 
+    def _fillable_quantity(self, request: FillRequest, symbol: str,
+                           action: str) -> float:
+        """
+        How many units the cost model will let this bar absorb.
+
+        Args:
+            request: The order being priced
+            symbol: Traded symbol, for the log message
+            action: 'BUY' or 'SELL', for the log message
+
+        Returns:
+            The cap - ``math.inf`` for models that do not limit size, and 0.0 for
+            a bar that cannot absorb anything, which is logged rather than passed
+            over in silence
+        """
+        fillable = float(self.cost_model.max_fillable_quantity(request))
+        if fillable > 0:
+            return fillable
+
+        logging.warning(
+            f"ORDER NOT FILLED: {action} {symbol} at {request.timestamp}: the bar "
+            f"traded {request.bar_volume} and the cost model reports it cannot "
+            f"absorb any part of the order."
+        )
+        return 0.0
+
+    def _log_partial_fill(self, request: FillRequest, wanted: float, fillable: float,
+                          symbol: str, action: str) -> None:
+        """
+        Report an order truncated to the liquidity of its bar.
+
+        A capped order is reduced and still executed: a reported partial fill is
+        information, a silently dropped order is a hole in the trade log.
+
+        Args:
+            request: The order being priced
+            wanted: Units the engine wanted to trade
+            fillable: Units the bar can absorb
+            symbol: Traded symbol
+            action: 'BUY' or 'SELL'
+        """
+        logging.warning(
+            f"PARTIAL FILL: {action} {symbol} truncated from {wanted:.6f} to "
+            f"{fillable:.6f} units at {request.timestamp}; the bar traded "
+            f"{request.bar_volume} and the cost model caps how much of it one "
+            f"order may take."
+        )
+
     def _execute_sell_trade(self, timestamp: pd.Timestamp, symbol: str, price: float,
-                            position_size: float, current_position: float) -> Optional[Trade]:
+                            position_size: float, current_position: float,
+                            bar_volume: Optional[float] = None) -> Optional[Trade]:
         """
         Execute a sell trade if conditions are met.
 
         Args:
             timestamp: Bar timestamp of the fill
             symbol: Traded symbol
-            price: Fill price
+            price: Reference price the fill is benchmarked against
             position_size: Fraction of the position to liquidate
             current_position: Units currently held
+            bar_volume: Volume traded on the execution bar, for liquidity-aware
+                cost models
 
         Returns:
-            The Trade, or None if it fails the minimum order value check
+            The Trade, or None if it fails the minimum order value check, or if
+            the bar cannot absorb any of the order
         """
         shares_to_sell = current_position * position_size
-        trade_value = shares_to_sell * price
+        if shares_to_sell <= 0:
+            return None
+
+        request = FillRequest(side=-1, reference_price=price, quantity=shares_to_sell,
+                              bar_volume=bar_volume, timestamp=timestamp)
+
+        # Liquidity before price, as for a buy.
+        fillable = self._fillable_quantity(request, symbol, 'SELL')
+        if fillable <= 0:
+            return None
+
+        fill_price = self.cost_model.fill_price(request)
+        if shares_to_sell > fillable:
+            self._log_partial_fill(request, shares_to_sell, fillable, symbol, 'SELL')
+            shares_to_sell = fillable
+
+        trade_value = shares_to_sell * fill_price
 
         # Check minimum order value
         if trade_value >= self.min_order_value and shares_to_sell > 0:
@@ -617,10 +794,11 @@ class BacktestEngine:
                 timestamp=timestamp,
                 symbol=symbol,
                 side=TradeSide.SELL,
-                price=price,
+                price=fill_price,
                 quantity=shares_to_sell,
                 value=trade_value,
-                commission=trade_value * self.commission
+                commission=trade_value * self.commission,
+                slippage_cost=(price - fill_price) * shares_to_sell
             )
         return None
 

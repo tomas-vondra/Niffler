@@ -133,7 +133,8 @@ class ExporterManager:
 
     def export_backtest_result(self, result: BacktestResult, strategy_params: Dict[str, Any],
                               symbol: str, initial_capital: float, commission: float,
-                              backtest_id: str = None) -> ExportSummary:
+                              backtest_id: str = None,
+                              cost_model: str = None) -> ExportSummary:
         """
         Export backtest results using all configured exporters.
 
@@ -150,6 +151,8 @@ class ExporterManager:
             initial_capital: Initial capital amount
             commission: Commission rate
             backtest_id: Optional custom backtest ID (generates one if not provided)
+            cost_model: Description of the transaction cost model in force, so the
+                export says which market assumption produced these numbers
 
         Returns:
             ExportSummary describing which exporters succeeded, which failed and the
@@ -161,7 +164,7 @@ class ExporterManager:
 
         # Create metadata
         metadata = self._create_metadata(
-            result, strategy_params, symbol, initial_capital, commission
+            result, strategy_params, symbol, initial_capital, commission, cost_model
         )
 
         successes: List[str] = []
@@ -200,7 +203,8 @@ class ExporterManager:
         return str(uuid.uuid4())
     
     def _create_metadata(self, result: BacktestResult, strategy_params: Dict[str, Any],
-                        symbol: str, initial_capital: float, commission: float) -> Dict[str, Any]:
+                        symbol: str, initial_capital: float, commission: float,
+                        cost_model: str = None) -> Dict[str, Any]:
         """
         Create standardized metadata for a backtest.
         
@@ -210,11 +214,15 @@ class ExporterManager:
             symbol: Trading symbol
             initial_capital: Initial capital amount
             commission: Commission rate
-            
+            cost_model: Description of the transaction cost model in force
+
         Returns:
             Dictionary containing standardized metadata
         """
         return {
+            'cost_model': cost_model,
+            'total_commission': getattr(result, 'total_commission', 0.0),
+            'total_slippage': getattr(result, 'total_slippage', 0.0),
             'strategy_name': result.strategy_name,
             'strategy_params': strategy_params,
             'symbol': symbol,
