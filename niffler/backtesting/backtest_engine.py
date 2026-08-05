@@ -1,3 +1,5 @@
+import math
+
 import pandas as pd
 import numpy as np
 import logging
@@ -645,6 +647,12 @@ class BacktestEngine:
         of the two candidate sizes, so a size-dependent impact term is never
         under-charged, and the sizing stays one pass instead of a fixed point.
 
+        The budget itself comes from :meth:`_affordable_trade_value`, which makes
+        ``trade_value + trade_value * commission <= budget`` exactly true in
+        floating point. Dividing by ``1 + commission`` and trusting the result
+        used to leave the recomposed cost a ULP above the budget, and the cash
+        check below then rejected the order in silence.
+
         Args:
             timestamp: Bar timestamp of the fill
             symbol: Traded symbol
@@ -663,8 +671,9 @@ class BacktestEngine:
         if max_investment_with_commission <= 0:
             return None
 
-        # Solve for trade_value where trade_value + (trade_value * commission) = max_investment
-        trade_value = max_investment_with_commission / (1 + self.commission)
+        # Solve for the largest trade_value where trade_value + commission on it
+        # still fits inside the budget, in floating point and not just on paper.
+        trade_value = self._affordable_trade_value(max_investment_with_commission)
 
         request = FillRequest(side=1, reference_price=price,
                               quantity=trade_value / price, bar_volume=bar_volume,
@@ -701,6 +710,42 @@ class BacktestEngine:
                 slippage_cost=(fill_price - price) * shares_to_buy
             )
         return None
+
+    def _affordable_trade_value(self, budget: float) -> float:
+        """
+        Largest notional whose value plus commission still fits inside `budget`.
+
+        The mathematical answer is ``budget / (1 + commission)``, but that is not
+        the answer in binary floating point: recomposing it as
+        ``trade_value + trade_value * commission`` lands one or two ULP *above*
+        ``budget`` most of the time. The engine's affordability check then reads
+        ``available_cash >= total_cost`` as false and drops the order with no
+        trade, no log line and no other trace. At ``position_size = 1.0`` - the
+        default - that silently rejected the majority of buys, so most signals
+        never reached the trade log at all.
+
+        The candidate is therefore stepped down one representable value at a time
+        until the recomposed cost genuinely fits. That makes the invariant exactly
+        true rather than true-within-a-tolerance, and it can only ever move the
+        order *below* the budget, never above it. The overshoot is a couple of ULP
+        by construction, so the loop settles in one or two steps; it is guaranteed
+        to terminate because the sequence decreases strictly towards zero, where
+        the condition is false for any positive budget.
+
+        Args:
+            budget: Cash available for this order, commission included
+
+        Returns:
+            The notional to trade, or 0.0 when there is no budget
+        """
+        if budget <= 0:
+            return 0.0
+
+        trade_value = budget / (1.0 + self.commission)
+        while trade_value > 0 and trade_value + trade_value * self.commission > budget:
+            trade_value = math.nextafter(trade_value, 0.0)
+
+        return trade_value
 
     def _fillable_quantity(self, request: FillRequest, symbol: str,
                            action: str) -> float:

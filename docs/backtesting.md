@@ -125,9 +125,16 @@ regression.
 
 **Buy Trade Execution:**
 - Calculates maximum investment considering commission costs
-- Solves for trade value where `trade_value + (trade_value * commission) = available_cash * position_size`
+- Solves for the largest trade value where
+  `trade_value + (trade_value * commission) <= available_cash * position_size` holds **in
+  floating point**, not just on paper. `budget / (1 + commission)` recomposes one or two ULP
+  above the budget for most balances, and the affordability check below then rejected the
+  order silently; `_affordable_trade_value` steps the quotient down with `math.nextafter`
+  until it genuinely fits. This can only move the order below the budget, never above it
 - Validates against minimum order value and available cash
 - Updates cash and position accordingly
+- The engine trades **fractional units**, so a balance smaller than one share is not
+  "insufficient cash" — it buys a fraction of a share
 
 **Sell Trade Execution:**
 - Calculates shares to sell based on position size and current holdings

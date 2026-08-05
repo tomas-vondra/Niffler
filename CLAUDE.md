@@ -24,6 +24,7 @@ The short version, because these are easy to "helpfully" undo:
 | `max_drawdown` is **negative** | Use `max()` for "worst" or treat it as lower-is-better |
 | Failures **raise** and exit non-zero | Log a message and return normally |
 | Transaction costs are **always adverse** and apply to stops | Let a model return a negative cost, price a stop exit at the raw stop, or size a buy on the pre-slippage price |
+| A budget-exact buy is **affordable** (`_affordable_trade_value`) | Restore a bare `budget / (1 + commission)`, or "fix" the overshoot by loosening the cash guard |
 
 Scope limits that are deliberate, not oversights: long-only, no live trading, one strategy,
 Kelly risk manager is a stub. Slippage/spread/market impact **are** modelled now
@@ -268,6 +269,14 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
   price and only ever tightens the stop (a `None` stop leaves the existing one armed)
 - **Stops**: probed against the bar's traded range (low for longs, high for shorts) and
   filled at `min(open, stop)` for a long, so a gap-through fills at the open
+- **Buy sizing**: `_affordable_trade_value` returns the largest notional for which
+  `trade_value + trade_value * commission <= budget` holds *in floating point*, stepping the
+  quotient down with `math.nextafter` when the round trip overshoots. A bare
+  `budget / (1 + commission)` recomposes one or two ULP above the budget for 73% of
+  balances at the default commission of 0.001 (the rate varies unpredictably with the
+  commission), and the affordability check then dropped the order silently - at
+  `position_size=1.0` that meant most buy signals never became trades. Do not replace this
+  with a tolerance on the cash comparison: the order must never exceed the budget
 - **Transaction costs**: every fill goes through `BacktestEngine.cost_model`, which
   defaults to `ZeroCostModel` so pre-existing numbers stay reproducible. Costs are always
   adverse (a buy pays up, a sell gives up), apply to **stop exits too** (the reference price

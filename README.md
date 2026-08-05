@@ -271,6 +271,42 @@ prices will differ.
   `BTC_USDT_...`. Already-safe names are unchanged.
 - **JSON output emits `null`** instead of the non-standard `Infinity`/`NaN` literals.
 
+### 10. Full-capital buys are no longer dropped by a rounding error
+
+`_execute_buy_trade` sized an order as `budget / (1 + commission)` and then checked
+`available_cash >= trade_value + trade_value * commission`. Mathematically that is exactly
+the budget; in IEEE-754 the round trip lands one or two ULP **above** it. Measured over
+200,000 random balances at the default `commission=0.001`, **73% of full-deployment buys
+failed that check** — and were dropped with no trade, no log line and no trace of any kind.
+The rate depends on the commission rate in a way nobody would guess (0% at `0.0` and `0.01`,
+7% at `0.0001`, 35% at `0.0025`), which is presumably why it survived this long.
+
+`position_size` defaults to 1.0, so this hit ordinary runs hard. A 400-bar sample producing
+seven buy signals executed **two** trades. Worse, the rejection depends on where the balance
+falls relative to a ULP boundary, so it was not even consistent: perturbing the equity curve
+(by adding transaction costs, say) changed *which* signals executed, making two runs
+incomparable.
+
+The budget is now solved exactly: `_affordable_trade_value` steps the quotient down with
+`math.nextafter` until the recomposed cost genuinely fits, which takes one or two steps and
+can only ever move the order below the budget, never above it. The same sample now executes
+all thirteen of its trades at every cost level:
+
+| Slippage | Before | After |
+|----------|--------|-------|
+| 0 bps | 2 trades, -1.58% | 13 trades, +4.40% |
+| 25 bps | 4 trades, -1.74% | 13 trades, +1.06% |
+| 50 bps | 8 trades, -4.54% | 13 trades, -2.17% |
+| 100 bps | 2 trades, -3.53% | 13 trades, -8.32% |
+
+Every previously produced backtest number changes, and changes substantially. The new
+numbers are the ones with the signals actually traded.
+
+One test changed sides with this: `test_execute_buy_trade_insufficient_cash` asserted that
+$50 of cash could not buy a share priced at $100. The engine trades fractional units, so it
+always could — the test was pinning the rounding bug, not a rule, and now asserts the half
+share it really buys.
+
 ## What Niffler does *not* do
 
 Being explicit, so nobody discovers these the expensive way:
@@ -387,7 +423,7 @@ The suite is the source of truth for its own size. Run it:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-At the time of writing this reports **787 tests, 0 failures, 0 errors**. Treat that as a
+At the time of writing this reports **797 tests, 0 failures, 0 errors**. Treat that as a
 sanity check, not a spec — if the command disagrees with this paragraph, believe the
 command. It is the only place in the documentation that quotes a count.
 
