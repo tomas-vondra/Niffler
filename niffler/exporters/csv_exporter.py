@@ -97,6 +97,9 @@ class CSVExporter(BaseExporter):
             # Export metadata
             self._export_metadata(metadata, backtest_id, base_filename)
 
+            # Export provenance as its own sidecar file
+            self._export_provenance(metadata, backtest_id, base_filename)
+
             # Export portfolio values
             portfolio_file = self._export_portfolio_values(result, backtest_id, base_filename)
 
@@ -148,6 +151,42 @@ class CSVExporter(BaseExporter):
             safe_json_dump(metadata_with_id, f, indent=2, default=str)
 
         return str(metadata_file)
+
+    def _export_provenance(self, metadata: Dict[str, Any], backtest_id: str,
+                           base_filename: str) -> str:
+        """
+        Write the run provenance record to its own JSON sidecar file.
+
+        The record is already inside ``{base}_metadata.json``; this second file exists
+        because a directory of CSVs is read by humans and by scripts that only want to
+        know "which code and which data produced these rows". Duplicating a few hundred
+        bytes is cheaper than making every consumer parse the full metadata document.
+
+        The filename reuses ``base_filename``, which is built with
+        :func:`sanitize_path_component`, so a symbol such as ``BTC/USDT`` cannot turn
+        into a directory separator.
+
+        Args:
+            metadata: Backtest metadata, optionally carrying a ``provenance`` key
+            backtest_id: Unique identifier for this backtest run
+            base_filename: Sanitised base filename shared by all files of this run
+
+        Returns:
+            Path of the written file, or an empty string when no provenance was
+            collected for this run
+        """
+        provenance = metadata.get('provenance')
+        if not provenance:
+            self.logger.debug("No provenance record to export")
+            return ""
+
+        provenance_file = self.output_dir / f"{base_filename}_provenance.json"
+
+        with open(provenance_file, 'w') as f:
+            safe_json_dump({**provenance, 'backtest_id': backtest_id}, f,
+                           indent=2, default=str)
+
+        return str(provenance_file)
 
     def _export_portfolio_values(self, result: BacktestResult, backtest_id: str, base_filename: str) -> str:
         """Export portfolio values to CSV."""

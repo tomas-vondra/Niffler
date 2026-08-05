@@ -35,6 +35,7 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from niffler.config.logging import setup_logging
+from niffler.utils.provenance import collect_provenance
 from niffler.optimization.optimizer_factory import (
     create_optimizer,
     get_strategy_class,
@@ -244,8 +245,11 @@ def main() -> int:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             args.output = f"optimization_results_{args.strategy}_{args.method}_{timestamp}.json"
         
-        # Save results
-        optimizer.save_results(results, args.output)
+        # Save results, stamped with the code/data/environment that produced them.
+        # Collected once here rather than inside save_results, which is also called
+        # from library code that has no idea what the input file was.
+        provenance = collect_provenance(args.data)
+        optimizer.save_results(results, args.output, provenance=provenance)
         print(f"Full results saved to: {args.output}")
         
         return 0

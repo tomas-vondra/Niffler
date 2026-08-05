@@ -149,6 +149,11 @@ Results are saved in structured JSON format containing:
 - **Parameter space definition**: Complete parameter ranges and types
 - **Results array**: All parameter combinations tested with their performance metrics
 - **Best results**: Top performing parameter combinations
+- **`provenance`**: git SHA / branch / dirty flag, a SHA-256 of the input CSV and the
+  library versions used — see the [README](../README.md#run-provenance). An optimisation
+  run whose code and input cannot be identified is exactly as useless as an
+  unreproducible backtest, and the chosen parameters usually outlive the run that
+  produced them
 
 The file is written with `safe_json_dump` (`niffler/utils/json_utils.py`), so non-finite
 metrics are emitted as **`null`** rather than the non-standard `Infinity` / `NaN` literals

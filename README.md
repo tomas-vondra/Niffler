@@ -117,6 +117,63 @@ Niffler follows a systematic approach to quantitative trading strategy developme
 - **CSV Files**: Structured data for external analysis tools
 - **Elasticsearch**: Database integration for visualization dashboards
 
+Every exported result carries a **provenance** record (see below), so a number found in
+Grafana six months from now can still be traced back to the code and the data that
+produced it.
+
+## Run provenance
+
+A backtest result is only meaningful next to the code and the data behind it. Before this
+existed, a run got a UUID and nothing else: a Sharpe of 1.8 sitting in an Elasticsearch
+index could not be reproduced, could not be compared against a later run, and could not be
+trusted. Every artefact Niffler writes now carries a provenance block:
+
+```json
+{
+  "run_timestamp_utc": "2026-08-05T12:34:56+00:00",
+  "code": {
+    "git_sha": "ff71eba19999c3549d993a56e1e46ad71e6e9a67",
+    "git_sha_short": "ff71eba19999",
+    "branch": "feat/provenance",
+    "dirty": false,
+    "niffler_version": "0.1.0"
+  },
+  "data": {
+    "path": "/data/BTCUSDT_binance_1d.csv",
+    "sha256": "a9e9a1efe089eb05e8edabc4e24c72829b4ac2128e5e0a7a909243c81caacc7a",
+    "size_bytes": 12213,
+    "modified_utc": "2026-08-01T09:15:02+00:00"
+  },
+  "environment": {
+    "python_version": "3.13.14",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "packages": {"pandas": "2.3.1", "numpy": "2.3.1", "ccxt": "4.4.94", "...": "..."}
+  }
+}
+```
+
+Where it lands:
+
+| Output | Provenance appears as |
+|--------|-----------------------|
+| Console | One `Provenance:` line - short SHA, branch, dirty marker, short data hash |
+| CSV export | Inside `*_metadata.json`, plus a standalone `*_provenance.json` sidecar |
+| Elasticsearch | A mapped `provenance` object on the `-backtests` index |
+| `optimize.py --output` | Top-level `provenance` key in the results JSON |
+| `analyze.py --output` | Top-level `provenance` key in the analysis JSON |
+
+Three things worth knowing:
+
+- **`dirty` is the field that matters.** A SHA recorded against a working tree with
+  uncommitted changes is a lie about reproducibility, so the flag is recorded, logged as a
+  warning, and printed as `DIRTY` in the console line.
+- **Unknown is `null`, never a plausible default.** If `git` is missing or the run is not
+  inside a repository, `dirty` is `null` rather than `false` - claiming "clean" for a
+  question that was never asked would be worse than saying nothing.
+- **Collection never fails a run.** Provenance is metadata; a missing `git`, an
+  unreadable data file or a hung `git` call degrades to `null` and a log line. It is
+  collected once per run at the CLI, so a three-exporter run hashes the input file once.
+
 ## What changed and why your old results differed
 
 A correctness audit changed several defaults that were quietly flattering results. If you
@@ -318,7 +375,7 @@ niffler/
 ├── risk/           # Risk management systems
 ├── exporters/      # Console / CSV / Elasticsearch result export
 ├── config/         # Logging configuration
-└── utils/          # Layer-neutral helpers (JSON sanitisation)
+└── utils/          # Layer-neutral helpers (JSON sanitisation, run provenance)
 
 scripts/            # CLI entry points; scripts/common.py holds the shared CSV loader
 config/             # Elasticsearch mappings, Grafana provisioning (+ logging.py shim)
@@ -342,6 +399,10 @@ Notable pieces:
 - **`niffler/utils/json_utils.py`** holds `safe_json_dump`/`sanitize_numeric_values`. It
   lives outside `exporters/` so that importing it never drags in the optional Elasticsearch
   client. `niffler/exporters/json_utils.py` re-exports it.
+- **`niffler/utils/provenance.py`** holds `collect_provenance()`, the stdlib-only collector
+  behind the provenance block above. Called once per run at the CLI boundary; the git and
+  environment lookups are memoised per process and the data hash is cached on
+  (path, mtime, size).
 
 ### Technology Stack
 
@@ -361,7 +422,7 @@ The suite is the source of truth for its own size. Run it:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-At the time of writing this reports **698 tests, 0 failures, 0 errors**. Treat that as a
+At the time of writing this reports **751 tests, 0 failures, 0 errors**. Treat that as a
 sanity check, not a spec — if the command disagrees with this paragraph, believe the
 command. It is the only place in the documentation that quotes a count.
 

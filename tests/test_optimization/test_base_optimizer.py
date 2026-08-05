@@ -535,6 +535,30 @@ class TestSaveResultsJsonValidity(unittest.TestCase):
         self.assertEqual(data['results'][0]['metrics']['sharpe_ratio'], 1.25)
         self.assertEqual(data['metadata']['n_combinations'], 1)
 
+    def test_provenance_is_written_when_supplied(self):
+        """An optimisation whose code and input cannot be identified is unreproducible."""
+        path = os.path.join(self.temp_dir, 'results.json')
+        provenance = {
+            'code': {'git_sha': 'a' * 40, 'dirty': False},
+            'data': {'sha256': 'b' * 64},
+        }
+
+        self.optimizer.save_results([self._result_with()], path, provenance=provenance)
+
+        with open(path) as f:
+            data = json.load(f)
+        self.assertEqual(data['provenance'], provenance)
+
+    def test_provenance_key_absent_when_not_supplied(self):
+        """Library callers that pass no record get the old file shape unchanged."""
+        path = os.path.join(self.temp_dir, 'results.json')
+
+        self.optimizer.save_results([self._result_with()], path)
+
+        with open(path) as f:
+            data = json.load(f)
+        self.assertNotIn('provenance', data)
+
 
 def _reject_constant(name):
     """json.load hook that fails on Infinity/-Infinity/NaN literals."""

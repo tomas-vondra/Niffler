@@ -7,7 +7,7 @@ Coordinates multiple exporters for backtesting results with unique identificatio
 import logging
 import uuid
 from dataclasses import dataclass
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Optional, Tuple
 from .base_exporter import BaseExporter
 from .console_exporter import ConsoleExporter
 from .csv_exporter import CSVExporter
@@ -133,7 +133,8 @@ class ExporterManager:
 
     def export_backtest_result(self, result: BacktestResult, strategy_params: Dict[str, Any],
                               symbol: str, initial_capital: float, commission: float,
-                              backtest_id: str = None) -> ExportSummary:
+                              backtest_id: str = None,
+                              provenance: Optional[Dict[str, Any]] = None) -> ExportSummary:
         """
         Export backtest results using all configured exporters.
 
@@ -150,6 +151,11 @@ class ExporterManager:
             initial_capital: Initial capital amount
             commission: Commission rate
             backtest_id: Optional custom backtest ID (generates one if not provided)
+            provenance: Optional run provenance record (see
+                :func:`niffler.utils.provenance.collect_provenance`). It is collected
+                **once** by the caller that owns the run and shared by every exporter:
+                collecting it here per exporter would re-hash the input data file for
+                each destination
 
         Returns:
             ExportSummary describing which exporters succeeded, which failed and the
@@ -161,7 +167,7 @@ class ExporterManager:
 
         # Create metadata
         metadata = self._create_metadata(
-            result, strategy_params, symbol, initial_capital, commission
+            result, strategy_params, symbol, initial_capital, commission, provenance
         )
 
         successes: List[str] = []
@@ -200,21 +206,24 @@ class ExporterManager:
         return str(uuid.uuid4())
     
     def _create_metadata(self, result: BacktestResult, strategy_params: Dict[str, Any],
-                        symbol: str, initial_capital: float, commission: float) -> Dict[str, Any]:
+                        symbol: str, initial_capital: float, commission: float,
+                        provenance: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Create standardized metadata for a backtest.
-        
+
         Args:
             result: BacktestResult object
             strategy_params: Strategy parameters used in the backtest
             symbol: Trading symbol
             initial_capital: Initial capital amount
             commission: Commission rate
-            
+            provenance: Optional run provenance record, included under a
+                ``provenance`` key when supplied
+
         Returns:
             Dictionary containing standardized metadata
         """
-        return {
+        metadata = {
             'strategy_name': result.strategy_name,
             'strategy_params': strategy_params,
             'symbol': symbol,
@@ -237,7 +246,14 @@ class ExporterManager:
             'num_winning_trades': result.num_winning_trades,
             'num_losing_trades': result.num_losing_trades
         }
-    
+
+        # Only present when a record was collected, so a caller that opts out does not
+        # get a null field indexed into Elasticsearch for every run.
+        if provenance is not None:
+            metadata['provenance'] = provenance
+
+        return metadata
+
     def get_exporter_count(self) -> int:
         """Get the number of configured exporters."""
         return len(self.exporters)

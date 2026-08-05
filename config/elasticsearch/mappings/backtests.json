@@ -1,5 +1,14 @@
 {
   "mappings": {
+    "dynamic_templates": [
+      {
+        "provenance_package_versions_as_keyword": {
+          "path_match": "provenance.environment.packages.*",
+          "match_mapping_type": "string",
+          "mapping": {"type": "keyword"}
+        }
+      }
+    ],
     "properties": {
       "backtest_id": {"type": "keyword"},
       "strategy_name": {"type": "keyword"},
@@ -23,7 +32,46 @@
       "num_winning_trades": {"type": "integer"},
       "num_losing_trades": {"type": "integer"},
       "commission": {"type": "double"},
-      "created_at": {"type": "date"}
+      "created_at": {"type": "date"},
+      "provenance": {
+        "properties": {
+          "run_timestamp_utc": {"type": "date"},
+          "code": {
+            "properties": {
+              "git_sha": {"type": "keyword"},
+              "git_sha_short": {"type": "keyword"},
+              "branch": {"type": "keyword"},
+              "dirty": {"type": "boolean"},
+              "niffler_version": {"type": "keyword"}
+            }
+          },
+          "data": {
+            "properties": {
+              "path": {"type": "keyword"},
+              "sha256": {"type": "keyword"},
+              "size_bytes": {"type": "long"},
+              "modified_utc": {"type": "date"}
+            }
+          },
+          "environment": {
+            "properties": {
+              "python_version": {"type": "keyword"},
+              "platform": {"type": "keyword"},
+              "packages": {
+                "properties": {
+                  "niffler": {"type": "keyword"},
+                  "pandas": {"type": "keyword"},
+                  "numpy": {"type": "keyword"},
+                  "ccxt": {"type": "keyword"},
+                  "yfinance": {"type": "keyword"},
+                  "elasticsearch": {"type": "keyword"},
+                  "python-dateutil": {"type": "keyword"}
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

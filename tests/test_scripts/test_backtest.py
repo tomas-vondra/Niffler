@@ -561,6 +561,57 @@ class TestBacktestExportReporting(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         mock_manager.export_backtest_result.assert_not_called()
 
+    @patch('scripts.backtest.setup_logging')
+    @patch('scripts.backtest.collect_provenance')
+    @patch('scripts.backtest.ExporterManager')
+    @patch('scripts.backtest.BacktestEngine')
+    @patch('scripts.backtest.SimpleMAStrategy')
+    @patch('scripts.backtest.load_data')
+    @patch('sys.argv', ['backtest.py', '--data', 'test.csv', '--exporters', 'csv'])
+    def test_main_collects_provenance_once_and_passes_it_to_the_manager(
+            self, mock_load_data, mock_strategy_class, mock_engine_class,
+            mock_manager_class, mock_collect_provenance, mock_setup_logging):
+        """Provenance is collected once per run and shared by every exporter.
+
+        Collecting it per exporter would hash the input CSV once per destination.
+        """
+        mock_load_data.return_value = pd.DataFrame({
+            'open': [100.0] * 10,
+            'high': [105.0] * 10,
+            'low': [95.0] * 10,
+            'close': [102.0] * 10,
+            'volume': [1000.0] * 10
+        }, index=pd.date_range('2024-01-01', periods=10, freq='D'))
+
+        mock_strategy = MagicMock()
+        mock_strategy.get_description.return_value = "Test Strategy"
+        mock_strategy_class.return_value = mock_strategy
+
+        mock_engine = MagicMock()
+        mock_engine.run_backtest.return_value = self._make_result()
+        mock_engine_class.return_value = mock_engine
+
+        provenance = {'code': {'git_sha': 'a' * 40}}
+        mock_collect_provenance.return_value = provenance
+
+        mock_manager = MagicMock()
+        mock_manager.get_exporter_count.return_value = 1
+        mock_manager.get_exporter_names.return_value = ['CSVExporter']
+        mock_manager.export_backtest_result.return_value = ExportSummary(
+            successes=['CSVExporter'], failures=[], backtest_id='abc'
+        )
+        mock_manager_class.return_value = mock_manager
+
+        exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        # Fingerprinted against the file named on the command line.
+        mock_collect_provenance.assert_called_once_with('test.csv')
+        self.assertIs(
+            mock_manager.export_backtest_result.call_args.kwargs['provenance'],
+            provenance
+        )
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -32,6 +32,7 @@ from niffler.optimization.optimizer_factory import (
     get_parameter_space,
 )
 from niffler.strategies.simple_ma_strategy import SimpleMAStrategy
+from niffler.utils.provenance import collect_provenance
 from scripts.common import load_ohlcv_csv
 
 
@@ -504,12 +505,16 @@ def run_monte_carlo_analysis(args, data: pd.DataFrame, parameters: dict):
 
 
 
-def save_results(result, output_file: str) -> None:
+def save_results(result, output_file: str, provenance: dict = None) -> None:
     """Save analysis results to a JSON file.
 
     Args:
         result: Analysis result object to serialise.
         output_file: Path of the JSON file to write.
+        provenance: Optional run provenance record (see
+            ``niffler.utils.provenance.collect_provenance``), written under a
+            top-level ``provenance`` key so a walk-forward or Monte Carlo verdict
+            can be tied back to the code and data that produced it.
 
     Raises:
         OSError: If the file cannot be written.
@@ -541,7 +546,10 @@ def save_results(result, output_file: str) -> None:
         # Add metadata if available
         if result.metadata:
             output_data['metadata'] = result.metadata
-        
+
+        if provenance is not None:
+            output_data['provenance'] = provenance
+
         # Save to file
         with open(output_file, 'w') as f:
             json.dump(output_data, f, indent=2, default=str)
@@ -597,7 +605,7 @@ def main() -> int:
         
         # Save results if output file specified
         if args.output:
-            save_results(result, args.output)
+            save_results(result, args.output, provenance=collect_provenance(args.data))
         
         print(f"\nAnalysis completed successfully!")
         return 0
