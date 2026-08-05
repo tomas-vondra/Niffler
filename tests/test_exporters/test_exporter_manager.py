@@ -43,6 +43,25 @@ class TestExporterManager(unittest.TestCase):
         self.mock_result.num_losing_trades = 9
         self.mock_result.total_commission = 30.0
         self.mock_result.total_slippage = 12.0
+        self.mock_result.benchmark_name = "buy_and_hold"
+        self.mock_result.benchmark_return_pct = 20.0
+        self.mock_result.benchmark_sharpe_ratio = 0.9
+        self.mock_result.benchmark_max_drawdown = -8.0
+        self.mock_result.benchmark_total_cost = 10.0
+        self.mock_result.benchmark_error = None
+        self.mock_result.excess_return_pct = -5.0
+        self.mock_result.information_ratio = -0.25
+        self.mock_result.round_trip_count = 12
+        self.mock_result.mean_trade_return_pct = 0.4
+        self.mock_result.t_statistic = 1.1
+        self.mock_result.p_value = 0.29
+        self.mock_result.sharpe_ci_low = -0.3
+        self.mock_result.sharpe_ci_high = 2.1
+        self.mock_result.sharpe_ci_confidence = 0.95
+        self.mock_result.significance_min_trades = 30
+        self.mock_result.is_sample_sufficient = False
+        self.mock_result.is_significant = None
+        self.mock_result.significance_verdict = "SAMPLE TOO SMALL: 12 round trip(s)."
     
     def test_init(self):
         """Test ExporterManager initialization."""
@@ -416,9 +435,30 @@ class TestExporterManager(unittest.TestCase):
             'largest_win': 500.0,
             'largest_loss': 200.0,
             'num_winning_trades': 16,
-            'num_losing_trades': 9
+            'num_losing_trades': 9,
+            'benchmark_name': 'buy_and_hold',
+            'benchmark_return_pct': 20.0,
+            'benchmark_sharpe_ratio': 0.9,
+            'benchmark_max_drawdown': -8.0,
+            'benchmark_total_cost': 10.0,
+            'benchmark_error': None,
+            'excess_return_pct': -5.0,
+            'information_ratio': -0.25,
+            'round_trip_count': 12,
+            'mean_trade_return_pct': 0.4,
+            't_statistic': 1.1,
+            'p_value': 0.29,
+            'sharpe_ci_low': -0.3,
+            'sharpe_ci_high': 2.1,
+            'sharpe_ci_confidence': 0.95,
+            'significance_min_trades': 30,
+            'is_sample_sufficient': False,
+            # None, not False: the sample was below the gate, so no verdict was
+            # rendered. Exporting False here would claim a negative result.
+            'is_significant': None,
+            'significance_verdict': 'SAMPLE TOO SMALL: 12 round trip(s).'
         }
-        
+
         self.assertEqual(metadata, expected_metadata)
     
     def test_get_exporter_count(self):
@@ -478,6 +518,25 @@ class TestExporterCreationFailuresAreReported(unittest.TestCase):
         self.result.num_losing_trades = 4
         self.result.total_commission = 10.0
         self.result.total_slippage = 4.0
+        self.result.benchmark_name = "buy_and_hold"
+        self.result.benchmark_return_pct = 20.0
+        self.result.benchmark_sharpe_ratio = 0.9
+        self.result.benchmark_max_drawdown = -8.0
+        self.result.benchmark_total_cost = 10.0
+        self.result.benchmark_error = None
+        self.result.excess_return_pct = -5.0
+        self.result.information_ratio = -0.25
+        self.result.round_trip_count = 4
+        self.result.mean_trade_return_pct = 0.4
+        self.result.t_statistic = 1.1
+        self.result.p_value = 0.29
+        self.result.sharpe_ci_low = None
+        self.result.sharpe_ci_high = None
+        self.result.sharpe_ci_confidence = 0.95
+        self.result.significance_min_trades = 30
+        self.result.is_sample_sufficient = False
+        self.result.is_significant = None
+        self.result.significance_verdict = "SAMPLE TOO SMALL: 4 round trip(s)."
         self.result.symbol = 'BTC-USD'
         self.result.initial_capital = 10000.0
         self.result.trades = []

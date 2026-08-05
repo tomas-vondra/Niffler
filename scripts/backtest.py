@@ -13,6 +13,12 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from niffler.backtesting import BacktestEngine
+from niffler.backtesting.benchmark import BENCHMARK_BUY_AND_HOLD, BENCHMARK_CHOICES
+from niffler.backtesting.significance import (
+    DEFAULT_BOOTSTRAP_SAMPLES,
+    DEFAULT_BOOTSTRAP_SEED,
+    DEFAULT_MIN_TRADES,
+)
 from niffler.strategies.simple_ma_strategy import SimpleMAStrategy
 from niffler.risk import FixedRiskManager
 from niffler.exporters import ExporterManager
@@ -135,7 +141,34 @@ Examples:
 
     # Transaction costs (slippage, spread, liquidity)
     add_cost_model_arguments(parser)
-    
+
+    # Benchmark and statistical significance
+    benchmark_group = parser.add_argument_group('benchmark and significance')
+    benchmark_group.add_argument(
+        '--benchmark', choices=list(BENCHMARK_CHOICES), default=BENCHMARK_BUY_AND_HOLD,
+        help=("Passive alternative the strategy is measured against: "
+              "'buy_and_hold' (default) buys at the first executable bar and holds "
+              "to the end, paying the same commission and the same cost model; "
+              "'none' reports the strategy's numbers with nothing to compare them to")
+    )
+    benchmark_group.add_argument(
+        '--min-trades-for-significance', type=int, default=DEFAULT_MIN_TRADES,
+        help=(f"Round trips below which no significance verdict is rendered "
+              f"(default: {DEFAULT_MIN_TRADES}). Below this the metrics are still "
+              f"reported, labelled as not meaningful")
+    )
+    benchmark_group.add_argument(
+        '--bootstrap-samples', type=int, default=DEFAULT_BOOTSTRAP_SAMPLES,
+        help=(f"Resamples for the bootstrap Sharpe confidence interval "
+              f"(default: {DEFAULT_BOOTSTRAP_SAMPLES}); 0 skips it")
+    )
+    benchmark_group.add_argument(
+        '--bootstrap-seed', type=int, default=DEFAULT_BOOTSTRAP_SEED,
+        help=(f"Seed for that bootstrap, so the interval is reproducible "
+              f"(default: {DEFAULT_BOOTSTRAP_SEED})")
+    )
+
+
     # Output options
     # Get available exporters dynamically
     available_exporters = ','.join(ExporterManager.get_available_exporter_names())
@@ -239,9 +272,15 @@ Examples:
             initial_capital=args.capital,
             commission=args.commission,
             min_order_value=args.min_order_value,
-            cost_model=cost_model
+            cost_model=cost_model,
+            benchmark=args.benchmark,
+            min_trades_for_significance=args.min_trades_for_significance,
+            bootstrap_samples=args.bootstrap_samples,
+            bootstrap_seed=args.bootstrap_seed
         )
-        
+
+        print(f"Benchmark: {args.benchmark}")
+
         print("Running backtest...")
 
         # Run backtest

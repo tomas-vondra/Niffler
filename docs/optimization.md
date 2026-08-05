@@ -11,7 +11,8 @@ python scripts/optimize.py --data <data_file> --strategy <strategy_name> [--meth
 - `--strategy`: Strategy to optimize (**required**; currently supports `simple_ma`)
 - `--method`: Optimization method — `grid` (default) or `random`
 - `--trials`: Number of trials for random search, default: **100**
-- `--sort-by`: Metric to sort results by, default: `total_return`
+- `--sort-by`: Metric to sort results by, default: `total_return` (see
+  [sorting](#sorting-by-total_return-rediscovers-buy-and-hold))
 - `--initial-capital`: Starting capital, default: 10000. (Spelled `--capital` in
   `backtest.py` and `--initial_capital` in `analyze.py`; the three CLIs have not been
   harmonised.)
@@ -129,6 +130,32 @@ Results can be sorted by any of these performance metrics:
 - `max_drawdown`: Maximum peak-to-trough decline percentage
 - `win_rate`: Percentage of profitable trades
 - `total_trades`: Number of trades executed
+- `excess_return_pct`: Return over buy-and-hold on the same bars, charged the same costs
+
+#### Sorting by `total_return` rediscovers buy-and-hold
+
+`total_return` is still the default sort. In a bull market it systematically selects
+whichever parameters keep you in the market longest, which is a rediscovery of
+buy-and-hold reported as a strategy.
+
+The top-N block now prints the benchmark return and the excess beside every result,
+whatever the sort order, so the trap is visible without changing anything:
+
+```
+#1 - total_return: 63.20%
+    Parameters: {'short_window': 5, 'long_window': 15}
+    Total Return: $6,320.00 (63.20%)
+    vs Buy-and-Hold: 121.40% (excess -58.20 pp)
+```
+
+`--sort-by excess_return_pct` is also available. Over a single dataset the benchmark is a
+constant, so it produces the **same ordering** as `total_return` — what changes is that
+the headline number tells you whether the winner beat doing nothing. A result with no
+benchmark (`benchmark_error` set) sorts last rather than being treated as a zero excess.
+
+The default was **not** changed. Changing a default silently is precisely what the
+correctness audit was cleaning up; whether `excess_return_pct` should become the default
+is a decision for the repository owner.
 
 #### `max_drawdown` sort direction (behaviour change)
 

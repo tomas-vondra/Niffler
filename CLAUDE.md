@@ -25,11 +25,16 @@ The short version, because these are easy to "helpfully" undo:
 | Failures **raise** and exit non-zero | Log a message and return normally |
 | Transaction costs are **always adverse** and apply to stops | Let a model return a negative cost, price a stop exit at the raw stop, or size a buy on the pre-slippage price |
 | A budget-exact buy is **affordable** (`_affordable_trade_value`) | Restore a bare `budget / (1 + commission)`, or "fix" the overshoot by loosening the cash guard |
+| The benchmark pays the **same** commission and cost model, and enters no earlier than `execution_lag` | Price its entry outside `_execute_buy_trade`, or let it buy at bar 0 under `next_bar_open` |
+| Below `min_trades_for_significance` there is **no verdict**; `is_significant` is `None` | Collapse `None` to `False`, or print a p-value without the "not meaningful" label |
+| An absent benchmark is `None`, not `0.0` | Default the comparison fields to zero, or treat a missing benchmark as a zero excess return |
 
 Scope limits that are deliberate, not oversights: long-only, no live trading, one strategy,
 Kelly risk manager is a stub. Slippage/spread/market impact **are** modelled now
 (`niffler/backtesting/cost_model.py`) but default to off, and a run with no cost model
-labels itself as frictionless.
+labels itself as frictionless. There is **no multiple-testing correction and no deflated
+Sharpe ratio**: a p-value from a run whose parameters were fitted on the same data
+overstates the evidence, and the docs and console say so rather than pretending otherwise.
 
 ## Development Setup
 
@@ -185,6 +190,20 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
     caps how much of a bar one order may take
   - `trade.py` - Trade execution and tracking (`Trade` carries optional `commission` and
     `slippage_cost` fields, defaulted, as its last positional fields)
+  - `metrics.py` - `periodic_returns`, `max_drawdown_pct`, `sharpe_ratio`,
+    `sharpe_ratio_of_returns`. The **single** implementation of both equity-curve metrics;
+    the engine and the benchmark both go through it so the two curves cannot drift apart.
+    `periods_per_year` is always a parameter, never a constant
+  - `benchmark.py` - Buy-and-hold benchmark (`BENCHMARK_CHOICES`, `BenchmarkResult`,
+    `compute_benchmark`, `compute_buy_and_hold`, `information_ratio`, `BenchmarkError`).
+    The entry goes through `BacktestEngine._execute_buy_trade`, so the benchmark pays the
+    same commission and cost model as the strategy; it enters at
+    `data.index[engine.execution_lag]`, waiting for the first bar that can absorb it
+  - `significance.py` - `assess_significance` (t-test on mean round-trip return from
+    `pair_trades()`, bootstrap Sharpe CI, minimum-trades gate) plus a hand-rolled exact
+    Student-t survival function (`student_t_two_sided_p`,
+    `regularized_incomplete_beta`) - scipy is **not** a dependency and a normal
+    approximation is not acceptable at n=30
   - `backtest_result.py` - Performance metrics and results
 - `niffler/strategies/` - Trading strategy implementations
   - `base_strategy.py` - Abstract base class for strategies
