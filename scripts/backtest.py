@@ -22,6 +22,7 @@ from niffler.backtesting.significance import (
 from niffler.strategies.simple_ma_strategy import SimpleMAStrategy
 from niffler.risk import FixedRiskManager
 from niffler.exporters import ExporterManager
+from niffler.utils.provenance import collect_provenance
 from niffler.config.logging import setup_logging
 from scripts.common import add_cost_model_arguments, build_cost_model, load_ohlcv_csv, report_cost_model
 
@@ -308,6 +309,10 @@ Examples:
         # Prepare strategy parameters for metadata (generic - gets from strategy object)
         strategy_params = strategy.parameters.copy()
 
+        # Collect provenance once for the whole run: every exporter shares the record,
+        # so the input file is hashed once no matter how many destinations are configured.
+        provenance = collect_provenance(args.data)
+
         # Export results using all configured exporters
         export_result = exporter_manager.export_backtest_result(
             result=result,
@@ -315,6 +320,7 @@ Examples:
             symbol=symbol,
             initial_capital=args.capital,
             commission=args.commission,
+            provenance=provenance,
             cost_model=cost_model.description
         )
 

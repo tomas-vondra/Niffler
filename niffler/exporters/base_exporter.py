@@ -79,23 +79,29 @@ class BaseExporter(ABC):
     
     def create_metadata(self, result: BacktestResult, strategy_params: Dict[str, Any],
                        symbol: str, initial_capital: float, commission: float,
+                       provenance: Optional[Dict[str, Any]] = None,
                        cost_model: str = None) -> Dict[str, Any]:
         """
         Create standardized metadata for a backtest.
-        
+
         Args:
             result: BacktestResult object
             strategy_params: Strategy parameters used in the backtest
             symbol: Trading symbol
             initial_capital: Initial capital amount
             commission: Commission rate
+            provenance: Optional run provenance record (see
+                :func:`niffler.utils.provenance.collect_provenance`). Collect it once at
+                the call site that owns the run and pass it in - collecting it per
+                exporter would re-hash the input data file for every destination.
             cost_model: Description of the transaction cost model in force, when
                 the caller knows it
 
         Returns:
-            Dictionary containing standardized metadata
+            Dictionary containing standardized metadata, carrying a ``provenance`` key
+            when a record was supplied
         """
-        return {
+        metadata = {
             'cost_model': cost_model,
             'total_commission': getattr(result, 'total_commission', 0.0),
             'total_slippage': getattr(result, 'total_slippage', 0.0),
@@ -114,7 +120,14 @@ class BaseExporter(ABC):
             'win_rate': result.win_rate,
             'total_trades': result.total_trades
         }
-    
+
+        # Only present when a record was collected, so a caller that opts out does not
+        # get a null field indexed into Elasticsearch for every run.
+        if provenance is not None:
+            metadata['provenance'] = provenance
+
+        return metadata
+
     def validate_result(self, result: BacktestResult) -> bool:
         """
         Validate that the backtest result contains required data.

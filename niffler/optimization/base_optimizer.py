@@ -325,7 +325,8 @@ class BaseOptimizer(ABC):
             logging.warning(f"Error evaluating {strategy_name} with parameters {parameters}: {e}")
             return None
     
-    def save_results(self, results: List[OptimizationResult], filename: str) -> None:
+    def save_results(self, results: List[OptimizationResult], filename: str,
+                     provenance: Optional[Dict[str, Any]] = None) -> None:
         """
         Save optimization results to a JSON file.
 
@@ -337,6 +338,10 @@ class BaseOptimizer(ABC):
         Args:
             results: Optimization results to serialise
             filename: Destination path for the JSON file
+            provenance: Optional run provenance record (see
+                :func:`niffler.utils.provenance.collect_provenance`), written under a
+                top-level ``provenance`` key. An optimisation run whose code and input
+                data cannot be identified is exactly as unreproducible as a backtest's
         """
         output_data = {
             'metadata': {
@@ -352,6 +357,9 @@ class BaseOptimizer(ABC):
             },
             'results': []
         }
+
+        if provenance is not None:
+            output_data['provenance'] = provenance
         
         for result in results:
             result_data = {

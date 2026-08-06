@@ -285,6 +285,9 @@ When `--output` is specified, results are saved in structured JSON containing:
 - All individual backtest results
 - Aggregated metrics and statistics
 - Percentile breakdowns and distribution analysis
+- A `provenance` block — git SHA / branch / dirty flag, a SHA-256 of the input CSV and the
+  library versions used (see the [README](../README.md#run-provenance)), so a
+  walk-forward or Monte Carlo verdict can be traced back to what produced it
 
 ## Parallel Processing
 

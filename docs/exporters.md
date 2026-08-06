@@ -60,21 +60,71 @@ Export report:
   FAILED ElasticsearchExporter: Cannot connect to Elasticsearch at http://127.0.0.1:9
 ```
 
+## Run Provenance
+
+Every export carries a `provenance` block on its metadata, answering "what produced this
+number?" — git SHA, branch, **dirty flag**, a SHA-256 of the input data file, and the
+Python and library versions. Without it an Elasticsearch index full of Sharpe ratios is a
+graveyard of numbers nobody can reproduce.
+
+The record is produced by `collect_provenance()` in **`niffler/utils/provenance.py`**
+(standard library only, so it respects the same layering rule as `json_utils.py`). Its full
+shape is documented in the [README](../README.md#run-provenance).
+
+**It is collected once per run, at the CLI**, and passed down:
+
+```python
+from niffler.utils.provenance import collect_provenance
+
+provenance = collect_provenance(args.data)          # hashes the CSV once
+exporter_manager.export_backtest_result(..., provenance=provenance)
+```
+
+Collecting it inside each exporter instead would re-hash the input file once per
+destination and shell out to `git` once per exported result. `BaseExporter.create_metadata`
+and `ExporterManager._create_metadata` take an optional `provenance` argument and add the
+key **only when a record is supplied**, so an opted-out caller gets the previous metadata
+shape unchanged.
+
+How it degrades:
+
+| Situation | Result |
+|-----------|--------|
+| Not a git repository, or `git` not installed | `code` fields `null`, including `dirty` |
+| `git` call hangs | Bounded by a 5 s timeout, then `null` |
+| Data file missing or unreadable | `sha256`/`size_bytes`/`modified_utc` `null`, `path` kept |
+| Package not installed | That package's version is `null` |
+
+Provenance collection **never raises and never blocks a run** — it is metadata about a
+backtest, not part of one. Note that `dirty: null` means "not determined"; it is
+deliberately not `false`, which would assert a cleanliness nobody checked.
+
 ## Console Exporter
 
 Human-readable summary printed to stdout: strategy and symbol, date range, initial and
 final capital, total return, max drawdown, Sharpe ratio, win rate and trade count, plus the
 backtest id.
 
+Provenance is condensed into a single line under the backtest id:
+
+```
+Backtest ID: 76d666a5-e4be-4d85-a2d7-7cb2f105fdf5
+Provenance: code ff71eba19999 (feat/provenance, DIRTY) | data a9e9a1efe089
+```
+
+`DIRTY` means the working tree had uncommitted changes, so the recorded SHA alone will not
+reproduce the result. `dirty-unknown` means the question could not be answered at all.
+
 ## CSV Exporter
 
-Writes three files per backtest into `--csv-output-dir`:
+Writes four files per backtest into `--csv-output-dir`:
 
 | File | Contents |
 |------|----------|
 | `<base>_portfolio.csv` | Portfolio value time series |
 | `<base>_trades.csv` | One row per executed trade |
 | `<base>_metadata.json` | Strategy parameters, metrics and run metadata |
+| `<base>_provenance.json` | Run provenance plus the `backtest_id` |
 
 ### Filename sanitisation
 
@@ -113,6 +163,13 @@ The same helper is used by `niffler/optimization/base_optimizer.py` when saving 
 results, because degenerate parameter combinations legitimately produce an infinite profit
 factor or a NaN Sharpe ratio.
 
+The provenance sidecar is written with the same helper and the same sanitised
+`<base>` name, so `BTC/USDT` cannot escape into a directory separator. It duplicates the
+`provenance` key already inside `<base>_metadata.json` on purpose: a directory of CSVs is
+read by scripts that only want to know which code and which data produced the rows, and a
+few hundred duplicated bytes is cheaper than making each of them parse the full metadata
+document. No file is written when a run carries no provenance record.
+
 `sanitize_numeric_values`, `safe_json_dumps` and `safe_json_dump` live in
 **`niffler/utils/json_utils.py`** — deliberately outside the exporters package, so that
 importing a generic JSON helper does not drag in the optional Elasticsearch client.
@@ -130,6 +187,28 @@ Bulk-indexes results into four indices (prefix configurable, default `niffler`):
 | `niffler-positions` | Completed **round trip** |
 
 Mappings live in `config/elasticsearch/mappings/`.
+
+### The provenance mapping
+
+`niffler-backtests` maps the `provenance` object explicitly, because a mapping is the one
+thing that cannot be fixed after the fact — once documents are indexed, correcting a field
+type requires a reindex:
+
+| Field | Type | Why |
+|-------|------|-----|
+| `provenance.run_timestamp_utc` | `date` | Range queries, Grafana time filters |
+| `provenance.code.git_sha`, `git_sha_short`, `branch`, `niffler_version` | `keyword` | Exact match and terms aggregations; `text` would analyse them into useless tokens |
+| `provenance.code.dirty` | `boolean` | Filter out unreproducible runs in one clause |
+| `provenance.data.path`, `data.sha256` | `keyword` | "Show me every run over *this exact* file" |
+| `provenance.data.size_bytes` | `long` | Sizes exceed `integer` for large datasets |
+| `provenance.data.modified_utc` | `date` | |
+| `provenance.environment.*` and `packages.*` | `keyword` | Group results by pandas/numpy version |
+
+A `dynamic_templates` entry maps `provenance.environment.packages.*` to `keyword`, so a
+package added to `TRACKED_PACKAGES` later cannot silently land as analysed `text`.
+
+Fields with a `null` value are simply not indexed by Elasticsearch, so a run collected
+without git available costs nothing.
 
 ### Benchmark and significance fields
 

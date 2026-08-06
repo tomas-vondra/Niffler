@@ -7,6 +7,7 @@ Exports backtest results to console with human-readable formatting.
 from typing import Dict, Any
 from .base_exporter import BaseExporter
 from ..backtesting.backtest_result import BacktestResult
+from ..utils.provenance import format_provenance_summary
 
 
 class ConsoleExporter(BaseExporter):
@@ -144,11 +145,24 @@ class ConsoleExporter(BaseExporter):
 
     def _print_backtest_results(self, result: BacktestResult, backtest_id: str,
                                 metadata: Dict[str, Any] = None) -> None:
-        """Print formatted backtest results to console."""
+        """
+        Print formatted backtest results to console.
+
+        Args:
+            result: BacktestResult to render
+            backtest_id: Unique identifier for this backtest run
+            metadata: Backtest metadata. Its ``provenance`` entry is condensed into
+                a single ``Provenance:`` line, where a dirty working tree is marked
+                explicitly - a result produced from uncommitted code cannot be
+                reproduced from its recorded commit
+        """
         print(f"\n{'='*60}")
         print(f"BACKTEST RESULTS")
         print(f"{'='*60}")
         print(f"Backtest ID: {backtest_id}")
+        summary = format_provenance_summary((metadata or {}).get('provenance'))
+        if summary:
+            print(f"Provenance: {summary}")
         print(f"Strategy: {result.strategy_name}")
         print(f"Symbol: {result.symbol}")
         print(f"Period: {result.start_date.strftime('%Y-%m-%d')} to {result.end_date.strftime('%Y-%m-%d')}")

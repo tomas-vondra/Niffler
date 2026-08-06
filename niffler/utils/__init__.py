@@ -7,8 +7,11 @@ optional third-party dependency (such as the Elasticsearch client) along with it
 """
 
 from .json_utils import safe_json_dump, safe_json_dumps, sanitize_numeric_values
+from .provenance import collect_provenance, format_provenance_summary
 
 __all__ = [
+    'collect_provenance',
+    'format_provenance_summary',
     'safe_json_dump',
     'safe_json_dumps',
     'sanitize_numeric_values',

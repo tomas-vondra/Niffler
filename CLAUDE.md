@@ -23,6 +23,7 @@ The short version, because these are easy to "helpfully" undo:
 | Volume gaps fill with **0**; backward fill is opt-in | Restore a blanket `ffill().bfill()` |
 | `max_drawdown` is **negative** | Use `max()` for "worst" or treat it as lower-is-better |
 | Failures **raise** and exit non-zero | Log a message and return normally |
+| Provenance is collected **once per run at the CLI** and never raises | Collect it inside an exporter, or let a missing `git` fail a backtest |
 | Transaction costs are **always adverse** and apply to stops | Let a model return a negative cost, price a stop exit at the raw stop, or size a buy on the pre-slippage price |
 | A budget-exact buy is **affordable** (`_affordable_trade_value`) | Restore a bare `budget / (1 + commission)`, or "fix" the overshoot by loosening the cash guard |
 | The benchmark pays the **same** commission and cost model, and enters no earlier than `execution_lag` | Price its entry outside `_execute_buy_trade`, or let it buy at bar 0 under `next_bar_open` |
@@ -242,6 +243,16 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
   optional third-party dependency (the Elasticsearch client) along with it
   - `json_utils.py` - `sanitize_numeric_values`, `safe_json_dumps`, `safe_json_dump`
     (inf/NaN → `null`, numpy scalars → Python numbers, `allow_nan=False`)
+  - `provenance.py` - `collect_provenance(data_path)` → `{run_timestamp_utc, code, data,
+    environment}`: git SHA / branch / **dirty** flag, streaming SHA-256 of the input file,
+    Python and library versions. Standard library only. **It never raises and never
+    blocks**: git calls are bounded by `GIT_TIMEOUT_SECONDS` with `check=False`, and every
+    failure degrades to `None`. Unknown is `None`, never a plausible default - in
+    particular `dirty` is `None` when it could not be determined, because `False` would
+    assert a cleanliness that was never checked. Git and environment lookups are memoised
+    per process (`lru_cache`) and the file hash is cached on (resolved path, mtime, size),
+    so an `optimize.py` run exporting hundreds of results shells out to git once.
+    `format_provenance_summary()` renders the console one-liner
 - `niffler/config/logging.py` - Unified logging configuration (the real implementation).
   `setup_logging` validates the level against a whitelist and creates the log file's parent
   directory on demand
@@ -417,6 +428,17 @@ The modular export system enables flexible output of backtest results to multipl
 - **Error Resilience**: Individual exporter failures don't affect others or main process
 
 #### Export Data Structure
+- **Run Provenance**: `provenance` block on the metadata dict (git SHA / branch / dirty
+  flag, data-file SHA-256, Python and library versions). Collected **once** by the caller
+  that owns the run (`scripts/backtest.py`) and passed into
+  `ExporterManager.export_backtest_result(..., provenance=...)`; collecting it per exporter
+  would re-hash the input file for every destination. `BaseExporter.create_metadata` and
+  `ExporterManager._create_metadata` add the key only when a record is supplied. The
+  console exporter prints a one-line summary with a `DIRTY` marker, the CSV exporter writes
+  a `{base}_provenance.json` sidecar (named with the shared `sanitize_path_component`), and
+  `config/elasticsearch/mappings/backtests.json` maps the block explicitly - SHAs, versions
+  and paths as `keyword`, `dirty` as `boolean`, timestamps as `date`, plus a
+  `dynamic_templates` entry so a newly tracked package cannot land as analysed `text`
 - **Backtest Metadata**: Strategy details, parameters, performance metrics, execution info
 - **Portfolio Values**: Time-series data of portfolio value evolution
 - **Trade Details**: Individual trade records with timestamps, prices, quantities
@@ -444,7 +466,7 @@ The modular export system enables flexible output of backtest results to multipl
 - Validate argument parsing and data output formats
 - Test packages mirror the source layout: `tests/test_backtesting`, `test_analysis`,
   `test_downloaders`, `test_preprocessors`, `test_optimization`, `test_risk`,
-  `test_exporters`, `test_scripts`
+  `test_exporters`, `test_scripts`, `test_utils`
 - Integration and functional testing to ensure end-to-end workflow reliability
 - Isolated testing with proper mocking and teardown procedures — tests must not leave files
   in the repository root

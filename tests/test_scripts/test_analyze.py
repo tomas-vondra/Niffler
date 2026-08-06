@@ -374,10 +374,44 @@ class TestAnalyzeScript(unittest.TestCase):
             self.assertEqual(saved_data['n_periods'], 2)
             self.assertIn('period_results', saved_data)
             self.assertIn('metadata', saved_data)
-            
+            # No record supplied: the file keeps its previous shape.
+            self.assertNotIn('provenance', saved_data)
+
         finally:
             os.unlink(temp_output.name)
-    
+
+    def test_save_results_embeds_provenance(self):
+        """A walk-forward verdict must be traceable to the code and data behind it."""
+        mock_result = Mock()
+        mock_result.analysis_type = 'walk_forward'
+        mock_result.strategy_name = 'SimpleMAStrategy'
+        mock_result.symbol = 'TEST'
+        mock_result.analysis_start_date = datetime(2023, 1, 1)
+        mock_result.analysis_end_date = datetime(2023, 12, 31)
+        mock_result.n_periods = 1
+        mock_result.combined_metrics = {}
+        mock_result.stability_metrics = {}
+        mock_result.analysis_parameters = {}
+        mock_result.metadata = None
+        mock_result.get_summary_statistics.return_value = {}
+        mock_result.get_performance_consistency.return_value = {}
+        mock_result.to_dataframe.return_value = pd.DataFrame({'period': [1]})
+
+        provenance = {'code': {'git_sha': 'a' * 40, 'dirty': True}}
+
+        temp_output = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        temp_output.close()
+
+        try:
+            analyze.save_results(mock_result, temp_output.name, provenance=provenance)
+
+            with open(temp_output.name, 'r') as f:
+                saved_data = json.load(f)
+
+            self.assertEqual(saved_data['provenance'], provenance)
+        finally:
+            os.unlink(temp_output.name)
+
     def test_save_results_monte_carlo(self):
         """Test saving Monte Carlo analysis results."""
         # Create mock result
@@ -478,7 +512,7 @@ class TestAnalyzeScript(unittest.TestCase):
     @patch('analyze.load_data')
     @patch('analyze.save_results')
     @patch('analyze.run_walk_forward_analysis')
-    @patch('sys.argv', ['analyze.py', '--data', 'test.csv', '--analysis', 'walk_forward', 
+    @patch('sys.argv', ['analyze.py', '--data', 'test.csv', '--analysis', 'walk_forward',
                        '--strategy', 'simple_ma', '--params', '{"short_window": 10, "long_window": 20}',
                        '--output', 'results.json'])
     def test_main_with_output_file(self, mock_run_wf, mock_save_results, mock_load_data, mock_setup_logging):
@@ -487,13 +521,19 @@ class TestAnalyzeScript(unittest.TestCase):
         mock_load_data.return_value = self.test_data
         mock_result = Mock()
         mock_run_wf.return_value = mock_result
-        
-        with patch('analyze.load_parameters') as mock_load_params:
+
+        provenance = {'run_timestamp_utc': '2026-01-01T00:00:00+00:00'}
+        with patch('analyze.load_parameters') as mock_load_params, \
+                patch('analyze.collect_provenance', return_value=provenance) as mock_collect:
             mock_load_params.return_value = self.test_params
             analyze.main()
-        
-        # Verify save_results was called
-        mock_save_results.assert_called_once_with(mock_result, 'results.json')
+
+        # Verify save_results was called, carrying the provenance record for the run
+        mock_save_results.assert_called_once_with(
+            mock_result, 'results.json', provenance=provenance
+        )
+        # Provenance is fingerprinted against the input file the analysis actually read.
+        mock_collect.assert_called_once_with('test.csv')
 
     @patch('analyze.setup_logging')
     @patch('analyze.load_data')
