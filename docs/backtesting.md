@@ -29,6 +29,21 @@ python scripts/backtest.py --data <data_file> [--strategy <strategy_name>] [--ca
 - `--max-positions`: Maximum concurrent positions, default: 5
 - `--max-risk-per-trade`: Maximum portfolio risk per trade, default: 0.02
 
+**Transaction costs:**
+- `--cost-model`: `none` (default), `fixed` or `volume` — see
+  [Transaction costs](#transaction-costs)
+- `--slippage-bps`: fixed model only, execution slippage in basis points, default 5
+- `--half-spread-bps`: fixed and volume models, half the bid/ask spread in basis points,
+  default 1
+- `--impact-coefficient`: volume model only, coefficient on `sqrt(participation)` as a
+  fraction of price, default 0.1
+- `--max-participation`: volume model only, largest share of a bar's volume one order may
+  take, default 0.1
+
+A flag the selected model does not read is an **error**, not a silently ignored argument:
+`--cost-model fixed --impact-coefficient 0.2` exits non-zero rather than charging no impact
+while you believe otherwise.
+
 **Export and logging:**
 - `--exporters`: Comma-separated list — `console` (default), `csv`, `elasticsearch`
 - `--csv-output-dir`: Directory for CSV output, default: current directory
@@ -110,9 +125,16 @@ regression.
 
 **Buy Trade Execution:**
 - Calculates maximum investment considering commission costs
-- Solves for trade value where `trade_value + (trade_value * commission) = available_cash * position_size`
+- Solves for the largest trade value where
+  `trade_value + (trade_value * commission) <= available_cash * position_size` holds **in
+  floating point**, not just on paper. `budget / (1 + commission)` recomposes one or two ULP
+  above the budget for most balances, and the affordability check below then rejected the
+  order silently; `_affordable_trade_value` steps the quotient down with `math.nextafter`
+  until it genuinely fits. This can only move the order below the budget, never above it
 - Validates against minimum order value and available cash
 - Updates cash and position accordingly
+- The engine trades **fractional units**, so a balance smaller than one share is not
+  "insufficient cash" — it buys a fraction of a share
 
 **Sell Trade Execution:**
 - Calculates shares to sell based on position size and current holdings
@@ -130,6 +152,81 @@ regression.
   distances keep measuring from the real cost basis
 - The existing stop is never weakened - an order carrying no stop leaves it armed, and a
   supplied stop is adopted only when it is tighter
+
+### Transaction costs
+
+Commission was the only cost the engine ever charged. Fills happened at the exact next-bar
+open, in unlimited size, which makes every "profitable" strategy profitable in a market
+that does not exist. `niffler/backtesting/cost_model.py` closes that gap.
+
+**Models**
+
+| `--cost-model` | Class | Cost of a fill |
+|----------------|-------|----------------|
+| `none` (default) | `ZeroCostModel` | nothing, unlimited size |
+| `fixed` | `FixedSlippageModel` | `slippage_bps + half_spread_bps`, independent of size |
+| `volume` | `VolumeShareSlippageModel` | `half_spread + impact_coefficient * sqrt(participation)`, capped at `max_participation * bar_volume` |
+
+The **square-root** impact law is used because that is what the empirical market-impact
+literature reports: impact grows quickly across the first slice of the book and then
+flattens. A linear term would make small orders look free and large ones implausibly
+expensive. `impact_coefficient` is dimensionless and expressed as a fraction of price —
+`0.1` means an order equal to a whole bar's volume pays 10% (1000 bps) of impact, and one
+taking 1% of the bar pays `0.1 * sqrt(0.01)` = 1% (100 bps).
+
+**Invariants**
+
+- **Costs are always adverse.** A buy fills at or above the reference price, a sell at or
+  below it, for every model and every parameterisation. This is structural: subclasses
+  implement `adverse_fraction` (a non-negative number) and the base class applies the sign.
+  A negative, non-finite or >= 100% fraction raises.
+- **Fill prices stay strictly positive.** Constructors reject a configuration whose
+  worst-case cost reaches 100%, and `fill_price` raises if a price still comes out
+  non-positive.
+- **Stops pay too.** `min(open, stop)` for a long is the *reference* price handed to the
+  cost model, so a stop exit fills at or below it — costs can only make a stop worse.
+- **The buy budget is solved against the slipped price**, not the reference price, so a
+  full-capital buy under heavy slippage still leaves cash >= 0. The order's market footprint
+  is measured at the pre-slippage size, which over-charges impact slightly and never
+  under-charges.
+- **A capped order becomes a partial fill.** The trade is recorded at the reduced quantity
+  and a `PARTIAL FILL` warning is logged; the order is never silently dropped. A stop that
+  only partly fills leaves the remainder open with its stop still armed.
+- **A bar with no usable volume is unfillable** for the volume model (missing, zero or NaN
+  volume all count), logging `ORDER NOT FILLED`. `ZeroCostModel` and `FixedSlippageModel`
+  ignore volume entirely, so old backtests over data with zero-volume bars still run.
+- **Negative basis points, negative coefficients and `max_participation <= 0` raise
+  `ValueError`** in the constructor, as does `max_participation > 1`.
+
+**Reporting**
+
+`Trade.slippage_cost` records what each execution gave up, and `BacktestResult` carries
+`total_commission` and `total_slippage`. The console exporter prints a `TRANSACTION COSTS`
+block naming the model in force, the CSV trade export gains a `slippage_cost` column, and
+the Elasticsearch trade/backtest documents carry the same fields.
+
+**Honesty**
+
+`scripts/backtest.py`, `optimize.py` and `analyze.py` print the cost model they are using,
+and emit a prominent warning on stderr whenever that model charges nothing — including
+`--cost-model fixed --slippage-bps 0 --half-spread-bps 0`. A frictionless number is never
+presented as if it described a real market.
+
+**Library use**
+
+```python
+from niffler.backtesting import BacktestEngine, FixedSlippageModel
+
+engine = BacktestEngine(
+    initial_capital=10_000,
+    commission=0.001,
+    cost_model=FixedSlippageModel(slippage_bps=5.0, half_spread_bps=1.0),
+)
+```
+
+The same `cost_model` argument exists on `BaseOptimizer`, `create_optimizer`,
+`WalkForwardAnalyzer` and `MonteCarloAnalyzer`, and defaults to `None` (frictionless)
+everywhere.
 
 #### Performance Metrics
 The `BacktestResult` provides comprehensive performance analysis:

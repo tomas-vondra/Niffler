@@ -35,6 +35,8 @@ class TestConsoleExporter(unittest.TestCase):
         self.result.sharpe_ratio = 1.25
         self.result.win_rate = 100.0
         self.result.total_trades = 1
+        self.result.total_commission = 12.5
+        self.result.total_slippage = 3.75
         self.result.portfolio_values = pd.Series(
             [10000.0, 10100.0, 10200.0],
             index=[datetime(2024, 1, 1), datetime(2024, 1, 2), datetime(2024, 1, 3)]

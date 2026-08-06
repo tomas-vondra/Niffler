@@ -6,7 +6,14 @@ from .trade import Trade
 
 @dataclass
 class BacktestResult:
-    """Contains the results of a backtest run."""
+    """
+    Contains the results of a backtest run.
+
+    ``total_commission`` and ``total_slippage`` are the two halves of what the
+    run paid to trade: commission charged on filled notional, and the cash given
+    up to slippage and spread by the configured cost model. Both are appended
+    last with a 0.0 default so results constructed by older callers still build.
+    """
     strategy_name: str
     symbol: str
     start_date: pd.Timestamp
@@ -28,3 +35,5 @@ class BacktestResult:
     largest_loss: float = 0.0
     num_winning_trades: int = 0
     num_losing_trades: int = 0
+    total_commission: float = 0.0
+    total_slippage: float = 0.0

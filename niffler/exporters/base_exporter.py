@@ -78,7 +78,8 @@ class BaseExporter(ABC):
         return str(uuid.uuid4())
     
     def create_metadata(self, result: BacktestResult, strategy_params: Dict[str, Any],
-                       symbol: str, initial_capital: float, commission: float) -> Dict[str, Any]:
+                       symbol: str, initial_capital: float, commission: float,
+                       cost_model: str = None) -> Dict[str, Any]:
         """
         Create standardized metadata for a backtest.
         
@@ -88,11 +89,16 @@ class BaseExporter(ABC):
             symbol: Trading symbol
             initial_capital: Initial capital amount
             commission: Commission rate
-            
+            cost_model: Description of the transaction cost model in force, when
+                the caller knows it
+
         Returns:
             Dictionary containing standardized metadata
         """
         return {
+            'cost_model': cost_model,
+            'total_commission': getattr(result, 'total_commission', 0.0),
+            'total_slippage': getattr(result, 'total_slippage', 0.0),
             'strategy_name': result.strategy_name,
             'strategy_params': strategy_params,
             'symbol': symbol,

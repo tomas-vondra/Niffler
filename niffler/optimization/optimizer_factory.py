@@ -1,5 +1,6 @@
 from typing import Dict, Type, List, Optional
 import pandas as pd
+from niffler.backtesting.cost_model import CostModel
 from niffler.strategies.base_strategy import BaseStrategy
 from niffler.strategies.simple_ma_strategy import SimpleMAStrategy
 from .parameter_space import ParameterSpace, SIMPLE_MA_PARAMETER_SPACE
@@ -24,7 +25,8 @@ def create_optimizer(
     initial_capital: float = 10000.0,
     commission: float = 0.001,
     sort_by: str = 'total_return',
-    n_jobs: Optional[int] = None
+    n_jobs: Optional[int] = None,
+    cost_model: Optional[CostModel] = None
 ) -> BaseOptimizer:
     """
     Create an optimizer instance based on the method name.
@@ -38,6 +40,8 @@ def create_optimizer(
         commission: Commission rate for trades (default: 0.001)
         sort_by: Metric to sort results by (default: 'total_return')
         n_jobs: Number of parallel jobs (default: auto-detect)
+        cost_model: Transaction cost model applied to every candidate backtest
+            (default: None, i.e. the engine's frictionless default)
         
     Returns:
         Optimizer instance
@@ -56,7 +60,8 @@ def create_optimizer(
         initial_capital=initial_capital,
         commission=commission,
         sort_by=sort_by,
-        n_jobs=n_jobs
+        n_jobs=n_jobs,
+        cost_model=cost_model
     )
 
 

@@ -42,7 +42,12 @@ from niffler.optimization.optimizer_factory import (
     get_available_optimizers,
     STRATEGY_CLASSES
 )
-from scripts.common import load_ohlcv_csv
+from scripts.common import (
+    add_cost_model_arguments,
+    build_cost_model,
+    load_ohlcv_csv,
+    report_cost_model,
+)
 
 
 def load_and_validate_data(file_path: str, clean_data: bool = False) -> pd.DataFrame:
@@ -108,6 +113,9 @@ def main() -> int:
                        help='Initial capital for backtesting (default: 10000)')
     parser.add_argument('--commission', type=float, default=0.001,
                        help='Commission rate per trade (default: 0.001)')
+
+    # Transaction costs (slippage, spread, liquidity)
+    add_cost_model_arguments(parser)
     
     # Data processing
     parser.add_argument('--clean', action='store_true',
@@ -144,6 +152,11 @@ def main() -> int:
         # Get strategy class and parameter space
         strategy_class = get_strategy_class(args.strategy)
         parameter_space = get_parameter_space(args.strategy)
+
+        # Transaction costs. Parameters fitted without them are fitted for a
+        # market nobody trades in, so the model is reported up front.
+        cost_model = build_cost_model(args)
+        report_cost_model(cost_model)
         
         # Create optimizer
         optimizer = create_optimizer(
@@ -154,7 +167,8 @@ def main() -> int:
             initial_capital=args.initial_capital,
             commission=args.commission,
             sort_by=args.sort_by,
-            n_jobs=args.jobs
+            n_jobs=args.jobs,
+            cost_model=cost_model
         )
         
         # Run optimization

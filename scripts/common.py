@@ -4,14 +4,27 @@ The CSV loader lives here so that ``backtest.py``, ``analyze.py`` and
 ``optimize.py`` all interpret the same file in exactly the same way: identical
 timestamp-column detection, lowercase column names, a sorted datetime index and
 identical validation errors.
+
+The transaction-cost command line lives here for the same reason: all three
+scripts must be able to express the *same* market assumption, or a strategy gets
+optimised in one market and traded in another.
 """
 
+import argparse
 import logging
 import os
+import sys
 import warnings
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
+
+from niffler.backtesting.cost_model import (
+    CostModel,
+    FixedSlippageModel,
+    VolumeShareSlippageModel,
+    ZeroCostModel,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -217,3 +230,158 @@ def _clean(df: pd.DataFrame, file_path: str) -> pd.DataFrame:
         raise ValueError(f"Data cleaning removed all rows from {file_path}")
 
     return cleaned
+
+
+# ---------------------------------------------------------------------------
+# Transaction cost model CLI
+#
+# Shared by backtest.py, optimize.py and analyze.py so that a strategy is
+# optimised, validated and backtested under one and the same market assumption.
+# Optimising frictionlessly and then backtesting with costs is the trap this
+# section exists to close.
+# ---------------------------------------------------------------------------
+
+#: Cost models selectable from the command line.
+COST_MODEL_CHOICES: Tuple[str, ...] = ('none', 'fixed', 'volume')
+
+#: Which tuning flags each model actually reads. A flag supplied for a model
+#: that ignores it is an error rather than a silently dropped argument.
+_COST_MODEL_FLAGS: Dict[str, Tuple[str, ...]] = {
+    'none': (),
+    'fixed': ('slippage_bps', 'half_spread_bps'),
+    'volume': ('half_spread_bps', 'impact_coefficient', 'max_participation'),
+}
+
+#: Values used when a model is selected but a flag it reads was not given.
+#: They are plausible defaults for a liquid instrument, not measurements of
+#: anyone's execution, which is why the chosen configuration is always printed.
+_COST_MODEL_DEFAULTS: Dict[str, float] = {
+    'slippage_bps': 5.0,
+    'half_spread_bps': 1.0,
+    'impact_coefficient': 0.1,
+    'max_participation': 0.1,
+}
+
+_SEPARATOR = '=' * 72
+
+#: Printed whenever a run's fills cost nothing, so a frictionless number is
+#: never presented as if it described a real market.
+FRICTIONLESS_WARNING = (
+    f"{_SEPARATOR}\n"
+    "WARNING: this run assumes FRICTIONLESS FILLS.\n"
+    "  Every order fills at the exact reference price in unlimited size: no\n"
+    "  bid/ask spread, no slippage, no market impact, no participation limit.\n"
+    "  Commission is the only cost charged.\n"
+    "  These results describe a market that does not exist. Re-run with\n"
+    "  --cost-model fixed or --cost-model volume before believing them.\n"
+    f"{_SEPARATOR}"
+)
+
+
+def add_cost_model_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add the shared ``--cost-model`` flags to a script's parser.
+
+    Args:
+        parser: Parser to extend.
+    """
+    group = parser.add_argument_group('transaction costs')
+    group.add_argument(
+        '--cost-model', choices=list(COST_MODEL_CHOICES), default='none',
+        help=("Transaction cost model applied to every fill: 'none' (default, "
+              "frictionless and loudly flagged as such), 'fixed' (constant "
+              "slippage + half spread) or 'volume' (half spread plus "
+              "square-root market impact, capped at a share of the bar's volume)")
+    )
+    group.add_argument(
+        '--slippage-bps', type=float, default=None,
+        help=f"Fixed model only: execution slippage in basis points "
+             f"(default: {_COST_MODEL_DEFAULTS['slippage_bps']:g})"
+    )
+    group.add_argument(
+        '--half-spread-bps', type=float, default=None,
+        help=f"Fixed and volume models: half the bid/ask spread in basis points "
+             f"(default: {_COST_MODEL_DEFAULTS['half_spread_bps']:g})"
+    )
+    group.add_argument(
+        '--impact-coefficient', type=float, default=None,
+        help=f"Volume model only: dimensionless coefficient on "
+             f"sqrt(participation), as a fraction of price "
+             f"(default: {_COST_MODEL_DEFAULTS['impact_coefficient']:g})"
+    )
+    group.add_argument(
+        '--max-participation', type=float, default=None,
+        help=f"Volume model only: largest share of a bar's volume one order may "
+             f"take, in (0, 1] (default: {_COST_MODEL_DEFAULTS['max_participation']:g})"
+    )
+
+
+def build_cost_model(args: argparse.Namespace) -> CostModel:
+    """Build the cost model a parsed command line asks for.
+
+    Flags belonging to a different model are rejected rather than ignored: a
+    silently dropped ``--impact-coefficient`` would mean the user believes they
+    are paying market impact while the run charges none.
+
+    Args:
+        args: Parsed arguments carrying the flags added by
+            :func:`add_cost_model_arguments`.
+
+    Returns:
+        The configured cost model.
+
+    Raises:
+        ValueError: If the model name is unknown, or a flag was supplied that
+            the selected model does not read. Invalid parameter values raise
+            from the model constructors themselves.
+    """
+    choice = getattr(args, 'cost_model', 'none') or 'none'
+    if choice not in COST_MODEL_CHOICES:
+        raise ValueError(
+            f"Unknown cost model '{choice}'. Available: {', '.join(COST_MODEL_CHOICES)}"
+        )
+
+    accepted = _COST_MODEL_FLAGS[choice]
+    ignored = sorted(
+        f"--{name.replace('_', '-')}"
+        for name in _COST_MODEL_DEFAULTS
+        if getattr(args, name, None) is not None and name not in accepted
+    )
+    if ignored:
+        raise ValueError(
+            f"--cost-model {choice} does not use {', '.join(ignored)}. "
+            f"Remove the flag(s), or select a cost model that reads them "
+            f"(fixed: --slippage-bps/--half-spread-bps; volume: "
+            f"--half-spread-bps/--impact-coefficient/--max-participation)."
+        )
+
+    values = {
+        name: (getattr(args, name) if getattr(args, name, None) is not None
+               else _COST_MODEL_DEFAULTS[name])
+        for name in accepted
+    }
+
+    if choice == 'fixed':
+        return FixedSlippageModel(**values)
+    if choice == 'volume':
+        return VolumeShareSlippageModel(**values)
+    return ZeroCostModel()
+
+
+def report_cost_model(cost_model: CostModel, stream=None) -> bool:
+    """Print the cost model in force, warning loudly when it charges nothing.
+
+    Args:
+        cost_model: The model the run will use.
+        stream: Stream the frictionless warning goes to (default ``sys.stderr``).
+            The one-line description always goes to stdout, beside the results.
+
+    Returns:
+        True when the frictionless warning was emitted.
+    """
+    print(f"Cost model: {cost_model.description}")
+
+    if not cost_model.is_frictionless:
+        return False
+
+    print(FRICTIONLESS_WARNING, file=stream if stream is not None else sys.stderr)
+    return True

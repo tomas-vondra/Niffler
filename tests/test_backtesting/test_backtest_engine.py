@@ -207,8 +207,16 @@ class TestBacktestEngine(unittest.TestCase):
         self.assertEqual(trade.price, 100.0)
         self.assertAlmostEqual(trade.value, 4995.002, places=2)  # 5000 / 1.001
         
-    def test_execute_buy_trade_insufficient_cash(self):
-        """Test buy trade with insufficient cash."""
+    def test_execute_buy_trade_small_balance_buys_a_fraction(self):
+        """
+        A balance smaller than one share is not insufficient cash.
+
+        The engine trades fractional units, so $50 at $100 a share buys half a
+        share. This used to return None - not by design, but because
+        ``budget / (1 + commission)`` recomposed to a value one ULP above the
+        budget and the affordability check rejected it. The old test asserted the
+        rounding bug rather than a rule.
+        """
         timestamp = pd.Timestamp('2024-01-01')
         trade = self.engine._execute_buy_trade(
             timestamp=timestamp,
@@ -217,8 +225,26 @@ class TestBacktestEngine(unittest.TestCase):
             position_size=1.0,
             available_cash=50.0
         )
-        
-        self.assertIsNone(trade)
+
+        self.assertIsNotNone(trade)
+        self.assertAlmostEqual(trade.value, 50.0 / 1.001, places=6)
+        self.assertLessEqual(trade.value + trade.commission, 50.0)
+
+    def test_execute_buy_trade_no_cash(self):
+        """With nothing to spend there is nothing to buy."""
+        timestamp = pd.Timestamp('2024-01-01')
+
+        for available_cash in (0.0, -10.0):
+            with self.subTest(available_cash=available_cash):
+                trade = self.engine._execute_buy_trade(
+                    timestamp=timestamp,
+                    symbol="TEST",
+                    price=100.0,
+                    position_size=1.0,
+                    available_cash=available_cash
+                )
+
+                self.assertIsNone(trade)
         
     def test_execute_buy_trade_below_min_order_value(self):
         """Test buy trade below minimum order value."""

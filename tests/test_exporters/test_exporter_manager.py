@@ -41,6 +41,8 @@ class TestExporterManager(unittest.TestCase):
         self.mock_result.largest_loss = 200.0
         self.mock_result.num_winning_trades = 16
         self.mock_result.num_losing_trades = 9
+        self.mock_result.total_commission = 30.0
+        self.mock_result.total_slippage = 12.0
     
     def test_init(self):
         """Test ExporterManager initialization."""
@@ -391,6 +393,9 @@ class TestExporterManager(unittest.TestCase):
         )
         
         expected_metadata = {
+            'cost_model': None,
+            'total_commission': 30.0,
+            'total_slippage': 12.0,
             'strategy_name': 'Simple MA Strategy',
             'strategy_params': strategy_params,
             'symbol': symbol,
@@ -471,6 +476,8 @@ class TestExporterCreationFailuresAreReported(unittest.TestCase):
         self.result.largest_loss = 200.0
         self.result.num_winning_trades = 6
         self.result.num_losing_trades = 4
+        self.result.total_commission = 10.0
+        self.result.total_slippage = 4.0
         self.result.symbol = 'BTC-USD'
         self.result.initial_capital = 10000.0
         self.result.trades = []

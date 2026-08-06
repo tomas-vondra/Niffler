@@ -23,6 +23,10 @@ class Trade:
         value: Notional value of the trade (price * quantity), excluding commission
         commission: Commission charged for this execution, in account currency.
             Optional with a 0.0 default so existing callers keep working.
+        slippage_cost: Cash given up to slippage and spread on this execution,
+            i.e. ``|fill price - reference price| * quantity``. Always >= 0 -
+            transaction costs are never favourable. Optional with a 0.0 default,
+            appended last, so existing positional callers keep working.
     """
     timestamp: pd.Timestamp
     symbol: str
@@ -31,3 +35,4 @@ class Trade:
     quantity: float
     value: float
     commission: float = 0.0
+    slippage_cost: float = 0.0

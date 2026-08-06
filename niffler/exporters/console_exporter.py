@@ -27,9 +27,31 @@ class ConsoleExporter(BaseExporter):
         """
         self.require_valid_result(result, "console")
 
-        self._print_backtest_results(result, backtest_id)
+        self._print_backtest_results(result, backtest_id, metadata)
     
-    def _print_backtest_results(self, result: BacktestResult, backtest_id: str) -> None:
+    def _print_transaction_costs(self, result: BacktestResult,
+                                 metadata: Dict[str, Any]) -> None:
+        """
+        Print what the run paid to trade, and under which cost model.
+
+        The block is printed even when everything in it is zero: a run with no
+        slippage is a frictionless run, and saying so out loud is the difference
+        between a stated assumption and a silent one.
+
+        Args:
+            result: BacktestResult holding the cost totals
+            metadata: Backtest metadata; its 'cost_model' entry is reported when
+                the caller supplied one
+        """
+        print("\nTRANSACTION COSTS:")
+        cost_model = (metadata or {}).get('cost_model')
+        if cost_model:
+            print(f"  Cost Model: {cost_model}")
+        print(f"  Total Commission: ${getattr(result, 'total_commission', 0.0):,.2f}")
+        print(f"  Total Slippage: ${getattr(result, 'total_slippage', 0.0):,.2f}")
+
+    def _print_backtest_results(self, result: BacktestResult, backtest_id: str,
+                                metadata: Dict[str, Any] = None) -> None:
         """Print formatted backtest results to console."""
         print(f"\n{'='*60}")
         print(f"BACKTEST RESULTS")
@@ -47,6 +69,8 @@ class ConsoleExporter(BaseExporter):
         print(f"  Sharpe Ratio: {result.sharpe_ratio:.3f}")
         print(f"  Win Rate: {result.win_rate:.1f}%")
         print(f"  Total Trades: {result.total_trades}")
+
+        self._print_transaction_costs(result, metadata)
         
         if result.trades:
             print(f"\nFIRST 5 TRADES:")

@@ -17,7 +17,7 @@ from niffler.strategies.simple_ma_strategy import SimpleMAStrategy
 from niffler.risk import FixedRiskManager
 from niffler.exporters import ExporterManager
 from niffler.config.logging import setup_logging
-from scripts.common import load_ohlcv_csv
+from scripts.common import add_cost_model_arguments, build_cost_model, load_ohlcv_csv, report_cost_model
 
 
 def extract_symbol_from_filename(file_path: str) -> str:
@@ -132,6 +132,9 @@ Examples:
                        help='Initial capital amount (default: 10000)')
     parser.add_argument('--commission', type=float, default=0.001,
                        help='Commission rate per trade (default: 0.001)')
+
+    # Transaction costs (slippage, spread, liquidity)
+    add_cost_model_arguments(parser)
     
     # Output options
     # Get available exporters dynamically
@@ -226,11 +229,17 @@ Examples:
         else:
             print("Risk Management: None")
         
+        # Transaction costs. Built before the engine so an unusable combination
+        # of flags fails before any work is done.
+        cost_model = build_cost_model(args)
+        report_cost_model(cost_model)
+
         # Initialize backtest engine
         engine = BacktestEngine(
             initial_capital=args.capital,
             commission=args.commission,
-            min_order_value=args.min_order_value
+            min_order_value=args.min_order_value,
+            cost_model=cost_model
         )
         
         print("Running backtest...")
@@ -266,7 +275,8 @@ Examples:
             strategy_params=strategy_params,
             symbol=symbol,
             initial_capital=args.capital,
-            commission=args.commission
+            commission=args.commission,
+            cost_model=cost_model.description
         )
 
         return report_export_outcome(export_result, exporter_manager.get_exporter_names())

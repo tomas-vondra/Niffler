@@ -183,6 +183,7 @@ class CSVExporter(BaseExporter):
                 'value': trade.value,
                 # Optional on the Trade dataclass - read defensively.
                 'commission': getattr(trade, 'commission', 0.0),
+                'slippage_cost': getattr(trade, 'slippage_cost', 0.0),
                 'backtest_id': backtest_id
             })
 
