@@ -24,9 +24,18 @@ The short version, because these are easy to "helpfully" undo:
 | `max_drawdown` is **negative** | Use `max()` for "worst" or treat it as lower-is-better |
 | Failures **raise** and exit non-zero | Log a message and return normally |
 | Provenance is collected **once per run at the CLI** and never raises | Collect it inside an exporter, or let a missing `git` fail a backtest |
+| Transaction costs are **always adverse** and apply to stops | Let a model return a negative cost, price a stop exit at the raw stop, or size a buy on the pre-slippage price |
+| A budget-exact buy is **affordable** (`_affordable_trade_value`) | Restore a bare `budget / (1 + commission)`, or "fix" the overshoot by loosening the cash guard |
+| The benchmark pays the **same** commission and cost model, and enters no earlier than `execution_lag` | Price its entry outside `_execute_buy_trade`, or let it buy at bar 0 under `next_bar_open` |
+| Below `min_trades_for_significance` there is **no verdict**; `is_significant` is `None` | Collapse `None` to `False`, or print a p-value without the "not meaningful" label |
+| An absent benchmark is `None`, not `0.0` | Default the comparison fields to zero, or treat a missing benchmark as a zero excess return |
 
-Scope limits that are deliberate, not oversights: long-only, no slippage/spread model, no
-live trading, one strategy, Kelly risk manager is a stub.
+Scope limits that are deliberate, not oversights: long-only, no live trading, one strategy,
+Kelly risk manager is a stub. Slippage/spread/market impact **are** modelled now
+(`niffler/backtesting/cost_model.py`) but default to off, and a run with no cost model
+labels itself as frictionless. There is **no multiple-testing correction and no deflated
+Sharpe ratio**: a p-value from a run whose parameters were fitted on the same data
+overstates the evidence, and the docs and console say so rather than pretending otherwise.
 
 ## Development Setup
 
@@ -175,8 +184,27 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
   - `round_trip.py` - `pair_trades()` → `List[RoundTrip]`, the **single** FIFO trade-pairing
     routine (correct partial fills both directions, pro-rata commission, P&L net of entry
     and exit commission). Used by engine statistics *and* the Elasticsearch position export
-  - `trade.py` - Trade execution and tracking (`Trade` carries an optional `commission`
-    field, defaulted, as its last positional field)
+  - `cost_model.py` - Transaction cost models: `FillRequest`, the abstract `CostModel`,
+    and `ZeroCostModel` (the default) / `FixedSlippageModel` / `VolumeShareSlippageModel`.
+    Subclasses implement `adverse_fraction`, **not** `fill_price`: the base class owns the
+    sign, so no parameterisation can produce a favourable fill. `max_fillable_quantity`
+    caps how much of a bar one order may take
+  - `trade.py` - Trade execution and tracking (`Trade` carries optional `commission` and
+    `slippage_cost` fields, defaulted, as its last positional fields)
+  - `metrics.py` - `periodic_returns`, `max_drawdown_pct`, `sharpe_ratio`,
+    `sharpe_ratio_of_returns`. The **single** implementation of both equity-curve metrics;
+    the engine and the benchmark both go through it so the two curves cannot drift apart.
+    `periods_per_year` is always a parameter, never a constant
+  - `benchmark.py` - Buy-and-hold benchmark (`BENCHMARK_CHOICES`, `BenchmarkResult`,
+    `compute_benchmark`, `compute_buy_and_hold`, `information_ratio`, `BenchmarkError`).
+    The entry goes through `BacktestEngine._execute_buy_trade`, so the benchmark pays the
+    same commission and cost model as the strategy; it enters at
+    `data.index[engine.execution_lag]`, waiting for the first bar that can absorb it
+  - `significance.py` - `assess_significance` (t-test on mean round-trip return from
+    `pair_trades()`, bootstrap Sharpe CI, minimum-trades gate) plus a hand-rolled exact
+    Student-t survival function (`student_t_two_sided_p`,
+    `regularized_incomplete_beta`) - scipy is **not** a dependency and a normal
+    approximation is not acceptable at n=30
   - `backtest_result.py` - Performance metrics and results
 - `niffler/strategies/` - Trading strategy implementations
   - `base_strategy.py` - Abstract base class for strategies
@@ -234,8 +262,10 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
 - `config/elasticsearch/mappings/` - Elasticsearch schema definitions
   (`backtests`, `portfolio`, `trades`, `positions`)
 - `scripts/` - Command-line interfaces for core functionality
-  - `common.py` - **The** shared OHLCV CSV loader (`load_ohlcv_csv`) used by `backtest.py`,
-    `analyze.py` and `optimize.py`. Header normalisation, timestamp-column detection
+  - `common.py` - **The** shared OHLCV CSV loader (`load_ohlcv_csv`) *and* the shared
+    transaction-cost CLI (`add_cost_model_arguments`, `build_cost_model`,
+    `report_cost_model`), used by `backtest.py`, `analyze.py` and `optimize.py`. A cost
+    flag belonging to a different `--cost-model` is an error, never silently ignored.Header normalisation, timestamp-column detection
     (`timestamp`/`date`/`datetime`/`time` plus pandas' unnamed index column), datetime
     parsing, required-column and duplicate-timestamp validation, index sorting, optional
     `--clean` pass. Do not add a fourth loader
@@ -269,8 +299,26 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
   price and only ever tightens the stop (a `None` stop leaves the existing one armed)
 - **Stops**: probed against the bar's traded range (low for longs, high for shorts) and
   filled at `min(open, stop)` for a long, so a gap-through fills at the open
-- **Long only.** A `-1` signal with no open position is a no-op. No shorting, no slippage
-  or spread model, no live trading
+- **Buy sizing**: `_affordable_trade_value` returns the largest notional for which
+  `trade_value + trade_value * commission <= budget` holds *in floating point*, stepping the
+  quotient down with `math.nextafter` when the round trip overshoots. A bare
+  `budget / (1 + commission)` recomposes one or two ULP above the budget for 73% of
+  balances at the default commission of 0.001 (the rate varies unpredictably with the
+  commission), and the affordability check then dropped the order silently - at
+  `position_size=1.0` that meant most buy signals never became trades. Do not replace this
+  with a tolerance on the cash comparison: the order must never exceed the budget
+- **Transaction costs**: every fill goes through `BacktestEngine.cost_model`, which
+  defaults to `ZeroCostModel` so pre-existing numbers stay reproducible. Costs are always
+  adverse (a buy pays up, a sell gives up), apply to **stop exits too** (the reference price
+  is `min(open, stop)` for a long and the model may only worsen it), and the buy budget is
+  solved against the **slipped** price so cash can never go negative. A model that caps
+  participation truncates the order to a logged **partial fill** rather than dropping it; a
+  bar with no usable volume is unfillable for the volume model and logs `ORDER NOT FILLED`.
+  The impact term is evaluated on the pre-slippage order size, which over-charges slightly
+  and never under-charges. `--cost-model` is threaded through `backtest.py`, `optimize.py`
+  and `analyze.py` so a strategy is fitted and validated in the market it is traded in
+- **Long only.** A `-1` signal with no open position is a no-op. No shorting, no live
+  trading
 
 ### Data Sources
 - **CCXT**: Cryptocurrency exchange data with pagination, bounded retries and exponential

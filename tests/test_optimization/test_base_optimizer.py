@@ -499,6 +499,10 @@ class TestSaveResultsJsonValidity(unittest.TestCase):
         backtest_result.max_drawdown = metrics.get('max_drawdown', -1.0)
         backtest_result.total_trades = metrics.get('total_trades', 5)
         backtest_result.win_rate = metrics.get('win_rate', 50.0)
+        backtest_result.benchmark_return_pct = metrics.get('benchmark_return_pct', 0.5)
+        backtest_result.excess_return_pct = metrics.get('excess_return_pct', 0.5)
+        backtest_result.round_trip_count = metrics.get('round_trip_count', 2)
+        backtest_result.p_value = metrics.get('p_value', 0.4)
         return OptimizationResult(parameters={'param1': 10}, backtest_result=backtest_result)
 
     def test_non_finite_metrics_are_written_as_null(self):
@@ -630,6 +634,78 @@ class TestSortByMaxDrawdown(unittest.TestCase):
         ordered = optimizer._sort_and_log_results([low, high])
 
         self.assertEqual(ordered[0].backtest_result.total_return_pct, 9.0)
+
+
+class TestSortByExcessReturn(unittest.TestCase):
+    """Ranking by return over buy-and-hold, and what an absent benchmark does."""
+
+    def setUp(self):
+        self.parameter_space = ParameterSpace({
+            'param1': {'type': 'int', 'min': 10, 'max': 20, 'step': 5}
+        })
+        self.data = pd.DataFrame({
+            'open': [100.0, 101.0, 102.0],
+            'high': [101.0, 102.0, 103.0],
+            'low': [99.0, 100.0, 101.0],
+            'close': [100.5, 101.5, 102.5],
+            'volume': [1000, 1100, 1200]
+        }, index=pd.date_range('2024-01-01', periods=3, freq='D'))
+
+    def _optimizer(self):
+        return TestOptimizer(
+            strategy_class=MockStrategy,
+            parameter_space=self.parameter_space,
+            data=self.data,
+            sort_by='excess_return_pct'
+        )
+
+    @staticmethod
+    def _result(excess):
+        backtest_result = Mock()
+        backtest_result.total_return = 100.0
+        backtest_result.total_return_pct = 1.0
+        backtest_result.sharpe_ratio = 1.0
+        backtest_result.max_drawdown = -5.0
+        backtest_result.total_trades = 5
+        backtest_result.win_rate = 50.0
+        backtest_result.excess_return_pct = excess
+        result = Mock(spec=OptimizationResult)
+        result.parameters = {'param1': 10}
+        result.backtest_result = backtest_result
+        return result
+
+    def test_the_largest_excess_ranks_first(self):
+        ordered = self._optimizer()._sort_and_log_results(
+            [self._result(-20.0), self._result(5.0), self._result(-3.0)]
+        )
+
+        self.assertEqual([r.backtest_result.excess_return_pct for r in ordered],
+                         [5.0, -3.0, -20.0])
+
+    def test_a_losing_field_still_ranks_the_least_bad_first(self):
+        """Every parameter set can lose to buy-and-hold; the sort must show it."""
+        ordered = self._optimizer()._sort_and_log_results(
+            [self._result(-50.0), self._result(-12.0)]
+        )
+
+        self.assertEqual(ordered[0].backtest_result.excess_return_pct, -12.0)
+        self.assertLess(ordered[0].backtest_result.excess_return_pct, 0.0)
+
+    def test_a_result_with_no_benchmark_sorts_last(self):
+        """No comparison is not a zero excess return, so it cannot win."""
+        no_benchmark = self._result(None)
+
+        ordered = self._optimizer()._sort_and_log_results(
+            [no_benchmark, self._result(-90.0)]
+        )
+
+        self.assertEqual(ordered[0].backtest_result.excess_return_pct, -90.0)
+        self.assertIs(ordered[-1], no_benchmark)
+
+    def test_the_metric_is_selectable(self):
+        self.assertIn('excess_return_pct', BaseOptimizer.METRICS_CONFIG)
+        higher_is_better, _ = BaseOptimizer.METRICS_CONFIG['excess_return_pct']
+        self.assertTrue(higher_is_better)
 
 
 class TestOptimizerImportIsolation(unittest.TestCase):

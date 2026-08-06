@@ -10,6 +10,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from niffler.strategies.base_strategy import BaseStrategy
 from niffler.backtesting.backtest_engine import BacktestEngine
 from niffler.backtesting.backtest_result import BacktestResult
+from niffler.backtesting.cost_model import CostModel
 from niffler.optimization.parameter_space import ParameterSpace
 from niffler.optimization.optimizer_factory import create_optimizer, get_available_optimizers
 from .analysis_result import AnalysisResult, log_failure_rate
@@ -122,7 +123,8 @@ class WalkForwardAnalyzer:
                  optimization_method: str = 'grid',
                  optimization_metric: str = 'total_return',
                  n_jobs: Optional[int] = None,
-                 max_results_in_memory: int = 1000):
+                 max_results_in_memory: int = 1000,
+                 cost_model: Optional[CostModel] = None):
         """
         Initialize Walk-Forward Analyzer.
 
@@ -144,6 +146,10 @@ class WalkForwardAnalyzer:
             optimization_metric: Metric the optimizer selects parameters by
             n_jobs: Number of parallel jobs (None = auto-detect)
             max_results_in_memory: Maximum number of results to keep in memory
+            cost_model: Transaction cost model applied to every fill, in both the
+                per-fold optimisation and the out-of-sample evaluation. Passing it
+                to only one of the two would measure a strategy fitted in one
+                market against results from another.
 
         Raises:
             ValueError: If the configuration is inconsistent (e.g. ``walk_forward`` mode
@@ -163,6 +169,7 @@ class WalkForwardAnalyzer:
         self.optimization_metric = optimization_metric
         self.n_jobs = n_jobs or min(mp.cpu_count(), 4)  # Default to max 4 processes
         self.max_results_in_memory = max_results_in_memory
+        self.cost_model = cost_model
 
         self._validate_parameters()
 
@@ -175,7 +182,8 @@ class WalkForwardAnalyzer:
 
         self._backtest_engine = BacktestEngine(
             initial_capital=self.initial_capital,
-            commission=self.commission
+            commission=self.commission,
+            cost_model=self.cost_model
         )
 
     def _validate_parameters(self) -> None:
@@ -329,6 +337,8 @@ class WalkForwardAnalyzer:
                 'optimal_parameters': self.optimal_parameters,
                 'optimization_method': self.optimization_method,
                 'optimization_metric': self.optimization_metric,
+                'cost_model': (self.cost_model.description
+                               if self.cost_model is not None else None),
                 'train_window_months': (self.train_window_months
                                         if self.mode == MODE_WALK_FORWARD else None),
                 'test_window_months': self.test_window_months,
@@ -420,7 +430,7 @@ class WalkForwardAnalyzer:
                             self.strategy_class, self.parameter_space,
                             self.optimal_parameters, self.mode,
                             self.optimization_method, self.optimization_metric,
-                            self.initial_capital, self.commission
+                            self.initial_capital, self.commission, self.cost_model
                         )
                         future_to_window[future] = window
                     except Exception as e:
@@ -559,6 +569,7 @@ class WalkForwardAnalyzer:
             optimization_metric=self.optimization_metric,
             initial_capital=self.initial_capital,
             commission=self.commission,
+            cost_model=self.cost_model,
             backtest_engine=self._backtest_engine,
         )
 
@@ -568,8 +579,9 @@ class WalkForwardAnalyzer:
                                 parameter_space: Optional[ParameterSpace],
                                 optimal_parameters: Optional[Dict[str, Any]],
                                 mode: str, optimization_method: str, optimization_metric: str,
-                                initial_capital: float,
-                                commission: float) -> Optional[WalkForwardFold]:
+                                initial_capital: float, commission: float,
+                                cost_model: Optional[CostModel] = None
+                                ) -> Optional[WalkForwardFold]:
         """Static entry point for parallel fold execution (must be picklable)."""
         try:
             return WalkForwardAnalyzer._execute_fold(
@@ -584,6 +596,7 @@ class WalkForwardAnalyzer:
                 optimization_metric=optimization_metric,
                 initial_capital=initial_capital,
                 commission=commission,
+                cost_model=cost_model,
                 backtest_engine=None,
             )
         except Exception as e:
@@ -602,6 +615,7 @@ class WalkForwardAnalyzer:
                       optimization_metric: str,
                       initial_capital: float,
                       commission: float,
+                      cost_model: Optional[CostModel] = None,
                       backtest_engine: Optional[BacktestEngine] = None) -> Optional[WalkForwardFold]:
         """
         Fit parameters on the training window and evaluate them out-of-sample.
@@ -618,6 +632,7 @@ class WalkForwardAnalyzer:
             optimization_metric: Metric the optimizer sorts by
             initial_capital: Starting capital for backtests
             commission: Commission rate for trades
+            cost_model: Transaction cost model applied to every fill
             backtest_engine: Engine to reuse; a fresh one is created when None
 
         Returns:
@@ -632,7 +647,8 @@ class WalkForwardAnalyzer:
 
         engine = backtest_engine or BacktestEngine(
             initial_capital=initial_capital,
-            commission=commission
+            commission=commission,
+            cost_model=cost_model
         )
 
         train_return_pct: Optional[float] = None
@@ -657,6 +673,7 @@ class WalkForwardAnalyzer:
                 optimization_metric=optimization_metric,
                 initial_capital=initial_capital,
                 commission=commission,
+                cost_model=cost_model,
             )
             if parameters is None:
                 logging.warning(
@@ -712,7 +729,8 @@ class WalkForwardAnalyzer:
                                      optimization_method: str,
                                      optimization_metric: str,
                                      initial_capital: float,
-                                     commission: float
+                                     commission: float,
+                                     cost_model: Optional[CostModel] = None
                                      ) -> Tuple[Optional[Dict[str, Any]], Optional[float]]:
         """
         Fit parameters on a single in-sample training window.
@@ -725,6 +743,8 @@ class WalkForwardAnalyzer:
             optimization_metric: Metric the optimizer sorts by
             initial_capital: Starting capital for backtests
             commission: Commission rate for trades
+            cost_model: Transaction cost model applied to every candidate fill, so
+                the parameters are fitted in the same market they are graded in
 
         Returns:
             Tuple of (best parameters, in-sample total return percentage). Both are None
@@ -739,6 +759,7 @@ class WalkForwardAnalyzer:
             commission=commission,
             sort_by=optimization_metric,
             n_jobs=1,  # never nest process pools inside a fold
+            cost_model=cost_model,
         )
 
         results = optimizer.optimize()

@@ -79,7 +79,8 @@ class BaseExporter(ABC):
     
     def create_metadata(self, result: BacktestResult, strategy_params: Dict[str, Any],
                        symbol: str, initial_capital: float, commission: float,
-                       provenance: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                       provenance: Optional[Dict[str, Any]] = None,
+                       cost_model: str = None) -> Dict[str, Any]:
         """
         Create standardized metadata for a backtest.
 
@@ -93,12 +94,17 @@ class BaseExporter(ABC):
                 :func:`niffler.utils.provenance.collect_provenance`). Collect it once at
                 the call site that owns the run and pass it in - collecting it per
                 exporter would re-hash the input data file for every destination.
+            cost_model: Description of the transaction cost model in force, when
+                the caller knows it
 
         Returns:
             Dictionary containing standardized metadata, carrying a ``provenance`` key
             when a record was supplied
         """
         metadata = {
+            'cost_model': cost_model,
+            'total_commission': getattr(result, 'total_commission', 0.0),
+            'total_slippage': getattr(result, 'total_slippage', 0.0),
             'strategy_name': result.strategy_name,
             'strategy_params': strategy_params,
             'symbol': symbol,

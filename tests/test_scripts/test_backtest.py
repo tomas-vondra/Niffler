@@ -613,5 +613,85 @@ class TestBacktestExportReporting(unittest.TestCase):
         )
 
 
+class TestBenchmarkCommandLine(unittest.TestCase):
+    """The benchmark and significance flags must reach the engine."""
+
+    def _run(self, argv):
+        """Run main() with everything but the engine construction mocked out."""
+        data = pd.DataFrame({
+            'open': [100.0] * 10,
+            'high': [105.0] * 10,
+            'low': [95.0] * 10,
+            'close': [102.0] * 10,
+            'volume': [1000.0] * 10
+        }, index=pd.date_range('2024-01-01', periods=10, freq='D'))
+
+        result = BacktestResult(
+            strategy_name="TestStrategy", symbol="TEST",
+            start_date=data.index[0], end_date=data.index[-1],
+            initial_capital=10000.0, final_capital=10000.0,
+            total_return=0.0, total_return_pct=0.0, trades=[],
+            portfolio_values=pd.Series([10000.0] * 10, index=data.index),
+            max_drawdown=0.0, sharpe_ratio=0.0, win_rate=0.0,
+            total_trades=0, profit_factor=0.0
+        )
+
+        with patch('sys.argv', argv), \
+                patch('scripts.backtest.setup_logging'), \
+                patch('scripts.backtest.load_data', return_value=data), \
+                patch('scripts.backtest.SimpleMAStrategy') as strategy_class, \
+                patch('scripts.backtest.ExporterManager') as manager_class, \
+                patch('scripts.backtest.BacktestEngine') as engine_class:
+            strategy_class.return_value = MagicMock()
+            engine = MagicMock()
+            engine.run_backtest.return_value = result
+            engine_class.return_value = engine
+
+            manager = MagicMock()
+            manager.get_exporter_count.return_value = 1
+            manager.export_backtest_result.return_value = ExportSummary(
+                successes=['ConsoleExporter'], failures=[], backtest_id='abc'
+            )
+            manager_class.return_value = manager
+
+            with patch('builtins.print'):
+                exit_code = main()
+
+        return exit_code, engine_class.call_args.kwargs
+
+    def test_defaults_are_buy_and_hold_and_thirty_trades(self):
+        exit_code, kwargs = self._run(['backtest.py', '--data', 'test.csv'])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(kwargs['benchmark'], 'buy_and_hold')
+        self.assertEqual(kwargs['min_trades_for_significance'], 30)
+
+    def test_benchmark_can_be_switched_off(self):
+        _, kwargs = self._run(['backtest.py', '--data', 'test.csv',
+                               '--benchmark', 'none'])
+
+        self.assertEqual(kwargs['benchmark'], 'none')
+
+    def test_significance_gate_is_configurable(self):
+        _, kwargs = self._run(['backtest.py', '--data', 'test.csv',
+                               '--min-trades-for-significance', '50'])
+
+        self.assertEqual(kwargs['min_trades_for_significance'], 50)
+
+    def test_bootstrap_flags_reach_the_engine(self):
+        _, kwargs = self._run(['backtest.py', '--data', 'test.csv',
+                               '--bootstrap-samples', '250',
+                               '--bootstrap-seed', '7'])
+
+        self.assertEqual(kwargs['bootstrap_samples'], 250)
+        self.assertEqual(kwargs['bootstrap_seed'], 7)
+
+    def test_an_unknown_benchmark_is_rejected_by_argparse(self):
+        with patch('sys.argv', ['backtest.py', '--data', 'test.csv',
+                                '--benchmark', 'spx']):
+            with self.assertRaises(SystemExit):
+                main()
+
+
 if __name__ == '__main__':
     unittest.main()

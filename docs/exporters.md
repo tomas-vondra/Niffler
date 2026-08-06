@@ -210,6 +210,26 @@ package added to `TRACKED_PACKAGES` later cannot silently land as analysed `text
 Fields with a `null` value are simply not indexed by Elasticsearch, so a run collected
 without git available costs nothing.
 
+### Benchmark and significance fields
+
+Every backtest document carries the passive comparison and the significance assessment
+alongside the strategy's own metrics: `benchmark_name`, `benchmark_return_pct`,
+`benchmark_sharpe_ratio`, `benchmark_max_drawdown`, `benchmark_total_cost`,
+`benchmark_error`, `excess_return_pct`, `information_ratio`, `round_trip_count`,
+`mean_trade_return_pct`, `t_statistic`, `p_value`, `sharpe_ci_low`, `sharpe_ci_high`,
+`sharpe_ci_confidence`, `significance_min_trades`, `is_sample_sufficient`,
+`is_significant` and `significance_verdict`. The same fields appear in the CSV exporter's
+`*_metadata.json`.
+
+Two nulls carry meaning and must not be filtered away as missing data:
+
+- a `null` benchmark field means **no comparison was run** (`--benchmark none`) or none
+  could be established (`benchmark_error` then says why). It does not mean a zero excess
+  return.
+- `is_significant: null` means the sample was below `significance_min_trades`, so **no
+  verdict was rendered**. It is not `false`. A dashboard that treats it as `false` is
+  reporting a negative result the data does not support.
+
 ### Positions reconcile with the metrics
 
 `niffler-positions` used to be built by a second, hand-rolled pairing loop that matched one

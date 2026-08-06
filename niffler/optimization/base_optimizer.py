@@ -12,6 +12,7 @@ import random
 
 from niffler.strategies.base_strategy import BaseStrategy
 from niffler.backtesting.backtest_engine import BacktestEngine
+from niffler.backtesting.cost_model import CostModel
 from niffler.utils.json_utils import safe_json_dump
 from .parameter_space import ParameterSpace
 from .optimization_result import OptimizationResult
@@ -39,7 +40,19 @@ class BaseOptimizer(ABC):
         # drawdown first and hand walk-forward analysis an adversarial parameter set.
         'max_drawdown': (True, lambda r: r.backtest_result.max_drawdown),
         'win_rate': (True, lambda r: r.backtest_result.win_rate),
-        'total_trades': (True, lambda r: r.backtest_result.total_trades)
+        'total_trades': (True, lambda r: r.backtest_result.total_trades),
+        # Return over buy-and-hold on the same bars, charged the same costs.
+        # Over one dataset the benchmark is a constant, so this ORDERS results
+        # identically to total_return - what it changes is what the number
+        # means: a "best" of -12 says the winning parameter set lost to doing
+        # nothing, which sorting on total_return alone never tells you. A result
+        # with no benchmark sorts last rather than being silently treated as
+        # zero excess.
+        'excess_return_pct': (True, lambda r: (
+            r.backtest_result.excess_return_pct
+            if getattr(r.backtest_result, 'excess_return_pct', None) is not None
+            else float('-inf')
+        )),
     }
     
     def __init__(self, 
@@ -49,7 +62,8 @@ class BaseOptimizer(ABC):
                  initial_capital: float = DEFAULT_INITIAL_CAPITAL,
                  commission: float = DEFAULT_COMMISSION,
                  sort_by: str = DEFAULT_SORT_BY,
-                 n_jobs: Optional[int] = None):
+                 n_jobs: Optional[int] = None,
+                 cost_model: Optional[CostModel] = None):
         """
         Initialize base optimizer.
         
@@ -61,6 +75,9 @@ class BaseOptimizer(ABC):
             commission: Commission rate for trades
             sort_by: Metric to sort results by for display ('total_return', 'sharpe_ratio', etc.)
             n_jobs: Number of parallel jobs (None = auto-detect)
+            cost_model: Transaction cost model applied to every candidate
+                backtest. Optimising frictionlessly and then trading the winner
+                with real costs is exactly the trap this parameter closes.
         """
         self.strategy_class = strategy_class
         self.parameter_space = parameter_space
@@ -69,6 +86,7 @@ class BaseOptimizer(ABC):
         self.commission = commission
         self.sort_by = sort_by
         self.n_jobs = n_jobs or min(mp.cpu_count(), self.DEFAULT_MAX_WORKERS)
+        self.cost_model = cost_model
         
         # Validate inputs
         self._validate_inputs()
@@ -76,7 +94,8 @@ class BaseOptimizer(ABC):
         # Create reusable backtest engine for better performance
         self._backtest_engine = BacktestEngine(
             initial_capital=self.initial_capital,
-            commission=self.commission
+            commission=self.commission,
+            cost_model=self.cost_model
         )
         
         # Initialize shutdown flag for graceful termination with thread safety
@@ -169,9 +188,10 @@ class BaseOptimizer(ABC):
                 future_to_params = {}
                 for params in combinations:
                     try:
-                        future = executor.submit(self._evaluate_single_combination_static, 
-                                               params, self.strategy_class, self.data, 
-                                               self.initial_capital, self.commission)
+                        future = executor.submit(self._evaluate_single_combination_static,
+                                               params, self.strategy_class, self.data,
+                                               self.initial_capital, self.commission,
+                                               self.cost_model)
                         future_to_params[future] = params
                     except Exception as e:
                         logging.warning(f"Failed to submit job for {params}: {e}")
@@ -278,7 +298,9 @@ class BaseOptimizer(ABC):
                                           strategy_class: Type[BaseStrategy],
                                           data: pd.DataFrame,
                                           initial_capital: float,
-                                          commission: float) -> Optional[OptimizationResult]:
+                                          commission: float,
+                                          cost_model: Optional[CostModel] = None
+                                          ) -> Optional[OptimizationResult]:
         """Static method for parallel processing (must be picklable)."""
         try:
             # Create strategy instance
@@ -287,7 +309,8 @@ class BaseOptimizer(ABC):
             # Run backtest
             engine = BacktestEngine(
                 initial_capital=initial_capital,
-                commission=commission
+                commission=commission,
+                cost_model=cost_model
             )
             
             backtest_result = engine.run_backtest(strategy, data)
@@ -327,6 +350,8 @@ class BaseOptimizer(ABC):
                 'sort_by': self.sort_by,
                 'initial_capital': self.initial_capital,
                 'commission': self.commission,
+                'cost_model': (self.cost_model.description
+                               if self.cost_model is not None else None),
                 'n_combinations': len(results),
                 'timestamp': datetime.now().isoformat()
             },
@@ -345,7 +370,15 @@ class BaseOptimizer(ABC):
                     'sharpe_ratio': result.backtest_result.sharpe_ratio,
                     'max_drawdown': result.backtest_result.max_drawdown,
                     'total_trades': result.backtest_result.total_trades,
-                    'win_rate': result.backtest_result.win_rate
+                    'win_rate': result.backtest_result.win_rate,
+                    # None when no benchmark ran, which is not the same as 0.
+                    'benchmark_return_pct': getattr(
+                        result.backtest_result, 'benchmark_return_pct', None),
+                    'excess_return_pct': getattr(
+                        result.backtest_result, 'excess_return_pct', None),
+                    'round_trip_count': getattr(
+                        result.backtest_result, 'round_trip_count', 0),
+                    'p_value': getattr(result.backtest_result, 'p_value', None)
                 }
             }
             output_data['results'].append(result_data)

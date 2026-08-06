@@ -73,6 +73,15 @@ def _make_result() -> Mock:
     result.largest_loss = 0.0
     result.num_winning_trades = 1
     result.num_losing_trades = 0
+    # Transaction costs are always rendered, so they must be real numbers here.
+    result.total_commission = 10.0
+    result.total_slippage = 5.0
+    # No benchmark and no significance verdict: these tests are about the
+    # provenance line, and both blocks then take their "nothing to report" path
+    # instead of needing a full set of comparison fields.
+    result.benchmark_name = None
+    result.benchmark_error = None
+    result.significance_verdict = ''
     result.portfolio_values = pd.Series(
         [10000.0, 10100.0, 10200.0],
         index=[datetime(2024, 1, 1), datetime(2024, 1, 2), datetime(2024, 1, 3)]

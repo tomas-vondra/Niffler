@@ -134,7 +134,8 @@ class ExporterManager:
     def export_backtest_result(self, result: BacktestResult, strategy_params: Dict[str, Any],
                               symbol: str, initial_capital: float, commission: float,
                               backtest_id: str = None,
-                              provenance: Optional[Dict[str, Any]] = None) -> ExportSummary:
+                              provenance: Optional[Dict[str, Any]] = None,
+                              cost_model: str = None) -> ExportSummary:
         """
         Export backtest results using all configured exporters.
 
@@ -156,6 +157,8 @@ class ExporterManager:
                 **once** by the caller that owns the run and shared by every exporter:
                 collecting it here per exporter would re-hash the input data file for
                 each destination
+            cost_model: Description of the transaction cost model in force, so the
+                export says which market assumption produced these numbers
 
         Returns:
             ExportSummary describing which exporters succeeded, which failed and the
@@ -167,7 +170,9 @@ class ExporterManager:
 
         # Create metadata
         metadata = self._create_metadata(
-            result, strategy_params, symbol, initial_capital, commission, provenance
+            result, strategy_params, symbol, initial_capital, commission, provenance,
+            cost_model
+
         )
 
         successes: List[str] = []
@@ -207,7 +212,8 @@ class ExporterManager:
     
     def _create_metadata(self, result: BacktestResult, strategy_params: Dict[str, Any],
                         symbol: str, initial_capital: float, commission: float,
-                        provenance: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                        provenance: Optional[Dict[str, Any]] = None,
+                        cost_model: str = None) -> Dict[str, Any]:
         """
         Create standardized metadata for a backtest.
 
@@ -219,11 +225,15 @@ class ExporterManager:
             commission: Commission rate
             provenance: Optional run provenance record, included under a
                 ``provenance`` key when supplied
+            cost_model: Description of the transaction cost model in force
 
         Returns:
             Dictionary containing standardized metadata
         """
         metadata = {
+            'cost_model': cost_model,
+            'total_commission': getattr(result, 'total_commission', 0.0),
+            'total_slippage': getattr(result, 'total_slippage', 0.0),
             'strategy_name': result.strategy_name,
             'strategy_params': strategy_params,
             'symbol': symbol,
@@ -244,7 +254,9 @@ class ExporterManager:
             'largest_win': result.largest_win,
             'largest_loss': result.largest_loss,
             'num_winning_trades': result.num_winning_trades,
-            'num_losing_trades': result.num_losing_trades
+            'num_losing_trades': result.num_losing_trades,
+            **self._benchmark_metadata(result),
+            **self._significance_metadata(result),
         }
 
         # Only present when a record was collected, so a caller that opts out does not
@@ -253,6 +265,64 @@ class ExporterManager:
             metadata['provenance'] = provenance
 
         return metadata
+
+    @staticmethod
+    def _benchmark_metadata(result: BacktestResult) -> Dict[str, Any]:
+        """
+        Benchmark comparison fields for the exported document.
+
+        Read defensively so a BacktestResult built by an older caller still
+        exports. The fields stay None when no benchmark ran, which is a
+        different statement from a zero excess return and must survive as one
+        all the way into Elasticsearch.
+
+        Args:
+            result: BacktestResult to read the comparison from
+
+        Returns:
+            Dictionary of benchmark fields
+        """
+        return {
+            'benchmark_name': getattr(result, 'benchmark_name', None),
+            'benchmark_return_pct': getattr(result, 'benchmark_return_pct', None),
+            'benchmark_sharpe_ratio': getattr(result, 'benchmark_sharpe_ratio', None),
+            'benchmark_max_drawdown': getattr(result, 'benchmark_max_drawdown', None),
+            'benchmark_total_cost': getattr(result, 'benchmark_total_cost', None),
+            'benchmark_error': getattr(result, 'benchmark_error', None),
+            'excess_return_pct': getattr(result, 'excess_return_pct', None),
+            'information_ratio': getattr(result, 'information_ratio', None),
+        }
+
+    @staticmethod
+    def _significance_metadata(result: BacktestResult) -> Dict[str, Any]:
+        """
+        Statistical significance fields for the exported document.
+
+        ``is_significant`` is exported as a tri-state: True, False, or **None**
+        when the sample was below the gate. Flattening the third case to False
+        would turn "we cannot tell" into "we tested and found nothing", which is
+        a claim the data does not support.
+
+        Args:
+            result: BacktestResult to read the assessment from
+
+        Returns:
+            Dictionary of significance fields
+        """
+        is_significant = getattr(result, 'is_significant', None)
+        return {
+            'round_trip_count': getattr(result, 'round_trip_count', 0),
+            'mean_trade_return_pct': getattr(result, 'mean_trade_return_pct', None),
+            't_statistic': getattr(result, 't_statistic', None),
+            'p_value': getattr(result, 'p_value', None),
+            'sharpe_ci_low': getattr(result, 'sharpe_ci_low', None),
+            'sharpe_ci_high': getattr(result, 'sharpe_ci_high', None),
+            'sharpe_ci_confidence': getattr(result, 'sharpe_ci_confidence', None),
+            'significance_min_trades': getattr(result, 'significance_min_trades', 0),
+            'is_sample_sufficient': getattr(result, 'is_sample_sufficient', False),
+            'is_significant': is_significant,
+            'significance_verdict': getattr(result, 'significance_verdict', ''),
+        }
 
     def get_exporter_count(self) -> int:
         """Get the number of configured exporters."""
