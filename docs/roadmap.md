@@ -22,8 +22,9 @@ Kept struck through rather than deleted, so the list stays honest about what mov
   backwards-compatible re-export shims, not copies.
 - ~~Create the logger once at start~~ — done. `niffler/config/logging.py` holds the only
   `logging.basicConfig` call; every other module just calls `logging.getLogger(__name__)`,
-  and all five CLI scripts configure it inside `main()` from `--log-level`, so importing a
-  script has no logging side effect.
+  and all five CLI scripts configure it inside `main()`, so importing a script has no
+  logging side effect. (`analyze.py` still derives its level from `--verbose` rather than
+  `--log-level`; converging that flag is a separate, purely cosmetic change.)
 - ~~Unify the `__init__.py` files~~ — done. Every package `__init__.py` now declares
   `__all__` with explicit re-exports.
 - ~~Work out why `__pycache__` is everywhere~~ — resolved. `__pycache__/` and `*.py[cod]`
