@@ -55,9 +55,12 @@ select = [
 ]
 # ADOPTION BACKLOG - these fire in the existing code base and are cosmetic rather
 # than dangerous. Remove them from this list one at a time, fix the fallout in a
-# dedicated commit, and keep CI green in between. Rough counts at the time of
-# writing (`ruff check --select E402,E722,F401,F541,F811,F841 --statistics .`):
-#   E402 32, F401 16, F541 15, F841 12, F811 1, E722 0
+# dedicated commit, and keep CI green in between. Measured counts
+# (`ruff check --select E402,E722,F401,F541,F811,F841 --statistics .`):
+#   E402 62, F541 17, F401 9, F841 8, F811 0, E722 0
+# F811 and E722 are already at zero and could come off the list whenever someone
+# wants to lock that in. Note that [tool.ruff.lint.per-file-ignores] below still
+# exempts tests/ from F401 and F811, so those two counts are source-tree only.
 ignore = [
     "E402", # module import not at top of file (sys.path juggling in scripts/tests)
     "E722", # bare except

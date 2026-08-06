@@ -21,9 +21,6 @@ from niffler.data.exceptions import (
 )
 from niffler.config.logging import setup_logging
 
-# Configure logging
-setup_logging(level="INFO")
-
 
 def _download(description: str, download_callable, *args, **kwargs) -> Optional[pd.DataFrame]:
     """Call a downloader and turn any failure into a user-facing error.
@@ -87,7 +84,15 @@ def main() -> int:
     parser.add_argument('--output', type=str, default='',
                         help='Output CSV file name. Will be saved in the data/ directory. Default is generated based on symbol, source, timeframe, and dates.')
 
+    # Logging options
+    parser.add_argument('--log-level', default='INFO',
+                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+                        help='Set logging level (default: INFO)')
+
     args = parser.parse_args()
+
+    # Configure logging
+    setup_logging(level=args.log_level)
 
     # Set default end_date if not provided
     if not args.end_date:
