@@ -14,6 +14,10 @@ Niffler is a personal quantitative trading framework that provides end-to-end fu
 - **⚡ Backtesting Engine**: Realistic simulation with commission handling and portfolio management
 - **💸 Transaction Costs**: Optional spread, slippage, square-root market impact and a
   participation cap; a run without them labels itself frictionless
+- **📏 Benchmark Comparison**: Every run is measured against buy-and-hold over the same
+  bars, charged the same commission and the same cost model
+- **🎲 Significance Testing**: t-test on mean round-trip return and a bootstrap Sharpe
+  interval, with a minimum-sample gate that refuses a verdict on too few trades
 - **🔍 Parameter Optimization**: Grid search and random search with parallel processing
 - **📊 Advanced Analysis**: Walk-forward and Monte Carlo robustness testing
 - **🛡️ Risk Management**: Position sizing, stop-loss management, and portfolio controls
@@ -103,7 +107,7 @@ Niffler follows a systematic approach to quantitative trading strategy developme
 **Design** trading strategies using the extensible framework, implementing signal generation logic with risk management integration.
 
 ### 3. Backtesting
-**Test** strategies against historical data with realistic simulation including commissions, position tracking, and portfolio management.
+**Test** strategies against historical data with realistic simulation including commissions, position tracking, and portfolio management — and **against buy-and-hold on the same bars**, so a return is always reported next to the thing it had to beat.
 
 ### 4. Optimization
 **Find** optimal parameters using grid search or random search methods with parallel processing for efficiency.
@@ -329,6 +333,13 @@ Being explicit, so nobody discovers these the expensive way:
 - **Walk-forward folds still overlap by default** (`test_window=6`, `step=3`). Repeated
   out-of-sample bars are counted once for the combined Sharpe and the overlap is reported
   and warned about, but per-fold counters still treat each fold as one sample.
+- **No multiple-testing correction, and no deflated Sharpe ratio.** The significance test
+  answers "is this one strategy's mean trade return distinguishable from zero on this one
+  sample". It knows nothing about how many parameter sets were tried to find it. If you
+  optimised on the same data, the p-value overstates the evidence and there is currently
+  nothing in the framework that corrects for it.
+- **Only one benchmark: buy-and-hold of the traded asset.** No index, no risk-free rate, no
+  multi-asset comparison. Nothing here is a CAPM alpha or beta.
 - **Docker images are unverified at runtime.** The compose file validates and the Dockerfile
   is written for a non-root user, but no one has yet run `docker compose build && up` on a
   machine with a working daemon.
@@ -365,6 +376,37 @@ python scripts/backtest.py --data data/BTCUSDT_binance_1d.csv --strategy simple_
 The same flags exist on `optimize.py` and `analyze.py`, because fitting parameters in a
 frictionless market and then trading them in a real one selects for the parameter set most
 sensitive to costs. Details in [Backtesting](docs/backtesting.md#transaction-costs).
+
+### Benchmark and significance
+
+A return of +40% is not a result until you know what the asset itself did. Every backtest
+is therefore run against **buy-and-hold over the same bars**, entering on the first bar the
+strategy's own execution timing allows and paying the same commission and the same cost
+model:
+
+```bash
+# Buy-and-hold benchmark (the default)
+python scripts/backtest.py --data data/BTCUSDT_binance_1d.csv --strategy simple_ma
+
+# No comparison at all - the return then stands unmeasured, and says so
+python scripts/backtest.py --data data/BTCUSDT_binance_1d.csv --strategy simple_ma \
+  --benchmark none
+
+# Demand more evidence before any verdict, and widen the bootstrap
+python scripts/backtest.py --data data/BTCUSDT_binance_1d.csv --strategy simple_ma \
+  --min-trades-for-significance 50 --bootstrap-samples 5000 --bootstrap-seed 7
+```
+
+Alongside it the run asks whether the edge is distinguishable from noise: a two-sided
+t-test on the mean round-trip return, and a percentile bootstrap confidence interval for
+the Sharpe ratio. **Below 30 round trips (configurable) no verdict is rendered at all** -
+the numbers are printed, labelled as not meaningful, and that is the end of it.
+
+Be careful what you read into a small p-value. It is one asset over one window, it is not
+corrected for the parameters having possibly been fitted on that same data, and a grid
+search over 200 parameter sets finds a "significant" one at the 5% level roughly ten times
+by chance alone. Details, including what is deliberately not implemented, in
+[Backtesting](docs/backtesting.md#benchmark-comparison).
 
 ## Architecture
 
@@ -423,7 +465,7 @@ The suite is the source of truth for its own size. Run it:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-At the time of writing this reports **797 tests, 0 failures, 0 errors**. Treat that as a
+At the time of writing this reports **872 tests, 0 failures, 0 errors**. Treat that as a
 sanity check, not a spec — if the command disagrees with this paragraph, believe the
 command. It is the only place in the documentation that quotes a count.
 

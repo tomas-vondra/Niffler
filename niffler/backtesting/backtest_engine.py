@@ -3,13 +3,24 @@ import math
 import pandas as pd
 import numpy as np
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from niffler.strategies.base_strategy import BaseStrategy
 from .trade import Trade, TradeSide
 from .backtest_result import BacktestResult
 from .portfolio import Portfolio
 from .cost_model import CostModel, FillRequest, ZeroCostModel
 from .round_trip import RoundTrip, QUANTITY_EPSILON, pair_trades
+from . import metrics as equity_metrics
+from .benchmark import (
+    BENCHMARK_BUY_AND_HOLD,
+    BENCHMARK_CHOICES,
+    BENCHMARK_NONE,
+    BenchmarkError,
+    BenchmarkResult,
+    compute_benchmark,
+    information_ratio,
+)
+from .significance import DEFAULT_MIN_TRADES, assess_significance
 
 
 class BacktestEngine:
@@ -35,6 +46,20 @@ class BacktestEngine:
     up, a sell gives up, stop exits included. A model may also cap how much of a
     bar's volume one order takes; the order is then truncated to a partial fill
     and logged, never silently dropped.
+
+    Benchmark and significance
+    --------------------------
+    Every run is measured against a passive alternative over the *same bars*
+    (``benchmark='buy_and_hold'`` by default) and asked whether its edge is
+    distinguishable from noise. The benchmark is charged the same commission and
+    priced by the same cost model, and it enters on the same bar the strategy's
+    earliest signal could have filled on, so neither side gets a discount or a
+    head start.
+
+    The bootstrap Sharpe interval is the one expensive part of that, so
+    ``bootstrap_samples`` defaults to 0: the cheap comparison and t-test run
+    everywhere, including inside optimisation and Monte Carlo loops, and the
+    interval is turned on by the callers that actually print it.
     """
 
     #: Supported execution-timing policies.
@@ -49,7 +74,11 @@ class BacktestEngine:
     def __init__(self, initial_capital: float = 10000.0, commission: float = 0.001,
                  min_order_value: float = 1.0, execution_timing: str = 'next_bar_open',
                  periods_per_year: Optional[float] = None,
-                 cost_model: Optional[CostModel] = None):
+                 cost_model: Optional[CostModel] = None,
+                 benchmark: Optional[str] = BENCHMARK_BUY_AND_HOLD,
+                 min_trades_for_significance: int = DEFAULT_MIN_TRADES,
+                 bootstrap_samples: int = 0,
+                 bootstrap_seed: int = 42):
         """
         Initialize the backtest engine.
 
@@ -70,6 +99,19 @@ class BacktestEngine:
                 (default) a ZeroCostModel is used: fills happen at the exact
                 reference price in unlimited size, which is frictionless and
                 therefore not realistic.
+            benchmark: Passive alternative the run is measured against:
+                'buy_and_hold' (default) or 'none'. The benchmark pays the same
+                commission and the same cost model, so the comparison is not
+                rigged in its favour.
+            min_trades_for_significance: Round trips below which the run refuses
+                to render a significance verdict. Twelve round trips tell you
+                nothing whatever their win rate.
+            bootstrap_samples: Resamples for the bootstrap Sharpe confidence
+                interval. 0 (the default) skips it: it is the only costly part
+                of the assessment, and optimisation and Monte Carlo loops never
+                read it. The backtest CLI turns it on.
+            bootstrap_seed: Seed for that bootstrap, passed explicitly so the
+                interval is reproducible and workers never draw fresh entropy.
 
         Raises:
             ValueError: If any parameter is outside its valid range
@@ -91,6 +133,15 @@ class BacktestEngine:
             raise TypeError(
                 f"cost_model must be a CostModel, got {type(cost_model).__name__}"
             )
+        benchmark = benchmark if benchmark is not None else BENCHMARK_NONE
+        if benchmark not in BENCHMARK_CHOICES:
+            raise ValueError(
+                f"Benchmark must be one of {BENCHMARK_CHOICES}, got '{benchmark}'"
+            )
+        if min_trades_for_significance < 0:
+            raise ValueError("Minimum trades for significance cannot be negative")
+        if bootstrap_samples < 0:
+            raise ValueError("Bootstrap samples cannot be negative")
 
         self.initial_capital = initial_capital
         self.commission = commission
@@ -98,6 +149,10 @@ class BacktestEngine:
         self.execution_timing = execution_timing
         self.periods_per_year = periods_per_year
         self.cost_model: CostModel = cost_model if cost_model is not None else ZeroCostModel()
+        self.benchmark = benchmark
+        self.min_trades_for_significance = min_trades_for_significance
+        self.bootstrap_samples = bootstrap_samples
+        self.bootstrap_seed = bootstrap_seed
 
     @property
     def execution_lag(self) -> int:
@@ -198,6 +253,9 @@ class BacktestEngine:
         portfolio_series = pd.Series(portfolio_values, index=data.index)
         metrics = self._calculate_metrics(portfolio_series, trades)
 
+        comparison = self._run_benchmark(data, symbol, portfolio_series)
+        significance = self._assess_significance(portfolio_series, trades)
+
         return BacktestResult(
             strategy_name=strategy.name,
             symbol=symbol,
@@ -221,7 +279,129 @@ class BacktestEngine:
             num_winning_trades=metrics['num_winning_trades'],
             num_losing_trades=metrics['num_losing_trades'],
             total_commission=float(sum(trade.commission for trade in trades)),
-            total_slippage=float(sum(trade.slippage_cost for trade in trades))
+            total_slippage=float(sum(trade.slippage_cost for trade in trades)),
+            **comparison,
+            round_trip_count=significance.round_trips,
+            mean_trade_return_pct=significance.mean_trade_return_pct,
+            t_statistic=significance.t_statistic,
+            p_value=significance.p_value,
+            sharpe_ci_low=significance.sharpe_ci_low,
+            sharpe_ci_high=significance.sharpe_ci_high,
+            sharpe_ci_confidence=significance.confidence_level,
+            significance_min_trades=significance.min_trades,
+            is_sample_sufficient=significance.is_sample_sufficient,
+            significance_verdict=significance.verdict,
+        )
+
+    def _run_benchmark(self, data: pd.DataFrame, symbol: str,
+                       portfolio_values: pd.Series) -> Dict[str, Any]:
+        """
+        Run the configured benchmark and derive the comparison fields.
+
+        A benchmark that cannot be established is *reported*, not swallowed and
+        not fatal. Aborting the whole backtest because one holiday bar could not
+        absorb a passive buy would let an auxiliary comparison veto a strategy
+        run that itself succeeded; silently reporting a zero excess return would
+        be worse still. So the comparison fields stay None - which reads as
+        "absent", not "zero" - ``benchmark_error`` carries the reason into every
+        export, and the failure is logged at ERROR.
+
+        Args:
+            data: The price data the strategy was run on
+            symbol: Symbol identifier
+            portfolio_values: The strategy's equity curve
+
+        Returns:
+            Keyword arguments for BacktestResult
+        """
+        try:
+            benchmark = compute_benchmark(self, data, symbol, self.benchmark)
+        except BenchmarkError as e:
+            logging.error(f"BENCHMARK UNAVAILABLE for {symbol}: {e}")
+            return {**self._empty_comparison(), 'benchmark_error': str(e)}
+
+        return self._compare_to_benchmark(portfolio_values, benchmark)
+
+    @staticmethod
+    def _empty_comparison() -> Dict[str, Any]:
+        """
+        Comparison fields for a run with no benchmark.
+
+        Returns:
+            Every benchmark field set to None, so an absent comparison can never
+            be mistaken for a zero excess return
+        """
+        return {
+            'benchmark_name': None,
+            'benchmark_return_pct': None,
+            'benchmark_sharpe_ratio': None,
+            'benchmark_max_drawdown': None,
+            'benchmark_total_cost': None,
+            'excess_return_pct': None,
+            'information_ratio': None,
+            'benchmark_error': None,
+        }
+
+    def _compare_to_benchmark(self, portfolio_values: pd.Series,
+                              benchmark: Optional[BenchmarkResult]) -> Dict[str, Any]:
+        """
+        Turn a benchmark run into the comparison fields of a BacktestResult.
+
+        Args:
+            portfolio_values: The strategy's equity curve
+            benchmark: The benchmark's result, or None when none was requested
+
+        Returns:
+            Keyword arguments for BacktestResult. Every value is None when no
+            benchmark ran, so an absent comparison reads as absent rather than
+            as a zero excess return.
+        """
+        if benchmark is None:
+            return self._empty_comparison()
+
+        strategy_return_pct = (
+            (float(portfolio_values.iloc[-1]) - self.initial_capital)
+            / self.initial_capital * 100
+        )
+        periods_per_year = self.resolve_periods_per_year(portfolio_values.index)
+
+        return {
+            'benchmark_name': benchmark.name,
+            'benchmark_return_pct': benchmark.total_return_pct,
+            'benchmark_sharpe_ratio': benchmark.sharpe_ratio,
+            'benchmark_max_drawdown': benchmark.max_drawdown,
+            'benchmark_total_cost': benchmark.total_cost,
+            # Percentage points, not a ratio: +40% against +120% is -80.
+            'excess_return_pct': strategy_return_pct - benchmark.total_return_pct,
+            'information_ratio': information_ratio(
+                portfolio_values, benchmark.portfolio_values, periods_per_year
+            ),
+            'benchmark_error': None,
+        }
+
+    def _assess_significance(self, portfolio_values: pd.Series,
+                             trades: List[Trade]):
+        """
+        Ask whether this run's edge is distinguishable from noise.
+
+        Pairing goes through the engine's single FIFO routine, so the sample the
+        t-test runs on is exactly the sample the win rate and profit factor come
+        from.
+
+        Args:
+            portfolio_values: The strategy's equity curve
+            trades: Executed trades
+
+        Returns:
+            A :class:`~niffler.backtesting.significance.SignificanceResult`
+        """
+        return assess_significance(
+            self.pair_trades(trades),
+            portfolio_values=portfolio_values,
+            periods_per_year=self.resolve_periods_per_year(portfolio_values.index),
+            min_trades=self.min_trades_for_significance,
+            bootstrap_samples=self.bootstrap_samples,
+            seed=self.bootstrap_seed,
         )
 
     def _extract_signal_columns(self, signals_df: pd.DataFrame,
@@ -545,20 +725,16 @@ class BacktestEngine:
         """
         metrics: Dict[str, float] = {}
 
-        # Calculate returns
-        returns = portfolio_values.pct_change().dropna()
-
-        # Max drawdown
-        running_max = portfolio_values.expanding().max()
-        drawdown = (portfolio_values - running_max) / running_max
-        metrics['max_drawdown'] = drawdown.min() * 100
+        # Both of these come from niffler.backtesting.metrics, which the
+        # benchmark's equity curve also goes through: two curves computed by two
+        # copies of this arithmetic would eventually stop being comparable.
+        metrics['max_drawdown'] = equity_metrics.max_drawdown_pct(portfolio_values)
 
         # Sharpe ratio, annualised with the data's own bar frequency
         periods_per_year = self.resolve_periods_per_year(portfolio_values.index)
-        if len(returns) > 1 and returns.std() > 0:
-            metrics['sharpe_ratio'] = np.sqrt(periods_per_year) * returns.mean() / returns.std()
-        else:
-            metrics['sharpe_ratio'] = 0.0
+        metrics['sharpe_ratio'] = equity_metrics.sharpe_ratio(
+            portfolio_values, periods_per_year
+        )
 
         # Every trade statistic comes from the same FIFO pairing routine
         metrics.update(self._calculate_trade_statistics(trades))

@@ -40,7 +40,19 @@ class BaseOptimizer(ABC):
         # drawdown first and hand walk-forward analysis an adversarial parameter set.
         'max_drawdown': (True, lambda r: r.backtest_result.max_drawdown),
         'win_rate': (True, lambda r: r.backtest_result.win_rate),
-        'total_trades': (True, lambda r: r.backtest_result.total_trades)
+        'total_trades': (True, lambda r: r.backtest_result.total_trades),
+        # Return over buy-and-hold on the same bars, charged the same costs.
+        # Over one dataset the benchmark is a constant, so this ORDERS results
+        # identically to total_return - what it changes is what the number
+        # means: a "best" of -12 says the winning parameter set lost to doing
+        # nothing, which sorting on total_return alone never tells you. A result
+        # with no benchmark sorts last rather than being silently treated as
+        # zero excess.
+        'excess_return_pct': (True, lambda r: (
+            r.backtest_result.excess_return_pct
+            if getattr(r.backtest_result, 'excess_return_pct', None) is not None
+            else float('-inf')
+        )),
     }
     
     def __init__(self, 
@@ -350,7 +362,15 @@ class BaseOptimizer(ABC):
                     'sharpe_ratio': result.backtest_result.sharpe_ratio,
                     'max_drawdown': result.backtest_result.max_drawdown,
                     'total_trades': result.backtest_result.total_trades,
-                    'win_rate': result.backtest_result.win_rate
+                    'win_rate': result.backtest_result.win_rate,
+                    # None when no benchmark ran, which is not the same as 0.
+                    'benchmark_return_pct': getattr(
+                        result.backtest_result, 'benchmark_return_pct', None),
+                    'excess_return_pct': getattr(
+                        result.backtest_result, 'excess_return_pct', None),
+                    'round_trip_count': getattr(
+                        result.backtest_result, 'round_trip_count', 0),
+                    'p_value': getattr(result.backtest_result, 'p_value', None)
                 }
             }
             output_data['results'].append(result_data)

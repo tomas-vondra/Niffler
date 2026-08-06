@@ -105,8 +105,13 @@ def main() -> int:
     
     # Optimization parameters
     parser.add_argument('--sort-by', default='total_return',
-                       choices=['total_return', 'sharpe_ratio', 'max_drawdown', 'win_rate', 'total_trades'],
-                       help='Metric to sort top results by (default: total_return)')
+                       choices=['total_return', 'sharpe_ratio', 'max_drawdown', 'win_rate',
+                                'total_trades', 'excess_return_pct'],
+                       help=('Metric to sort top results by (default: total_return). '
+                             'excess_return_pct ranks by return over buy-and-hold on the '
+                             'same bars; over one dataset that is the same ORDER as '
+                             'total_return, but the printed number tells you whether the '
+                             'winner actually beat doing nothing'))
     
     # Backtest parameters
     parser.add_argument('--initial-capital', type=float, default=10000.0,
@@ -214,7 +219,7 @@ def main() -> int:
             _, accessor_func = BaseOptimizer.METRICS_CONFIG[args.sort_by]
             sort_value = accessor_func(result)
             
-            if args.sort_by in ['total_return', 'max_drawdown', 'win_rate']:
+            if args.sort_by in ['total_return', 'max_drawdown', 'win_rate', 'excess_return_pct']:
                 print(f"#{i} - {args.sort_by}: {sort_value:.2f}%")
             elif args.sort_by == 'sharpe_ratio':
                 print(f"#{i} - {args.sort_by}: {sort_value:.3f}")
@@ -222,6 +227,14 @@ def main() -> int:
                 print(f"#{i} - {args.sort_by}: {sort_value}")
             print(f"    Parameters: {result.parameters}")
             print(f"    Total Return: ${result.backtest_result.total_return:,.2f} ({result.backtest_result.total_return_pct:.2f}%)")
+            # Printed for every sort order, not just --sort-by excess_return_pct:
+            # sorting on total_return in a bull market selects whatever stays
+            # invested longest, and this line is what makes that visible.
+            benchmark_pct = getattr(result.backtest_result, 'benchmark_return_pct', None)
+            if benchmark_pct is not None:
+                excess = result.backtest_result.excess_return_pct
+                print(f"    vs Buy-and-Hold: {benchmark_pct:.2f}% "
+                      f"(excess {excess:+.2f} pp)")
             print(f"    Sharpe Ratio: {result.backtest_result.sharpe_ratio:.3f}")
             print(f"    Max Drawdown: {result.backtest_result.max_drawdown:.2f}%")
             print(f"    Total Trades: {result.backtest_result.total_trades}")
@@ -242,7 +255,7 @@ def main() -> int:
             params = metric_data['parameters']
             
             # Format value based on metric type
-            if metric_name in ['total_return', 'max_drawdown', 'win_rate']:
+            if metric_name in ['total_return', 'max_drawdown', 'win_rate', 'excess_return_pct']:
                 formatted_value = f"{value:.2f}%"
             elif metric_name == 'sharpe_ratio':
                 formatted_value = f"{value:.3f}"
