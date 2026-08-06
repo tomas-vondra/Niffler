@@ -411,5 +411,56 @@ class TestPartialDownloadHandling(unittest.TestCase):
         self.assertNotIn('.partial.', path)
 
 
+class TestDownloadDataLogLevel(unittest.TestCase):
+    """--log-level must reach setup_logging, and default to INFO."""
+
+    @patch('scripts.download_data.CCXTDownloader')
+    @patch('scripts.download_data.os.getcwd')
+    @patch('scripts.download_data.os.makedirs')
+    def _run_main(self, argv, mock_makedirs, mock_getcwd, mock_ccxt):
+        """Run main() with a stubbed download and report the level requested."""
+        mock_getcwd.return_value = tempfile.mkdtemp()
+
+        mock_downloader = Mock()
+        mock_downloader.validate_timeframe.return_value = True
+        mock_downloader.download.return_value = pd.DataFrame({
+            'open': [1.0], 'high': [2.0], 'low': [0.5],
+            'close': [1.5], 'volume': [100],
+        })
+        mock_ccxt.return_value = mock_downloader
+
+        with patch('sys.argv', argv):
+            with patch('scripts.download_data.setup_logging') as mock_setup:
+                with patch.object(pd.DataFrame, 'to_csv'):
+                    dd.main()
+        return mock_setup
+
+    def test_log_level_defaults_to_info(self):
+        """Omitting --log-level configures logging at INFO."""
+        mock_setup = self._run_main([
+            'script.py', '--source', 'ccxt', '--symbol', 'BTC/USDT',
+            '--start_date', '2022-01-01', '--end_date', '2022-01-02',
+        ])
+        mock_setup.assert_called_once_with(level='INFO')
+
+    def test_log_level_is_forwarded(self):
+        """--log-level DEBUG reaches setup_logging instead of a hardcoded INFO."""
+        mock_setup = self._run_main([
+            'script.py', '--source', 'ccxt', '--symbol', 'BTC/USDT',
+            '--start_date', '2022-01-01', '--end_date', '2022-01-02',
+            '--log-level', 'DEBUG',
+        ])
+        mock_setup.assert_called_once_with(level='DEBUG')
+
+    def test_invalid_log_level_is_rejected(self):
+        """An unknown level fails at argument parsing, matching the other scripts."""
+        with patch('sys.argv', [
+            'script.py', '--source', 'ccxt', '--symbol', 'BTC/USDT',
+            '--start_date', '2022-01-01', '--log-level', 'TRACE',
+        ]):
+            with self.assertRaises(SystemExit):
+                dd.main()
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

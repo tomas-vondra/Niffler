@@ -8,18 +8,58 @@ from .base_risk_manager import BaseRiskManager
 
 class KellyRiskManager(BaseRiskManager):
     """
-    Kelly Criterion risk manager for optimal position sizing.
-    
-    Uses Kelly Criterion formula: f* = (bp - q) / b
-    Where:
-    - f* = fraction of capital to wager
-    - b = odds received on the wager (average win / average loss)
-    - p = probability of winning
-    - q = probability of losing (1 - p)
-    
-    Also includes configurable stop-loss mechanisms.
-    
-    TODO: Implementation pending - needs integration with backtest engine trade history.
+    Kelly Criterion position sizing. **Deliberately unimplemented** - see below.
+
+    The constructor, validation and risk metrics are real; all three sizing
+    methods raise :class:`NotImplementedError`. ``FixedRiskManager`` is the only
+    usable risk manager, and this class is not selectable from the
+    ``backtest.py`` CLI. That is a decision, not an abandoned branch, and this
+    docstring exists so a reader does not have to guess which.
+
+    What Kelly computes
+    -------------------
+    The growth-optimal fraction of capital to commit to a bet - the fraction
+    maximising the expected log of terminal wealth. For a discrete bet,
+    ``f* = (bp - q) / b``, where ``b`` is the payoff odds (average win over
+    average loss), ``p`` the win probability and ``q = 1 - p``. For continuously
+    compounded returns it reduces to ``f* ~= mu / sigma^2``.
+
+    Why it is not implemented here
+    ------------------------------
+    Kelly is a **position-sizing rule, not an edge-detector**. ``f*`` is a
+    function of the estimated edge, so it can only amplify an edge that has
+    already been established - it never finds one. Niffler is currently
+    single-strategy, single-symbol and long-only, which collapses the sizing
+    question to a single scalar that ``FixedRiskManager`` already answers well
+    enough. Kelly starts earning its keep when capital must be *allocated*
+    between several competing opportunities with different edges, which is the
+    multi-asset work that does not exist yet. Shipping it now would add
+    estimation risk without answering a question the framework is currently
+    asking.
+
+    What a correct implementation would require
+    -------------------------------------------
+    Recorded so the reader can see the shape of the problem rather than assume
+    it was merely skipped:
+
+    * **An expanding-window estimate over closed round trips only.** ``p`` and
+      ``b`` must come from trades that closed *strictly before* the current bar.
+      Estimating them from the whole backtest's trades and using that to size an
+      early trade is look-ahead bias - precisely the class of bug the
+      correctness audit removed elsewhere in this codebase.
+    * **A minimum-sample gate before Kelly activates at all**, mirroring
+      :data:`niffler.backtesting.significance.DEFAULT_MIN_TRADES`. ``f*`` from a
+      handful of trades is noise scaled up by leverage. Note that the
+      ``min_trades_for_kelly`` default below is 10, well under that gate, and
+      would need revisiting.
+    * **A fractional cap.** The growth curve is concave and returns to zero at
+      twice the optimal fraction, so overestimating the edge by 2x buys all of
+      the variance and none of the growth. Hence ``fractional_kelly`` and
+      ``max_kelly_fraction``; half-Kelly or quarter-Kelly is the practical
+      choice, and full Kelly on an *estimated* edge is not.
+    * **A clamp of negative ``f*`` to zero.** A negative Kelly fraction is an
+      instruction to take the other side, and the engine is long-only, so the
+      only faithful response is to stand aside.
     """
     
     def __init__(self, lookback_periods: int = 50, max_kelly_fraction: float = 0.25,
@@ -65,8 +105,11 @@ class KellyRiskManager(BaseRiskManager):
                               current_position: float = 0.0) -> float:
         """
         Calculate position size using Kelly Criterion.
-        
-        TODO: Implement Kelly Criterion using real backtest trade history.
+
+        Unimplemented by design; raises. See the class docstring for why Kelly
+        is not the sizing rule this framework currently needs, and for the
+        look-ahead, sample-size, fractional-cap and long-only constraints any
+        implementation would have to satisfy.
         """
         raise NotImplementedError("Kelly position sizing not yet implemented")
 
@@ -74,8 +117,10 @@ class KellyRiskManager(BaseRiskManager):
                           historical_data: pd.DataFrame) -> Optional[float]:
         """
         Calculate stop-loss based on historical volatility or fixed percentage.
-        
-        TODO: Implement ATR-based stop loss calculation.
+
+        Unimplemented by design; raises. See the class docstring. A volatility
+        stop would be estimated from bars strictly before the current one, for
+        the same look-ahead reason that governs the sizing estimate.
         """
         raise NotImplementedError("Kelly stop loss calculation not yet implemented")
 
@@ -84,8 +129,11 @@ class KellyRiskManager(BaseRiskManager):
                             unrealized_pnl: float) -> Tuple[bool, str]:
         """
         Determine if position should be closed based on stop-loss or Kelly criteria.
-        
-        TODO: Implement position closing logic based on Kelly criteria.
+
+        Unimplemented by design; raises. See the class docstring. Note that the
+        engine sizes *entries* from the risk manager only - an exit uses the
+        strategy's own position size - so this method would gate a close, not
+        resize it.
         """
         raise NotImplementedError("Kelly position closing logic not yet implemented")
         

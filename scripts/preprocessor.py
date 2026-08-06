@@ -15,9 +15,6 @@ if __package__ in (None, ''):
 from niffler.config.logging import setup_logging
 from scripts.common import load_ohlcv_csv
 
-# Configure logging
-setup_logging(level="INFO")
-
 
 def load_and_clean_csv(file_path: str, timestamp_column: Optional[str] = None) -> Optional[pd.DataFrame]:
     """
@@ -87,12 +84,20 @@ def main() -> int:
     parser.add_argument('--input', type=str, required=True,
                         help='Path to input CSV file or directory containing CSV files.')
     parser.add_argument('--output', type=str,
-                        help='Path to output CSV file or directory. If not specified, creates cleaned_ prefix.')
+                        help='Path to output CSV file or directory. If not specified, the cleaned file is written next to its input with --suffix appended to the stem.')
     parser.add_argument('--suffix', type=str, default='_cleaned',
                         help='Suffix to add to output files when processing directory (default: _cleaned).')
-    
+
+    # Logging options
+    parser.add_argument('--log-level', default='INFO',
+                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+                        help='Set logging level (default: INFO)')
+
     args = parser.parse_args()
-    
+
+    # Configure logging
+    setup_logging(level=args.log_level)
+
     input_path = Path(args.input)
     
     if input_path.is_file():
@@ -119,7 +124,8 @@ def main() -> int:
             return 1
 
         output_dir = Path(args.output) if args.output else input_path
-        output_dir.mkdir(exist_ok=True)
+        # parents=True so a nested --output path is created rather than raising.
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         logging.info(f"Processing {len(csv_files)} CSV files in directory: {input_path}")
 

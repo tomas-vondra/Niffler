@@ -6,6 +6,7 @@ results/
 
 # IDE directories
 .idea/
+*.iml
 .vscode/
 *.swp
 *.swo

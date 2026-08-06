@@ -1,3 +1,8 @@
+> **Note (English):** this is the original Czech-language final write-up submitted for the
+> trading course this project grew out of. It describes the project's course-submission
+> state, not its current state — much of what follows has since been rewritten or corrected.
+> See [What changed and why your old results differed](../README.md#what-changed-and-why-your-old-results-differed).
+
 # Závěrečná práce
 
 Cílem bylo vytvořit algoritmický trading systém, který demonstruje základní dovednosti získané během

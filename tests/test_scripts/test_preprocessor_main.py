@@ -272,5 +272,97 @@ class TestPreprocessorMain(unittest.TestCase):
                 self.assertIn('_processed', args[1])
 
 
+class TestPreprocessorNestedOutputDir(unittest.TestCase):
+    """A nested --output directory must be created, not raise."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.input_dir = os.path.join(self.temp_dir, 'input')
+        os.makedirs(self.input_dir)
+
+        self.test_data = pd.DataFrame({
+            'Date': ['2024-01-01', '2024-01-02', '2024-01-03'],
+            'open': [100.0, 101.0, 102.0],
+            'high': [105.0, 106.0, 107.0],
+            'low': [95.0, 96.0, 97.0],
+            'close': [102.0, 103.0, 104.0],
+            'volume': [1000, 1100, 1200]
+        })
+        self.test_data.to_csv(os.path.join(self.input_dir, 'file1.csv'), index=False)
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir)
+
+    def test_nested_output_directory_is_created(self):
+        """--output a/b/c works even when none of a, b, c exist.
+
+        ``mkdir(exist_ok=True)`` is not recursive, so a multi-level output path
+        used to raise FileNotFoundError on the missing intermediate directory.
+        """
+        nested = os.path.join(self.temp_dir, 'a', 'b', 'c')
+        self.assertFalse(os.path.exists(nested))
+
+        with patch('sys.argv', ['script.py', '--input', self.input_dir,
+                                '--output', nested]):
+            exit_code = preprocessor.main()
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(os.path.isdir(nested))
+        self.assertTrue(os.path.isfile(os.path.join(nested, 'file1_cleaned.csv')))
+
+    def test_existing_output_directory_still_works(self):
+        """exist_ok is preserved - an existing directory is not an error."""
+        existing = os.path.join(self.temp_dir, 'out')
+        os.makedirs(existing)
+
+        with patch('sys.argv', ['script.py', '--input', self.input_dir,
+                                '--output', existing]):
+            exit_code = preprocessor.main()
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(os.path.isfile(os.path.join(existing, 'file1_cleaned.csv')))
+
+
+class TestPreprocessorLogLevel(unittest.TestCase):
+    """--log-level must reach setup_logging, and default to INFO."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.csv_file = os.path.join(self.temp_dir, 'test_data.csv')
+        pd.DataFrame({
+            'Date': ['2024-01-01', '2024-01-02'],
+            'open': [100.0, 101.0],
+            'high': [105.0, 106.0],
+            'low': [95.0, 96.0],
+            'close': [102.0, 103.0],
+            'volume': [1000, 1100]
+        }).to_csv(self.csv_file, index=False)
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir)
+
+    def _run_main(self, extra_args):
+        argv = ['script.py', '--input', self.csv_file] + extra_args
+        with patch('sys.argv', argv):
+            with patch('scripts.preprocessor.setup_logging') as mock_setup:
+                preprocessor.main()
+        return mock_setup
+
+    def test_log_level_defaults_to_info(self):
+        """Omitting --log-level configures logging at INFO."""
+        self._run_main([]).assert_called_once_with(level='INFO')
+
+    def test_log_level_is_forwarded(self):
+        """--log-level DEBUG reaches setup_logging instead of a hardcoded INFO."""
+        self._run_main(['--log-level', 'DEBUG']).assert_called_once_with(level='DEBUG')
+
+    def test_invalid_log_level_is_rejected(self):
+        """An unknown level fails at argument parsing, matching the other scripts."""
+        with patch('sys.argv', ['script.py', '--input', self.csv_file,
+                                '--log-level', 'TRACE']):
+            with self.assertRaises(SystemExit):
+                preprocessor.main()
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
