@@ -1151,6 +1151,11 @@ def render_heatmap(surface: ParameterSurface,
         lines.append(f'  slice: {slice_text} (the winner\'s values); '
                      f'{surface.size - shown} of {surface.size} cells not shown')
 
+    if surface.coverage < 1.0:
+        lines.append(f'  coverage: {surface.coverage * 100:.1f}% of the grid has a result; '
+                     'the rest was never evaluated,')
+        lines.append('  so most of what this picture shows is the sampling, not the strategy')
+
     gutter = max(len(_format_value(value)) for value in y_values) if y_parameter else 0
     gutter = max(gutter, 1)
     labels = [_format_value(value) for value in x_values]

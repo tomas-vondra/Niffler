@@ -613,6 +613,23 @@ class TestRendering(unittest.TestCase):
         self.assertIn('short_window', rendered)
         self.assertIn('long_window', rendered)
 
+    def test_heatmap_states_coverage_when_the_grid_is_sparse(self):
+        # A checkerboard: every axis value still appears, but half the
+        # combinations of them were never evaluated.
+        results = [result for result in plateau_grid()
+                   if (result.parameters['short_window']
+                       + result.parameters['long_window'] // 5) % 2 == 0]
+        surface = plateau.build_surface(results, selection=plateau.SELECTION_SAMPLED)
+
+        rendered = plateau.render_heatmap(surface, plateau.analyse_plateau(surface))
+
+        self.assertIn('coverage:', rendered)
+
+    def test_heatmap_omits_coverage_for_a_complete_grid(self):
+        surface = plateau.build_surface(plateau_grid())
+
+        self.assertNotIn('coverage:', plateau.render_heatmap(surface))
+
     def test_heatmap_is_pure_ascii(self):
         surface = plateau.build_surface(plateau_grid())
         rendered = plateau.render_heatmap(surface, plateau.analyse_plateau(surface))
