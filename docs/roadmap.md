@@ -21,8 +21,9 @@ Kept struck through rather than deleted, so the list stays honest about what mov
   (`config/logging.py`, `niffler/exporters/json_utils.py`) are deliberate
   backwards-compatible re-export shims, not copies.
 - ~~Create the logger once at start~~ — done. `niffler/config/logging.py` holds the only
-  `logging.basicConfig` call; every other module just calls `logging.getLogger(__name__)`.
-  See the loose end below for the part that is still inconsistent.
+  `logging.basicConfig` call; every other module just calls `logging.getLogger(__name__)`,
+  and all five CLI scripts configure it inside `main()` from `--log-level`, so importing a
+  script has no logging side effect.
 - ~~Unify the `__init__.py` files~~ — done. Every package `__init__.py` now declares
   `__all__` with explicit re-exports.
 - ~~Work out why `__pycache__` is everywhere~~ — resolved. `__pycache__/` and `*.py[cod]`
@@ -30,20 +31,6 @@ Kept struck through rather than deleted, so the list stays honest about what mov
 - ~~The preprocessor's default output is not under `data/`~~ — the premise no longer
   holds. `scripts/preprocessor.py` has no fixed default output path: it writes next to its
   input, so cleaning `data/x.csv` produces `data/x_cleaned.csv`.
-
-## Loose ends from the items above
-
-Small, specific, and worth doing before the larger items.
-
-- `scripts/download_data.py` and `scripts/preprocessor.py` call `setup_logging()` at
-  **import time** with a hardcoded `INFO`, while `backtest.py`, `optimize.py` and
-  `analyze.py` call it inside `main()` from `--log-level`. Make the two outliers match.
-- The ruff "ADOPTION BACKLOG" ignore block in `pyproject.toml` quotes per-rule counts that
-  have drifted from reality (E402 in particular has grown). Refresh the counts, then retire
-  the rules one at a time rather than all at once.
-- `scripts/preprocessor.py`: the `--output` help text still advertises a `cleaned_` prefix
-  while the code writes a `_cleaned` suffix, and its `mkdir(exist_ok=True)` is
-  non-recursive, so a nested output directory raises.
 
 ## Framework and usability
 
