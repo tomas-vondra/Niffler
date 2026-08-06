@@ -6,6 +6,10 @@ Niffler is a Python-based trading application that helps you sniff out market op
 
 Niffler is a personal quantitative trading framework that provides end-to-end functionality from data acquisition to strategy validation. It's designed for systematic development, testing, and validation of trading strategies with rigorous statistical analysis.
 
+It began as a course project — the original Czech-language write-up is kept as
+[docs/ROBOTDREAMS.md](docs/ROBOTDREAMS.md) — and has since been through a documented
+correctness audit that changed the numbers it produces.
+
 ## Key Features
 
 - **📈 Data Acquisition**: Download from cryptocurrency exchanges (CCXT) and traditional markets (Yahoo Finance)
@@ -412,6 +416,8 @@ Detailed documentation is available in the `docs/` directory:
 - **[Analysis](docs/analysis.md)** - Advanced robustness testing
 - **[Risk Management](docs/risk-management.md)** - Position sizing and risk controls
 - **[Exporters](docs/exporters.md)** - Result export system and configuration
+- **[Roadmap](docs/roadmap.md)** - What is missing, and what is deliberately out of scope
+- **[Original course write-up](docs/ROBOTDREAMS.md)** - The project's starting point (Czech)
 
 ### Transaction costs
 
@@ -564,6 +570,10 @@ This personal project aims to:
 - **Abstract Base Classes**: Easy to add new strategies, risk managers, and analyzers
 - **Modular Architecture**: Clean separation of concerns for maintainability
 - **Modern Python**: Uses latest features and best practices
+
+## License
+
+Released under the MIT License. See [LICENSE](LICENSE) for the full text.
 
 ---
 
