@@ -375,14 +375,14 @@ class TestBaseOptimizer(unittest.TestCase):
             results.append(result)
         
         # Simulate adding results one by one with memory limit
-        optimizer.MAX_RESULTS_IN_MEMORY = 3
+        optimizer.max_results_in_memory = 3
         managed_results = []
-        
+
         for result in results:
             managed_results = optimizer._manage_memory_efficient_results(managed_results, result)
-        
+
         # Should keep only the best results when limit is exceeded
-        self.assertLessEqual(len(managed_results), optimizer.MAX_RESULTS_IN_MEMORY)
+        self.assertLessEqual(len(managed_results), optimizer.max_results_in_memory)
     
     def test_analyze_best_metrics(self):
         """Test analyzing best metrics across results."""

@@ -29,6 +29,8 @@ The short version, because these are easy to "helpfully" undo:
 | The benchmark pays the **same** commission and cost model, and enters no earlier than `execution_lag` | Price its entry outside `_execute_buy_trade`, or let it buy at bar 0 under `next_bar_open` |
 | Below `min_trades_for_significance` there is **no verdict**; `is_significant` is `None` | Collapse `None` to `False`, or print a p-value without the "not meaningful" label |
 | An absent benchmark is `None`, not `0.0` | Default the comparison fields to zero, or treat a missing benchmark as a zero excess return |
+| A grid cell that errored, was never sampled or never traded is a **distinct state** excluded from every statistic | Fill it with `0.0`, which reads as a mediocre result rather than a missing one |
+| Whole-grid statistics come from a **complete** result set; a score-truncated one reports nothing | Print quartiles or a beat-the-baseline fraction computed from the survivors of `_manage_memory_efficient_results` |
 
 Scope limits that are deliberate, not oversights: long-only, no live trading, one strategy,
 Kelly risk manager is a stub. Slippage/spread/market impact **are** modelled now
@@ -130,7 +132,15 @@ python scripts/optimize.py --data data/BTCUSDT_binance_1d.csv --strategy simple_
 
 # Reproducible parallel random search
 python scripts/optimize.py --data data/BTCUSDT_binance_1d.csv --strategy simple_ma --method random --trials 200 --seed 42 --jobs 4
+
+# Parameter plateau analysis: whole-grid distribution and the winner's plateau score print
+# on every run; the surface itself is opt-in
+python scripts/optimize.py --data data/BTCUSDT_binance_1d.csv --strategy simple_ma \
+  --plateau-heatmap --plateau-centre --plateau-csv surface.csv
 ```
+
+Note: `--plateau-centre` reports the centre of the plateau *beside* the winner. It never
+changes what the optimizer returns as its winner.
 
 Note: `--sort-by max_drawdown` now ranks the **shallowest** drawdown first. `max_drawdown`
 is a negative percentage, and it used to be flagged "lower is better", which selected the
@@ -216,6 +226,22 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
   - `optimizer_factory.py` - Factory for creating optimizers and parameter spaces
   - `parameter_space.py` - Defines parameter ranges for strategies
   - `optimization_result.py` - Stores and analyzes optimization results
+  - `plateau.py` - **Pure analysis** of the score surface an optimisation already
+    produced: it re-runs nothing and recomputes no metric. `build_surface` turns results
+    into the k-dimensional grid (four cell states: `ok` / `no_trades` / `non_finite` /
+    `missing` - a failed cell is never a `0.0`), `analyse_plateau` scores the winner's
+    neighbourhood (median-anchored **retention**: 1.0 = plateau, 0.0 = isolated spike;
+    `None`, never a number, without a scored neighbour or an edge to retain),
+    `summarize_distribution` describes the whole grid against the run's own buy-and-hold
+    baseline, and `render_heatmap` / `write_surface_csv` emit it. Direction comes from
+    `BaseOptimizer.METRICS_CONFIG`, so `max_drawdown` cannot be read upside down here.
+    A `SELECTION_TRUNCATED` result set reports **no** distribution rather than one
+    computed from score-biased survivors
+  - `BaseOptimizer.max_results_in_memory` / `results_truncated` - the in-memory result cap
+    is now a constructor argument, and hitting it is recorded. Discarding the worst half
+    never changes the winner but does bias the sample; `optimize.py` raises the cap to
+    `CLI_MAX_RESULTS_IN_MEMORY` because the shipped `simple_ma` grid (1632 combinations)
+    is larger than the library default of 1000
 - `niffler/analysis/` - Advanced strategy validation framework
   - `walk_forward_analyzer.py` - Real anchored/rolling walk-forward: per-fold optimisation
     on a training window, evaluation on the following untouched test window

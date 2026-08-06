@@ -304,29 +304,38 @@ class TestOptimizationIntegration(unittest.TestCase):
         mock_engine.run_backtest.side_effect = mock_run_backtest
         
         # Create optimizer with small memory limit
+        # n_jobs=1 keeps evaluation in this process, where the mocked engine
+        # below is actually the one that runs. Under the default parallel path
+        # the workers build their own engines, every evaluation fails, and the
+        # test asserts that zero results fit in a cap of five - which is true of
+        # any cap and tests nothing.
         optimizer = RandomSearchOptimizer(
             strategy_class=SimpleMAStrategy,
             parameter_space=self.parameter_space,
-            data=self.test_data
+            data=self.test_data,
+            n_jobs=1
         )
-        
+
         # Mock the reusable engine
         optimizer._backtest_engine = mock_engine
         
         # Set small memory limit for testing
-        original_limit = optimizer.MAX_RESULTS_IN_MEMORY
-        optimizer.MAX_RESULTS_IN_MEMORY = 5
-        
+        original_limit = optimizer.max_results_in_memory
+        optimizer.max_results_in_memory = 5
+
         try:
             # Run optimization with more trials than memory limit
             results = optimizer.optimize(n_trials=20, seed=42)
-            
+
             # Should have limited results due to memory management
-            self.assertLessEqual(len(results), optimizer.MAX_RESULTS_IN_MEMORY)
-            
+            self.assertLessEqual(len(results), optimizer.max_results_in_memory)
+            # ...and the run must admit that it discarded the losers, or a
+            # caller describing "the whole grid" would describe survivors.
+            self.assertTrue(optimizer.results_truncated)
+
         finally:
             # Restore original limit
-            optimizer.MAX_RESULTS_IN_MEMORY = original_limit
+            optimizer.max_results_in_memory = original_limit
     
     def test_parameter_space_validation_integration(self):
         """Test parameter space validation through complete workflow."""

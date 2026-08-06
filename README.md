@@ -465,6 +465,52 @@ search over 200 parameter sets finds a "significant" one at the 5% level roughly
 by chance alone. Details, including what is deliberately not implemented, in
 [Backtesting](docs/backtesting.md#benchmark-comparison).
 
+### Parameter plateau analysis
+
+An optimizer hands back the maximum of N noisy estimates. On pure noise, the best of 1632
+parameter combinations still looks impressive, so the winner's own score says very little.
+The **shape of the score surface around it** says considerably more: there is no economic
+mechanism by which a 10/30 crossover works while 11/30 and 10/31 fail, so an isolated
+spike is noise, while a broad contiguous region is at least consistent with a real effect.
+
+`scripts/optimize.py` therefore reports the whole grid, not just its top row. Distribution
+statistics and the winner's plateau score print on every run - they are read off scores the
+optimizer already computed, so they cost nothing - and the surface itself is opt-in:
+
+```bash
+# Distribution + plateau score (always printed, no flag needed)
+python scripts/optimize.py --data data/BTCUSDT_binance_1d.csv --strategy simple_ma
+
+# Add the ASCII heatmap, the plateau-centre recommendation and a CSV of the full surface
+python scripts/optimize.py --data data/BTCUSDT_binance_1d.csv --strategy simple_ma \
+  --plateau-heatmap --plateau-centre --plateau-csv surface.csv
+
+# Analyse a different metric than the one results are sorted by, and widen the band
+python scripts/optimize.py --data data/BTCUSDT_binance_1d.csv --strategy simple_ma \
+  --sort-by sharpe_ratio --plateau-metric max_drawdown --plateau-tolerance 0.4
+```
+
+The **plateau score** is `(mean oriented score of the winner's immediate neighbours - grid
+median) / (winner - grid median)`: 1.0 when the neighbourhood scores as well as the peak,
+0.0 when it is indistinguishable from a typical grid cell. It is anchored on the median
+rather than on zero so it is scale-free and works unchanged for a negative metric like
+`max_drawdown`, and it is `None` - never a number - when the winner has no scored
+neighbour or no edge over the median. The count of neighbours it was computed from is
+always printed beside it.
+
+Everything respects metric direction (`max_drawdown` is negative and shallower is better,
+here as everywhere), and a combination that errored, was never sampled or never traded is
+a **distinct cell state** excluded from every statistic, never a 0.0 that would read as a
+mediocre result. The baseline for "did it beat doing nothing" is the run's own
+buy-and-hold benchmark, charged the same commission and cost model; when no benchmark is
+available the fallback is labelled for exactly what it is and is never called
+buy-and-hold.
+
+This is **not** a multiple-testing correction and not a deflated Sharpe ratio - see
+[What Niffler does *not* do](#what-niffler-does-not-do), which still applies. It is a way
+of seeing whether the winner sits on a hill or on a needle, plus the honest counterweight
+to a report that otherwise shows only its best row.
+
 ## Architecture
 
 ### Core Components
@@ -526,7 +572,7 @@ The suite is the source of truth for its own size. Run it:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-At the time of writing this reports **925 tests, 0 failures, 0 errors**. Treat that as a
+At the time of writing this reports **1024 tests, 0 failures, 0 errors**. Treat that as a
 sanity check, not a spec — if the command disagrees with this paragraph, believe the
 command. It is the only place in the documentation that quotes a count.
 

@@ -36,6 +36,7 @@ if __package__ in (None, ''):
 
 from niffler.config.logging import setup_logging
 from niffler.utils.provenance import collect_provenance
+from niffler.optimization import plateau as plateau_analysis
 from niffler.optimization.optimizer_factory import (
     create_optimizer,
     get_strategy_class,
@@ -49,6 +50,82 @@ from scripts.common import (
     load_ohlcv_csv,
     report_cost_model,
 )
+
+
+# Results the CLI retains before the optimizer starts discarding the
+# worst-scoring half. The library default (1000) is smaller than the default
+# simple_ma grid (1632 combinations), so an unmodified grid search used to hand
+# back a sample biased towards high scores - fine for reporting a winner, fatal
+# for reporting what the rest of the grid did. This ceiling keeps whole grids of
+# a realistic size intact while still bounding memory for pathological ones; a
+# run that exceeds it says so and its distribution statistics are withheld.
+CLI_MAX_RESULTS_IN_MEMORY = 20000
+
+
+def add_plateau_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add the parameter-plateau flags to the optimizer's parser.
+
+    Distribution statistics and the winner's plateau score print on every run:
+    they are read off scores the optimizer already computed, they cost nothing,
+    and they are the honest counterweight to printing only the best row. The
+    heatmap and the CSV surface are opt-in because they are output volume
+    rather than information the reader always needs, and the plateau-centre
+    recommendation is opt-in because it is *not* the winner and must never be
+    mistaken for one.
+
+    Args:
+        parser: Parser to extend.
+    """
+    group = parser.add_argument_group('plateau analysis')
+    group.add_argument('--plateau-metric', default=None,
+                       choices=['total_return', 'sharpe_ratio', 'max_drawdown',
+                                'win_rate', 'total_trades', 'excess_return_pct'],
+                       help='Metric the surface is built from (default: --sort-by)')
+    group.add_argument('--plateau-tolerance', type=float, default=plateau_analysis.DEFAULT_TOLERANCE,
+                       help=(f'Plateau band width as a fraction of the winner\'s edge over the '
+                             f'grid median, in [0, 1] (default: '
+                             f'{plateau_analysis.DEFAULT_TOLERANCE:g}, i.e. cells retaining at '
+                             f'least 75%% of that edge)'))
+    group.add_argument('--plateau-heatmap', action='store_true',
+                       help='Print an ASCII heatmap of the parameter surface')
+    group.add_argument('--plateau-csv', default=None,
+                       help='Write the full surface to this CSV file for external plotting')
+    group.add_argument('--plateau-centre', action='store_true',
+                       help=('Also report the centre of the plateau around the winner. It is '
+                             'reported beside the winner and never replaces it'))
+    group.add_argument('--no-plateau', action='store_true',
+                       help='Skip plateau analysis and whole-grid distribution statistics')
+
+
+def report_plateau(results, args, selection: str) -> None:
+    """Print the whole-grid distribution and plateau blocks, and export the surface.
+
+    Args:
+        results: The optimisation results, exactly as returned by the optimizer.
+        args: Parsed command line carrying the plateau flags.
+        selection: How the evaluated combinations were chosen, one of the
+            ``plateau.SELECTION_*`` constants. Only the caller knows whether a
+            partial grid is an unbiased sample or a score-biased survivor set.
+    """
+    metric = args.plateau_metric or args.sort_by
+    report = plateau_analysis.analyse_results(
+        results,
+        metric=metric,
+        selection=selection,
+        tolerance=args.plateau_tolerance,
+    )
+
+    print()
+    print(plateau_analysis.render_report(
+        report,
+        show_heatmap=args.plateau_heatmap,
+        show_centre=args.plateau_centre,
+    ))
+
+    if args.plateau_csv:
+        cells = plateau_analysis.write_surface_csv(
+            report.surface, args.plateau_csv, report.plateau)
+        print(f"Parameter surface ({cells} cells) written to: {args.plateau_csv}")
 
 
 def load_and_validate_data(file_path: str, clean_data: bool = False) -> pd.DataFrame:
@@ -138,7 +215,10 @@ def main() -> int:
                        help='Output file for results (default: auto-generated)')
     parser.add_argument('--top-n', type=int, default=10,
                        help='Number of top results to display (default: 10)')
-    
+
+    # Parameter plateau / surface analysis
+    add_plateau_arguments(parser)
+
     # Logging
     parser.add_argument('--log-level', default='INFO',
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
@@ -174,7 +254,8 @@ def main() -> int:
             commission=args.commission,
             sort_by=args.sort_by,
             n_jobs=args.jobs,
-            cost_model=cost_model
+            cost_model=cost_model,
+            max_results_in_memory=CLI_MAX_RESULTS_IN_MEMORY
         )
         
         # Run optimization
@@ -278,7 +359,23 @@ def main() -> int:
         provenance = collect_provenance(args.data)
         optimizer.save_results(results, args.output, provenance=provenance)
         print(f"Full results saved to: {args.output}")
-        
+
+        # Plateau analysis last, and non-fatally: it reads scores the run
+        # already produced, so a reporting bug must not throw away an
+        # optimisation that has just been saved to disk.
+        if not args.no_plateau:
+            if optimizer.results_truncated:
+                selection = plateau_analysis.SELECTION_TRUNCATED
+            elif args.method == 'random':
+                selection = plateau_analysis.SELECTION_SAMPLED
+            else:
+                selection = plateau_analysis.SELECTION_EXHAUSTIVE
+
+            try:
+                report_plateau(results, args, selection)
+            except Exception as e:
+                logger.warning(f"Could not run plateau analysis: {e}")
+
         return 0
         
     except Exception as e:

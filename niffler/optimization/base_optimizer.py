@@ -28,7 +28,14 @@ class BaseOptimizer(ABC):
     DEFAULT_SORT_BY = 'total_return'
     BACKTEST_TIMEOUT_SECONDS = 300  # 5 minutes per backtest
     REQUIRED_DATA_COLUMNS = ['open', 'high', 'low', 'close', 'volume']
-    MAX_RESULTS_IN_MEMORY = 1000  # Limit results in memory for large optimizations
+    # Limit results in memory for large optimizations. When the cap is hit the
+    # worst-scoring half is discarded, which never changes the winner (the
+    # running best always survives a purge) but does leave a SCORE-BIASED
+    # subset: the surviving combinations beat any baseline far more often than
+    # the grid does. Callers that describe the whole grid rather than its top
+    # rows must raise the cap (max_results_in_memory) and/or check
+    # results_truncated before reporting a distribution.
+    MAX_RESULTS_IN_MEMORY = 1000
     DECIMAL_PRECISION = 28  # Decimal precision for float calculations
     
     # Define metrics configuration (metric_name: (higher_is_better, accessor_function))
@@ -63,10 +70,11 @@ class BaseOptimizer(ABC):
                  commission: float = DEFAULT_COMMISSION,
                  sort_by: str = DEFAULT_SORT_BY,
                  n_jobs: Optional[int] = None,
-                 cost_model: Optional[CostModel] = None):
+                 cost_model: Optional[CostModel] = None,
+                 max_results_in_memory: Optional[int] = None):
         """
         Initialize base optimizer.
-        
+
         Args:
             strategy_class: Strategy class to optimize
             parameter_space: Parameter search space
@@ -78,6 +86,13 @@ class BaseOptimizer(ABC):
             cost_model: Transaction cost model applied to every candidate
                 backtest. Optimising frictionlessly and then trading the winner
                 with real costs is exactly the trap this parameter closes.
+            max_results_in_memory: How many results to retain before the
+                worst-scoring half is discarded. None (default) uses
+                MAX_RESULTS_IN_MEMORY. Raising it keeps the full grid, which is
+                what any whole-grid statistic needs: the discarded results are
+                the losing ones, so a truncated run's surviving sample is
+                biased upwards. Whether a purge happened is reported by
+                results_truncated.
         """
         self.strategy_class = strategy_class
         self.parameter_space = parameter_space
@@ -87,7 +102,13 @@ class BaseOptimizer(ABC):
         self.sort_by = sort_by
         self.n_jobs = n_jobs or min(mp.cpu_count(), self.DEFAULT_MAX_WORKERS)
         self.cost_model = cost_model
-        
+        self.max_results_in_memory = (max_results_in_memory
+                                      if max_results_in_memory is not None
+                                      else self.MAX_RESULTS_IN_MEMORY)
+        # Set the first time results are discarded, so a caller reporting on
+        # the whole grid can tell a complete sample from a score-biased one.
+        self._results_truncated = False
+
         # Validate inputs
         self._validate_inputs()
         
@@ -111,6 +132,9 @@ class BaseOptimizer(ABC):
         if self.commission < 0:
             raise ValueError("commission cannot be negative")
         
+        if self.max_results_in_memory < 2:
+            raise ValueError("max_results_in_memory must be at least 2")
+
         if self.sort_by not in self.METRICS_CONFIG:
             available_metrics = ', '.join(self.METRICS_CONFIG.keys())
             raise ValueError(f"sort_by must be one of: {available_metrics}")
@@ -132,6 +156,20 @@ class BaseOptimizer(ABC):
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
     
+    @property
+    def results_truncated(self) -> bool:
+        """
+        Whether results were discarded to stay under the memory cap.
+
+        Returns:
+            True when at least one purge happened, which means the returned
+            results are the best-scoring survivors rather than every
+            combination evaluated. The winner is unaffected; any statistic over
+            the *whole* grid is not, and must say so instead of reporting a
+            biased sample.
+        """
+        return self._results_truncated
+
     def _check_shutdown(self) -> bool:
         """Check if shutdown was requested and log status."""
         with self._shutdown_lock:
@@ -254,11 +292,16 @@ class BaseOptimizer(ABC):
     
     def _manage_memory_efficient_results(self, results: List[OptimizationResult], 
                                        new_result: OptimizationResult) -> List[OptimizationResult]:
-        """Manage results list to prevent excessive memory usage by keeping only the best results."""
+        """Manage results list to prevent excessive memory usage by keeping only the best results.
+
+        Discarding the worst half never changes the winner, but it does leave a
+        score-biased sample; ``results_truncated`` records that it happened so
+        whole-grid statistics can refuse to describe it.
+        """
         results.append(new_result)
-        
+
         # If we have too many results, keep only the best ones
-        if len(results) > self.MAX_RESULTS_IN_MEMORY:
+        if len(results) > self.max_results_in_memory:
             # Sort by metric to keep the best results
             if self.sort_by in self.METRICS_CONFIG:
                 higher_is_better, accessor_func = self.METRICS_CONFIG[self.sort_by]
@@ -269,9 +312,15 @@ class BaseOptimizer(ABC):
                 results.sort(key=accessor_func, reverse=True)
             
             # Keep only the best half
-            keep_count = self.MAX_RESULTS_IN_MEMORY // 2
+            keep_count = self.max_results_in_memory // 2
             results = results[:keep_count]
-            logging.debug(f"Memory management: kept top {keep_count} results")
+            self._results_truncated = True
+            logging.warning(
+                f"Memory management: discarded the worst results and kept the top "
+                f"{keep_count}. The surviving sample is biased towards high "
+                f"{self.sort_by}; statistics over the whole grid must not be "
+                f"computed from it."
+            )
         
         return results
     

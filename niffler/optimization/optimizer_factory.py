@@ -26,7 +26,8 @@ def create_optimizer(
     commission: float = 0.001,
     sort_by: str = 'total_return',
     n_jobs: Optional[int] = None,
-    cost_model: Optional[CostModel] = None
+    cost_model: Optional[CostModel] = None,
+    max_results_in_memory: Optional[int] = None
 ) -> BaseOptimizer:
     """
     Create an optimizer instance based on the method name.
@@ -42,7 +43,11 @@ def create_optimizer(
         n_jobs: Number of parallel jobs (default: auto-detect)
         cost_model: Transaction cost model applied to every candidate backtest
             (default: None, i.e. the engine's frictionless default)
-        
+        max_results_in_memory: Results retained before the worst-scoring half is
+            discarded (default: None, i.e. the optimizer's own cap). Raise it to
+            keep every combination, which whole-grid statistics such as
+            :mod:`niffler.optimization.plateau` require
+
     Returns:
         Optimizer instance
         
@@ -61,7 +66,8 @@ def create_optimizer(
         commission=commission,
         sort_by=sort_by,
         n_jobs=n_jobs,
-        cost_model=cost_model
+        cost_model=cost_model,
+        max_results_in_memory=max_results_in_memory
     )
 
 
