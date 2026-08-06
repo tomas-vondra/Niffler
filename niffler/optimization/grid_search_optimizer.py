@@ -14,18 +14,34 @@ class GridSearchOptimizer(BaseOptimizer):
     def optimize(self) -> List[OptimizationResult]:
         """
         Perform grid search optimization.
-        
+
+        ``n_jobs`` is honoured here, as it is for random search: a grid search
+        used to ignore it entirely, so ``--jobs 8`` silently did nothing and a
+        1632-combination grid ran on one core. With ``n_jobs=1`` the lazy
+        single-process path is kept, because it is the one that never
+        materialises the combination list; above that, combinations are handed
+        to the shared process pool.
+
+        The two paths produce identical output for the same inputs: the pool
+        retains results in submission order (see
+        :meth:`BaseOptimizer._evaluate_parallel`), which is the order this
+        generator produced them in.
+
         Returns:
             List of optimization results sorted by objective value (best first)
         """
         # Estimate size and warn if too large
         estimated_size = self._estimate_combinations_count()
-        
+
         # Generate combinations lazily and evaluate them
         combinations_generator = self._generate_grid_combinations_lazy()
-        logging.info(f"Starting grid search with {estimated_size} parameter combinations")
-        
-        return self._evaluate_combinations_lazy(combinations_generator, estimated_size)
+        logging.info(f"Starting grid search with {estimated_size} parameter combinations "
+                     f"using {self.n_jobs} job(s)")
+
+        if self.n_jobs == 1:
+            return self._evaluate_combinations_lazy(combinations_generator, estimated_size)
+
+        return self._evaluate_combinations(list(combinations_generator))
     
     def _evaluate_combinations_lazy(self, combinations_generator: Iterator[Dict[str, Any]], 
                                    estimated_size: int) -> List[OptimizationResult]:

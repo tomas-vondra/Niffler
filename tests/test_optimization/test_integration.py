@@ -78,12 +78,13 @@ class TestOptimizationIntegration(unittest.TestCase):
             parameter_space=self.parameter_space,
             data=self.test_data,
             initial_capital=10000,
-            commission=0.001
+            commission=0.001,
+            n_jobs=1  # Disable parallel processing for mocking to work
         )
-        
+
         # Mock the reusable engine
         optimizer._backtest_engine = mock_engine
-        
+
         results = optimizer.optimize()
         
         # Verify results
@@ -171,9 +172,10 @@ class TestOptimizationIntegration(unittest.TestCase):
             parameter_space=get_parameter_space('simple_ma'),
             data=self.test_data,
             initial_capital=5000,
-            commission=0.002
+            commission=0.002,
+            n_jobs=1  # Disable parallel processing for mocking to work
         )
-        
+
         # Mock the reusable engine
         optimizer._backtest_engine = mock_engine
         
@@ -216,13 +218,15 @@ class TestOptimizationIntegration(unittest.TestCase):
         # Analyze best metrics
         best_metrics = optimizer.analyze_best_metrics(results)
         
-        # Verify metrics analysis
-        expected_metrics = ['total_return', 'sharpe_ratio', 'max_drawdown', 'win_rate', 'total_trades']
+        # Verify metrics analysis. total_trades is deliberately absent: it
+        # describes a run rather than ranking one.
+        expected_metrics = ['total_return', 'sharpe_ratio', 'max_drawdown', 'win_rate']
         for metric in expected_metrics:
             self.assertIn(metric, best_metrics)
             self.assertIn('parameters', best_metrics[metric])
             self.assertIn('value', best_metrics[metric])
             self.assertIn('higher_is_better', best_metrics[metric])
+        self.assertNotIn('total_trades', best_metrics)
     
     @patch('niffler.optimization.base_optimizer.BacktestEngine')
     def test_results_saving_integration(self, mock_engine_class):
@@ -236,15 +240,16 @@ class TestOptimizationIntegration(unittest.TestCase):
         optimizer = GridSearchOptimizer(
             strategy_class=SimpleMAStrategy,
             parameter_space=self.parameter_space,
-            data=self.test_data
+            data=self.test_data,
+            n_jobs=1  # Disable parallel processing for mocking to work
         )
-        
+
         # Mock the reusable engine
         optimizer._backtest_engine = mock_engine
-        
+
         # Run optimization
         results = optimizer.optimize()
-        
+
         # Save results to temporary file
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
             temp_filename = f.name

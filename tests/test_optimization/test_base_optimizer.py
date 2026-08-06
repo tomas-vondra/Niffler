@@ -220,30 +220,36 @@ class TestBaseOptimizer(unittest.TestCase):
         
         self.assertEqual(int_range, expected)
     
-    def test_calculate_float_steps(self):
-        """Test float step calculation."""
+    def test_lattice_size(self):
+        """Test the shared lattice both search methods sample from."""
         optimizer = TestOptimizer(
             strategy_class=MockStrategy,
             parameter_space=self.parameter_space,
             data=self.test_data
         )
-        
-        min_steps, max_steps = optimizer._calculate_float_steps(0.1, 0.5, 0.1)
-        
-        self.assertEqual(min_steps, 1)
-        self.assertEqual(max_steps, 5)
-    
-    def test_steps_to_float(self):
-        """Test converting steps back to float value."""
+
+        # 0.1, 0.2, 0.3, 0.4, 0.5 -> four steps above the minimum
+        self.assertEqual(optimizer._lattice_size(0.1, 0.5, 0.1), 4)
+        # A bound that does not land on the lattice is not reached
+        self.assertEqual(optimizer._lattice_size(0.0, 0.45, 0.1), 4)
+        self.assertEqual(optimizer._lattice_size(20, 100, 5), 16)
+
+    def test_lattice_size_matches_generated_values(self):
+        """The lattice count and the generated values cannot disagree."""
         optimizer = TestOptimizer(
             strategy_class=MockStrategy,
             parameter_space=self.parameter_space,
             data=self.test_data
         )
-        
-        result = optimizer._steps_to_float(3, 0.1)
-        self.assertAlmostEqual(result, 0.3, places=10)
-    
+
+        for minimum, maximum, step in [(0.1, 0.5, 0.1), (0.5, 1.0, 0.1),
+                                       (0.55, 1.05, 0.1), (0.0, 1.0, 0.25)]:
+            with self.subTest(minimum=minimum, maximum=maximum, step=step):
+                values = optimizer._generate_float_range(minimum, maximum, step)
+                self.assertEqual(optimizer._lattice_size(minimum, maximum, step) + 1,
+                                 len(values))
+
+
     def test_count_parameter_combinations(self):
         """Test counting parameter combinations."""
         optimizer = TestOptimizer(
@@ -411,13 +417,17 @@ class TestBaseOptimizer(unittest.TestCase):
             results.append(result)
         
         best_metrics = optimizer.analyze_best_metrics(results)
-        
-        # Should have entries for all metrics
-        expected_metrics = ['total_return', 'sharpe_ratio', 'max_drawdown', 'win_rate', 'total_trades']
+
+        # Should have entries for every metric that can be ranked
+        expected_metrics = ['total_return', 'sharpe_ratio', 'max_drawdown', 'win_rate']
         for metric in expected_metrics:
             self.assertIn(metric, best_metrics)
             self.assertIn('parameters', best_metrics[metric])
             self.assertIn('value', best_metrics[metric])
+
+        # ...and none for a metric that only describes a run. There is no
+        # sense in which a trade count is "best".
+        self.assertNotIn('total_trades', best_metrics)
     
     def test_analyze_best_metrics_empty_results(self):
         """Test analyzing best metrics with empty results."""

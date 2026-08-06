@@ -30,6 +30,9 @@ The short version, because these are easy to "helpfully" undo:
 | Below `min_trades_for_significance` there is **no verdict**; `is_significant` is `None` | Collapse `None` to `False`, or print a p-value without the "not meaningful" label |
 | An absent benchmark is `None`, not `0.0` | Default the comparison fields to zero, or treat a missing benchmark as a zero excess return |
 | A grid cell that errored, was never sampled or never traded is a **distinct state** excluded from every statistic | Fill it with `0.0`, which reads as a mediocre result rather than a missing one |
+| Grid and random search sample the **same lattice**, `min + k * step` | Draw a bare `randint(min, max)` for a stepped parameter, or sample `k * step` for a float whose `min` is not a multiple of `step` |
+| Parallel results are retained in **submission order** | Retain them in completion order, which makes both memory purges and the order of equal-scoring results depend on the worker count |
+| `total_trades` is **descriptive**, not ranked | Report a "best" trade count |
 | Whole-grid statistics come from a **complete** result set; a score-truncated one reports nothing | Print quartiles or a beat-the-baseline fraction computed from the survivors of `_manage_memory_efficient_results` |
 
 Scope limits that are deliberate, not oversights: long-only, no live trading, one strategy,
@@ -220,8 +223,17 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
   - `base_strategy.py` - Abstract base class for strategies
   - `simple_ma_strategy.py` - Simple moving average crossover strategy
 - `niffler/optimization/` - Parameter optimization framework
-  - `base_optimizer.py` - Abstract base class for optimizers
-  - `grid_search_optimizer.py` - Exhaustive grid search optimization
+  - `base_optimizer.py` - Abstract base class for optimizers. `_lattice_size` is the
+    **single** definition of the values a stepped parameter can take (`min + k * step`);
+    grid enumeration, random sampling and the space-size estimate all derive from it, so
+    `--method grid` and `--method random` cannot search different spaces.
+    `_evaluate_parallel` retains results in **submission order** via a reorder buffer
+    (a failed evaluation releases its slot), so a seeded run is byte-identical at
+    `n_jobs=1` and `n_jobs=8`. `DESCRIPTIVE_METRICS` lists metrics `analyze_best_metrics`
+    refuses to rank - currently `total_trades`, which has no "best"
+  - `grid_search_optimizer.py` - Exhaustive grid search optimization. **Honours
+    `n_jobs`**: `n_jobs=1` keeps the lazy path that never materialises the combination
+    list, above that the shared process pool is used
   - `random_search_optimizer.py` - Random parameter sampling optimization
   - `optimizer_factory.py` - Factory for creating optimizers and parameter spaces
   - `parameter_space.py` - Defines parameter ranges for strategies

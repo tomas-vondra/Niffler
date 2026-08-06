@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 import pandas as pd
 import logging
 import signal
-from typing import Dict, Any, List, Optional, Type, Tuple
+from typing import Dict, Any, List, Optional, Type
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing as mp
 from datetime import datetime
@@ -61,6 +61,13 @@ class BaseOptimizer(ABC):
             else float('-inf')
         )),
     }
+
+    # Metrics that describe a run rather than rank it. A trade count has no
+    # "best": neither more nor fewer trades is better, and the direction flag
+    # METRICS_CONFIG carries for it exists only so results can be *ordered* by
+    # it on request. analyze_best_metrics skips these rather than announcing a
+    # "Best Total Trades" that means nothing.
+    DESCRIPTIVE_METRICS = frozenset({'total_trades'})
     
     def __init__(self, 
                  strategy_class: Type[BaseStrategy],
@@ -216,50 +223,80 @@ class BaseOptimizer(ABC):
         return results
     
     def _evaluate_parallel(self, combinations: List[Dict[str, Any]]) -> List[OptimizationResult]:
-        """Evaluate combinations in parallel using ProcessPoolExecutor."""
+        """Evaluate combinations in parallel using ProcessPoolExecutor.
+
+        Results are retained in **submission order**, not completion order. A
+        pool hands work back in whatever order the workers finish, so collecting
+        in that order would make two things depend on the machine and the worker
+        count: which results survive a memory purge, and how equal-scoring
+        results are ordered by the stable sort that follows. A seeded run at
+        ``n_jobs=1`` and the same run at ``n_jobs=8`` have to produce identical
+        output, so completed results are held in a small reorder buffer and
+        drained as soon as the next expected index is available. A failed
+        evaluation releases its index too, or the drain would stall behind it.
+        """
         results = []
         failed_count = 0
-        
+
         try:
             with ProcessPoolExecutor(max_workers=self.n_jobs) as executor:
-                # Submit all jobs
-                future_to_params = {}
-                for params in combinations:
+                # Submit all jobs, remembering each one's position
+                future_to_index = {}
+                for index, params in enumerate(combinations):
                     try:
                         future = executor.submit(self._evaluate_single_combination_static,
                                                params, self.strategy_class, self.data,
                                                self.initial_capital, self.commission,
                                                self.cost_model)
-                        future_to_params[future] = params
+                        future_to_index[future] = index
                     except Exception as e:
                         logging.warning(f"Failed to submit job for {params}: {e}")
                         failed_count += 1
-                
-                # Collect results as they complete
-                for i, future in enumerate(as_completed(future_to_params)):
+
+                # Collect as they complete, but retain in submission order
+                completed: Dict[int, Optional[OptimizationResult]] = {}
+                next_index = 0
+                for i, future in enumerate(as_completed(future_to_index)):
                     if self._check_shutdown():
                         # Cancel remaining futures
-                        for remaining_future in future_to_params:
+                        for remaining_future in future_to_index:
                             if not remaining_future.done():
                                 remaining_future.cancel()
                         break
-                    
-                    params = future_to_params[future]
+
+                    index = future_to_index[future]
+                    params = combinations[index]
                     try:
-                        result = future.result(timeout=self.BACKTEST_TIMEOUT_SECONDS)
-                        if result is not None:
-                            results = self._manage_memory_efficient_results(results, result)
+                        completed[index] = future.result(timeout=self.BACKTEST_TIMEOUT_SECONDS)
                         logging.debug(f"Completed {i+1}/{len(combinations)}: {params}")
                     except TimeoutError:
                         logging.warning(f"Timeout evaluating {params} after {self.BACKTEST_TIMEOUT_SECONDS}s")
+                        completed[index] = None
                         failed_count += 1
                     except (EOFError, BrokenPipeError) as e:
                         logging.warning(f"Process communication error for {params}: {e}")
+                        completed[index] = None
                         failed_count += 1
                     except Exception as e:
                         logging.warning(f"Error evaluating {params}: {e}")
+                        completed[index] = None
                         failed_count += 1
-                        
+
+                    # Drain every position that is now contiguous with the last
+                    # one retained, so retention order never depends on timing.
+                    while next_index in completed:
+                        result = completed.pop(next_index)
+                        next_index += 1
+                        if result is not None:
+                            results = self._manage_memory_efficient_results(results, result)
+
+                # Anything still buffered (a shutdown broke the loop early)
+                for index in sorted(completed):
+                    result = completed[index]
+                    if result is not None:
+                        results = self._manage_memory_efficient_results(results, result)
+
+
         except Exception as e:
             logging.error(f"Critical error in parallel evaluation: {e}")
             raise
@@ -440,20 +477,27 @@ class BaseOptimizer(ABC):
     def analyze_best_metrics(self, results: List[OptimizationResult]) -> Dict[str, Dict[str, Any]]:
         """
         Analyze results to find best parameters for each metric.
-        
+
+        Metrics in DESCRIPTIVE_METRICS are skipped: they describe a run rather
+        than rank it, and reporting a "best" one invites a reader to select on
+        it. Sorting by such a metric is still available - what is not available
+        is calling the result best.
+
         Args:
             results: List of optimization results
-            
+
         Returns:
             Dictionary mapping metric names to best parameter combinations and values
         """
         if not results:
             return {}
-        
+
         best_metrics = {}
-        
+
         # Use the class-level metrics configuration
         for metric_name, (higher_is_better, accessor) in self.METRICS_CONFIG.items():
+            if metric_name in self.DESCRIPTIVE_METRICS:
+                continue
             try:
                 if higher_is_better:
                     best_result = max(results, key=accessor)
@@ -493,38 +537,20 @@ class BaseOptimizer(ABC):
         """Generate integer range with step support."""
         return list(range(min_val, max_val + 1, step))
     
-    def _calculate_float_steps(self, min_val: float, max_val: float, step: float) -> Tuple[int, int]:
-        """Calculate min and max steps for float parameter with step."""
-        getcontext().prec = self.DECIMAL_PRECISION
-        
-        min_decimal = Decimal(str(min_val))
-        max_decimal = Decimal(str(max_val))
-        step_decimal = Decimal(str(step))
-        
-        min_steps = int(min_decimal / step_decimal)
-        max_steps = int(max_decimal / step_decimal)
-        
-        return min_steps, max_steps
-    
-    def _steps_to_float(self, steps: int, step: float) -> float:
-        """Convert steps back to float value with precision."""
-        getcontext().prec = self.DECIMAL_PRECISION
-        
-        step_decimal = Decimal(str(step))
-        result_decimal = Decimal(steps) * step_decimal
-        
-        return float(result_decimal)
-    
     def _count_parameter_combinations(self, param_name: str, config: Dict[str, Any]) -> int:
-        """Count the number of combinations for a single parameter."""
+        """Count the number of combinations for a single parameter.
+
+        Counted off the same lattice both search methods sample from
+        (``min + k * step``), so an estimate never disagrees with the number of
+        values that actually get generated.
+        """
         if config['type'] == 'int':
             step = config.get('step', 1)
             return len(range(config['min'], config['max'] + 1, step))
         elif config['type'] == 'float':
             step = config.get('step')
             if step is not None:
-                min_steps, max_steps = self._calculate_float_steps(config['min'], config['max'], step)
-                return max_steps - min_steps + 1
+                return self._lattice_size(config['min'], config['max'], step) + 1
             else:
                 return float('inf')  # Continuous parameter
         elif config['type'] == 'choice':
@@ -545,17 +571,58 @@ class BaseOptimizer(ABC):
         else:
             raise ValueError(f"Unknown parameter type: {config['type']}")
     
+    def _lattice_size(self, min_val: float, max_val: float, step: float) -> int:
+        """Count the steps of ``step`` that fit between two bounds.
+
+        This is the single definition of the lattice a stepped parameter lives
+        on: the reachable values are ``min_val + k * step`` for
+        ``k`` in ``[0, _lattice_size(...)]``, which is exactly what
+        :meth:`_generate_float_range` and :meth:`_generate_int_range` produce.
+        Grid search and random search both derive their values from it, so the
+        two methods search the same space.
+
+        Args:
+            min_val: Lower bound (always reachable)
+            max_val: Upper bound (reachable only when it lands on the lattice)
+            step: Spacing between values
+
+        Returns:
+            The largest ``k`` for which ``min_val + k * step <= max_val``.
+        """
+        getcontext().prec = self.DECIMAL_PRECISION
+
+        span = Decimal(str(max_val)) - Decimal(str(min_val))
+        return int(span / Decimal(str(step)))
+
     def _generate_random_parameter_value(self, param_name: str, config: Dict[str, Any]) -> Any:
-        """Generate a random value for a parameter (for random search)."""
-        
+        """Generate a random value for a parameter (for random search).
+
+        Stepped parameters are sampled from the **same lattice grid search
+        enumerates**: ``min + k * step``. Drawing a bare ``randint(min, max)``
+        for an integer parameter made ``--method random`` and ``--method grid``
+        search different spaces - a ``long_window`` declared as 20..100 step 5
+        has 17 legal values, and random search was drawing from all 81 - so the
+        two methods could not be compared, and the grid a surface analysis
+        reconstructs from random-search results was five times finer than the
+        one the parameter space declares.
+
+        The float branch had the same fault in a subtler form: it sampled
+        ``k * step`` rather than ``min + k * step``, which drifts off the grid's
+        values - and can return a value **below** ``min`` - whenever ``min`` is
+        not itself a multiple of ``step``.
+        """
+
         if config['type'] == 'int':
-            return random.randint(config['min'], config['max'])
+            step = config.get('step', 1)
+            steps = self._lattice_size(config['min'], config['max'], step)
+            return config['min'] + random.randint(0, steps) * step
         elif config['type'] == 'float':
             step = config.get('step')
             if step is not None:
-                min_steps, max_steps = self._calculate_float_steps(config['min'], config['max'], step)
-                random_steps = random.randint(min_steps, max_steps)
-                return self._steps_to_float(random_steps, step)
+                getcontext().prec = self.DECIMAL_PRECISION
+                steps = self._lattice_size(config['min'], config['max'], step)
+                offset = Decimal(random.randint(0, steps)) * Decimal(str(step))
+                return float(Decimal(str(config['min'])) + offset)
             else:
                 return random.uniform(config['min'], config['max'])
         elif config['type'] == 'choice':

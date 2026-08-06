@@ -71,7 +71,8 @@ class TestGridSearchOptimizer(unittest.TestCase):
         optimizer = GridSearchOptimizer(
             strategy_class=MockStrategy,
             parameter_space=self.small_parameter_space,
-            data=self.test_data
+            data=self.test_data,
+            n_jobs=1  # these tests stub out in-process evaluation
         )
         
         self.assertEqual(optimizer.strategy_class, MockStrategy)
@@ -83,7 +84,8 @@ class TestGridSearchOptimizer(unittest.TestCase):
         optimizer = GridSearchOptimizer(
             strategy_class=MockStrategy,
             parameter_space=self.small_parameter_space,
-            data=self.test_data
+            data=self.test_data,
+            n_jobs=1  # these tests stub out in-process evaluation
         )
         
         count = optimizer._estimate_combinations_count()
@@ -149,7 +151,8 @@ class TestGridSearchOptimizer(unittest.TestCase):
         optimizer = GridSearchOptimizer(
             strategy_class=MockStrategy,
             parameter_space=self.small_parameter_space,
-            data=self.test_data
+            data=self.test_data,
+            n_jobs=1  # these tests stub out in-process evaluation
         )
         
         param_values = optimizer._build_param_values()
@@ -183,7 +186,8 @@ class TestGridSearchOptimizer(unittest.TestCase):
         optimizer = GridSearchOptimizer(
             strategy_class=MockStrategy,
             parameter_space=self.small_parameter_space,
-            data=self.test_data
+            data=self.test_data,
+            n_jobs=1  # these tests stub out in-process evaluation
         )
         
         combinations_generator = optimizer._generate_grid_combinations_lazy()
@@ -209,7 +213,8 @@ class TestGridSearchOptimizer(unittest.TestCase):
         optimizer = GridSearchOptimizer(
             strategy_class=MockStrategy,
             parameter_space=self.small_parameter_space,
-            data=self.test_data
+            data=self.test_data,
+            n_jobs=1  # these tests stub out in-process evaluation
         )
         
         # Mock the evaluation method
@@ -232,7 +237,8 @@ class TestGridSearchOptimizer(unittest.TestCase):
         optimizer = GridSearchOptimizer(
             strategy_class=MockStrategy,
             parameter_space=self.small_parameter_space,
-            data=self.test_data
+            data=self.test_data,
+            n_jobs=1  # these tests stub out in-process evaluation
         )
         
         # Mock shutdown after first evaluation
@@ -261,7 +267,8 @@ class TestGridSearchOptimizer(unittest.TestCase):
         optimizer = GridSearchOptimizer(
             strategy_class=MockStrategy,
             parameter_space=self.small_parameter_space,
-            data=self.test_data
+            data=self.test_data,
+            n_jobs=1  # these tests stub out in-process evaluation
         )
         
         # Mock the evaluation to return successful results
@@ -287,7 +294,8 @@ class TestGridSearchOptimizer(unittest.TestCase):
         optimizer = GridSearchOptimizer(
             strategy_class=MockStrategy,
             parameter_space=self.small_parameter_space,
-            data=self.test_data
+            data=self.test_data,
+            n_jobs=1  # these tests stub out in-process evaluation
         )
         
         # Mock all evaluations to return None (failure)
@@ -302,7 +310,8 @@ class TestGridSearchOptimizer(unittest.TestCase):
         optimizer = GridSearchOptimizer(
             strategy_class=MockStrategy,
             parameter_space=self.small_parameter_space,
-            data=self.test_data
+            data=self.test_data,
+            n_jobs=1  # these tests stub out in-process evaluation
         )
         
         # Mock evaluation to return success/failure alternately
@@ -330,7 +339,8 @@ class TestGridSearchOptimizer(unittest.TestCase):
         optimizer = GridSearchOptimizer(
             strategy_class=MockStrategy,
             parameter_space=self.small_parameter_space,
-            data=self.test_data
+            data=self.test_data,
+            n_jobs=1  # these tests stub out in-process evaluation
         )
         
         # Should have inherited methods
