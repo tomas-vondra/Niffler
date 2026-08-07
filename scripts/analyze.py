@@ -31,7 +31,7 @@ from niffler.optimization.optimizer_factory import (
     get_available_optimizers,
     get_parameter_space,
 )
-from niffler.strategies.simple_ma_strategy import SimpleMAStrategy
+from niffler.strategies.registry import get_available_strategies, get_strategy_class
 from niffler.utils.provenance import collect_provenance
 from scripts.common import (
     add_cost_model_arguments,
@@ -82,7 +82,7 @@ Examples:
     parser.add_argument(
         '--strategy',
         required=True,
-        choices=['simple_ma'],
+        choices=get_available_strategies(),
         help='Trading strategy to analyze'
     )
     
@@ -295,18 +295,6 @@ def load_parameters(args) -> dict:
     
     else:
         raise ValueError("Either --params or --params_file must be specified")
-
-
-def get_strategy_class(strategy_name: str):
-    """Get strategy class by name."""
-    strategy_map = {
-        'simple_ma': SimpleMAStrategy
-    }
-    
-    if strategy_name not in strategy_map:
-        raise ValueError(f"Unknown strategy: {strategy_name}")
-    
-    return strategy_map[strategy_name]
 
 
 def validate_parameters(strategy_class, parameters: dict):

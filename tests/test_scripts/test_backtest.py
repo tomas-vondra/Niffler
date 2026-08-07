@@ -159,7 +159,7 @@ class TestBacktestScript(unittest.TestCase):
 
     @patch('scripts.backtest.setup_logging')
     @patch('scripts.backtest.BacktestEngine')
-    @patch('scripts.backtest.SimpleMAStrategy')
+    @patch('scripts.backtest.create_strategy')
     @patch('scripts.backtest.load_data')
     @patch('sys.argv', ['backtest.py', '--data', 'test.csv', '--symbol', 'TEST'])
     def test_main_basic_execution(self, mock_load_data, 
@@ -282,7 +282,7 @@ class TestBacktestScript(unittest.TestCase):
         )
         
         with patch('scripts.backtest.BacktestEngine') as mock_engine_class:
-            with patch('scripts.backtest.SimpleMAStrategy') as mock_strategy_class:
+            with patch('scripts.backtest.create_strategy') as mock_strategy_class:
                 with patch('pandas.DataFrame.to_csv') as mock_to_csv:
                     mock_engine = MagicMock()
                     mock_engine.run_backtest.return_value = mock_result
@@ -303,7 +303,7 @@ class TestBacktestScript(unittest.TestCase):
         with patch('scripts.backtest.setup_logging') as mock_setup_logging:
             with patch('scripts.backtest.load_data') as mock_load_data:
                 with patch('scripts.backtest.BacktestEngine') as mock_engine_class:
-                    with patch('scripts.backtest.SimpleMAStrategy') as mock_strategy_class:
+                    with patch('scripts.backtest.create_strategy') as mock_strategy_class:
                         # Mock to prevent actual execution
                         mock_load_data.return_value = pd.DataFrame({
                             'open': [100.0] * 10,
@@ -451,7 +451,7 @@ class TestBacktestExportReporting(unittest.TestCase):
     @patch('scripts.backtest.setup_logging')
     @patch('scripts.backtest.ExporterManager')
     @patch('scripts.backtest.BacktestEngine')
-    @patch('scripts.backtest.SimpleMAStrategy')
+    @patch('scripts.backtest.create_strategy')
     @patch('scripts.backtest.load_data')
     @patch('sys.argv', ['backtest.py', '--data', 'test.csv', '--exporters', 'csv'])
     def test_main_returns_non_zero_when_export_fails(self, mock_load_data, mock_strategy_class,
@@ -491,7 +491,7 @@ class TestBacktestExportReporting(unittest.TestCase):
     @patch('scripts.backtest.setup_logging')
     @patch('scripts.backtest.ExporterManager')
     @patch('scripts.backtest.BacktestEngine')
-    @patch('scripts.backtest.SimpleMAStrategy')
+    @patch('scripts.backtest.create_strategy')
     @patch('scripts.backtest.load_data')
     @patch('sys.argv', ['backtest.py', '--data', 'test.csv', '--exporters', 'csv'])
     def test_main_returns_zero_when_export_succeeds(self, mock_load_data, mock_strategy_class,
@@ -529,7 +529,7 @@ class TestBacktestExportReporting(unittest.TestCase):
     @patch('scripts.backtest.setup_logging')
     @patch('scripts.backtest.ExporterManager')
     @patch('scripts.backtest.BacktestEngine')
-    @patch('scripts.backtest.SimpleMAStrategy')
+    @patch('scripts.backtest.create_strategy')
     @patch('scripts.backtest.load_data')
     @patch('sys.argv', ['backtest.py', '--data', 'test.csv', '--exporters', 'does-not-exist'])
     def test_main_returns_non_zero_when_no_exporter_created(self, mock_load_data, mock_strategy_class,
@@ -565,7 +565,7 @@ class TestBacktestExportReporting(unittest.TestCase):
     @patch('scripts.backtest.collect_provenance')
     @patch('scripts.backtest.ExporterManager')
     @patch('scripts.backtest.BacktestEngine')
-    @patch('scripts.backtest.SimpleMAStrategy')
+    @patch('scripts.backtest.create_strategy')
     @patch('scripts.backtest.load_data')
     @patch('sys.argv', ['backtest.py', '--data', 'test.csv', '--exporters', 'csv'])
     def test_main_collects_provenance_once_and_passes_it_to_the_manager(
@@ -639,7 +639,7 @@ class TestBenchmarkCommandLine(unittest.TestCase):
         with patch('sys.argv', argv), \
                 patch('scripts.backtest.setup_logging'), \
                 patch('scripts.backtest.load_data', return_value=data), \
-                patch('scripts.backtest.SimpleMAStrategy') as strategy_class, \
+                patch('scripts.backtest.create_strategy') as strategy_class, \
                 patch('scripts.backtest.ExporterManager') as manager_class, \
                 patch('scripts.backtest.BacktestEngine') as engine_class:
             strategy_class.return_value = MagicMock()

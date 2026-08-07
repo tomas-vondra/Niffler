@@ -384,8 +384,11 @@ Being explicit, so nobody discovers these the expensive way:
   `--cost-model fixed|volume` adds spread, slippage, square-root market impact and a
   participation cap. What is still missing: intra-bar execution timing, a real order book,
   borrow costs and financing.
-- **One strategy ships:** `simple_ma` (moving-average crossover). The framework is
-  extensible; the library is not stocked.
+- **Three strategies ship:** `simple_ma` (moving-average crossover), `rsi` (mean reversion
+  on Wilder's RSI) and `breakout` (Donchian channel). They are deliberately textbook
+  examples covering three different families, not edges — see
+  [Adding a strategy](#adding-a-strategy). The framework is extensible; the library is not
+  stocked.
 - **Kelly risk manager is a stub.** `KellyRiskManager` exists as a class, but
   `calculate_position_size()`, `calculate_stop_loss()` and `should_close_position()` all
   raise `NotImplementedError`. `FixedRiskManager` is the only working risk manager.
@@ -517,6 +520,48 @@ This is **not** a multiple-testing correction and not a deflated Sharpe ratio - 
 of seeing whether the winner sits on a hill or on a needle, plus the honest counterweight
 to a report that otherwise shows only its best row.
 
+## Adding a strategy
+
+Adding a strategy is **one class plus one registry line**. Everything that offers a
+strategy by name derives its choices from
+[`niffler/strategies/registry.py`](niffler/strategies/registry.py), so a registered
+strategy is immediately available to `backtest.py`, `optimize.py` and `analyze.py`
+without editing any of them.
+
+1. Write the class in `niffler/strategies/`, subclassing `BaseStrategy` and implementing
+   `generate_signals` and `get_description`. Give **every** constructor parameter a
+   default, and accept `position_size` and `risk_manager` — the whole library builds
+   strategies as `strategy_class(**parameters)`, so a parameter without a default breaks
+   every optimizer.
+2. Declare the optimisation search space as a `PARAMETER_SPEC` class attribute — a plain
+   dict of `{'type', 'min', 'max', 'step'}` entries whose keys are constructor parameters.
+   It is deliberately plain data rather than a `ParameterSpace`: the optimization layer
+   wraps it, which is what keeps `niffler/strategies/` free of any import from
+   `niffler/optimization/`. The dependency runs one way only.
+3. Add one line to `STRATEGY_CLASSES` in `niffler/strategies/registry.py`.
+
+That is the whole procedure. `tests/test_strategies/test_registry.py` then applies the
+shared contract to it automatically, with no new test file required:
+
+- every `PARAMETER_SPEC` key is accepted by the constructor;
+- both corners of the search space construct and generate signals;
+- signals are only ever `-1`, `0` or `1`, alongside a `position_size` column;
+- the grid stays under the CLI's result-retention cap, so whole-grid statistics are not
+  silently withheld;
+- and **the strategy does not look ahead** — the signal on each bar is recomputed from a
+  data set truncated at that bar and must come out identical.
+
+That last check is the valuable one, and it is worth knowing its limit: truncation proves
+a signal does not depend on *later bars*, but it cannot see an **intra-bar** leak such as
+judging a bar's close against its own high. Those need a per-strategy test — see
+`TestDonchianChannel` in `tests/test_strategies/test_breakout_strategy.py`, which pins the
+`.shift(1)` that moves the Donchian channel off the current bar.
+
+Strategy parameters reach `backtest.py` through `--params` as JSON. A parameter the chosen
+strategy does not accept is an **error naming the accepted ones**, never silently dropped,
+so `--strategy rsi --short-window 5` fails loudly instead of quietly running RSI with
+default settings.
+
 ## Architecture
 
 ### Core Components
@@ -578,7 +623,7 @@ The suite is the source of truth for its own size. Run it:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-At the time of writing this reports **1054 tests, 0 failures, 0 errors**. Treat that as a
+At the time of writing this reports **1113 tests, 0 failures, 0 errors**. Treat that as a
 sanity check, not a spec — if the command disagrees with this paragraph, believe the
 command. It is the only place in the documentation that quotes a count.
 

@@ -1,8 +1,9 @@
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, List
+from typing import Any, Dict, List
 
 import pandas as pd
 
@@ -19,7 +20,11 @@ from niffler.backtesting.significance import (
     DEFAULT_BOOTSTRAP_SEED,
     DEFAULT_MIN_TRADES,
 )
-from niffler.strategies.simple_ma_strategy import SimpleMAStrategy
+from niffler.strategies.registry import (
+    create_strategy,
+    get_available_strategies,
+    get_strategy_parameter_names,
+)
 from niffler.risk import FixedRiskManager
 from niffler.exporters import ExporterManager
 from niffler.utils.provenance import collect_provenance
@@ -104,6 +109,65 @@ def report_export_outcome(export_result: Any, exporter_names: List[str]) -> int:
     return 0
 
 
+# Convenience flags that map onto strategy constructor parameters. The flag name
+# is only needed to phrase errors in the terms the user actually typed.
+STRATEGY_PARAMETER_FLAGS = {
+    'short_window': '--short-window',
+    'long_window': '--long-window',
+    'position_size': '--position-size',
+}
+
+
+def build_strategy_parameters(args) -> Dict[str, Any]:
+    """Collect strategy parameters from --params and the convenience flags.
+
+    An explicitly passed flag overrides the same key in ``--params``. A parameter
+    the chosen strategy does not accept raises rather than being dropped, so
+    ``--strategy rsi --short-window 5`` fails loudly instead of silently running
+    an RSI backtest with default settings.
+
+    Args:
+        args: Parsed command line arguments.
+
+    Returns:
+        Keyword arguments for the strategy constructor.
+
+    Raises:
+        ValueError: If --params is not a JSON object, or a supplied parameter is
+            not accepted by the chosen strategy.
+    """
+    parameters: Dict[str, Any] = {}
+
+    if args.params:
+        try:
+            parsed = json.loads(args.params)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in --params: {e}") from e
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                f"--params must be a JSON object, got {type(parsed).__name__}"
+            )
+        parameters.update(parsed)
+
+    for name in STRATEGY_PARAMETER_FLAGS:
+        value = getattr(args, name, None)
+        if value is not None:
+            parameters[name] = value
+
+    accepted = get_strategy_parameter_names(args.strategy)
+    unknown = sorted(set(parameters) - accepted)
+    if unknown:
+        # Report the flag spelling where the parameter has one, since that is
+        # what the user typed.
+        rendered = ', '.join(STRATEGY_PARAMETER_FLAGS.get(name, name) for name in unknown)
+        raise ValueError(
+            f"Strategy '{args.strategy}' does not accept: {rendered}. "
+            f"It accepts: {', '.join(sorted(accepted))}"
+        )
+
+    return parameters
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description='Backtest trading strategies on historical data with optional risk management',
@@ -112,8 +176,15 @@ def main() -> int:
 Examples:
   # Basic backtest without risk management
   python backtest.py --data data/BTC.csv --strategy simple_ma
-  
-  # Backtest with fixed risk management  
+
+  # Any registered strategy is configured through --params
+  python backtest.py --data data/BTC.csv --strategy rsi \\
+    --params '{"rsi_period": 14, "oversold": 30, "overbought": 70}'
+
+  python backtest.py --data data/BTC.csv --strategy breakout \\
+    --params '{"entry_window": 20, "exit_window": 10}'
+
+  # Backtest with fixed risk management
   python backtest.py --data data/BTC.csv --strategy simple_ma --risk-manager fixed \\
     --max-position-size 0.1 --stop-loss-pct 0.05 --max-positions 3
         """
@@ -123,15 +194,25 @@ Examples:
     parser.add_argument('--data', '-d', required=True,
                        help='Path to CSV data file')
     parser.add_argument('--strategy', '-s', default='simple_ma',
-                       choices=['simple_ma'],
+                       choices=get_available_strategies(),
                        help='Strategy to backtest (default: simple_ma)')
-    
-    # Strategy parameters
-    parser.add_argument('--short-window', type=int, default=10,
-                       help='Short MA window for simple_ma strategy (default: 10)')
-    parser.add_argument('--long-window', type=int, default=30,
-                       help='Long MA window for simple_ma strategy (default: 30)')
-    parser.add_argument('--position-size', type=float, default=1.0,
+
+    # Strategy parameters.
+    #
+    # --params is the generic path and works for every registered strategy. The
+    # named flags below are conveniences for parameters the strategies happen to
+    # share; each defaults to None so an explicitly passed flag can be told apart
+    # from an unset one. A flag the chosen strategy does not accept is an error,
+    # never silently ignored - the same rule the cost-model flags follow.
+    parser.add_argument('--params',
+                       help='Strategy parameters as a JSON object, e.g. '
+                            '\'{"rsi_period": 14, "oversold": 30}\'. Works for any '
+                            'strategy; unknown names are reported with the accepted ones.')
+    parser.add_argument('--short-window', type=int, default=None,
+                       help='Short MA window (simple_ma; default: strategy default)')
+    parser.add_argument('--long-window', type=int, default=None,
+                       help='Long MA window (simple_ma; default: strategy default)')
+    parser.add_argument('--position-size', type=float, default=None,
                        help='Position size as fraction of portfolio (default: 1.0)')
     
     # Backtest parameters
@@ -240,17 +321,15 @@ Examples:
             )
             print(f"Risk Manager: {risk_manager.get_risk_metrics()['risk_management_type']}")
         
-        # Initialize strategy
-        if args.strategy == 'simple_ma':
-            strategy = SimpleMAStrategy(
-                short_window=args.short_window,
-                long_window=args.long_window,
-                position_size=args.position_size,
-                risk_manager=risk_manager
-            )
-        else:
-            raise ValueError(f"Unknown strategy: {args.strategy}")
-        
+        # Initialize strategy. Construction is generic: a strategy registered in
+        # niffler.strategies.registry is usable here with no change to this file.
+        strategy = create_strategy(
+            args.strategy,
+            build_strategy_parameters(args),
+            risk_manager=risk_manager
+        )
+
+
         print(f"Strategy: {strategy.get_description()}")
         
         # Print risk management info

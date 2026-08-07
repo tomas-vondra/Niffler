@@ -34,9 +34,13 @@ The short version, because these are easy to "helpfully" undo:
 | Parallel results are retained in **submission order** | Retain them in completion order, which makes both memory purges and the order of equal-scoring results depend on the worker count |
 | `total_trades` is **descriptive**, not ranked | Report a "best" trade count |
 | Whole-grid statistics come from a **complete** result set; a score-truncated one reports nothing | Print quartiles or a beat-the-baseline fraction computed from the survivors of `_manage_memory_efficient_results` |
+| There is **one** strategy registry (`niffler/strategies/registry.py`) and every CLI's `--strategy` choices derive from it | Hardcode a `choices=[...]` list, or define a second name→class map in a script (that exact shadowing bug made `analyze.py` reject strategies `optimize.py` accepted) |
+| `niffler/strategies/` imports **nothing** from `niffler/optimization/`; a strategy declares `PARAMETER_SPEC` as a plain dict | Import `ParameterSpace` into a strategy module - `niffler/optimization/__init__` imports `optimizer_factory`, which imports the registry, so it is a circular import |
+| A strategy parameter the chosen strategy does not accept is an **error** | Silently drop an unknown `--params` key or a foreign flag, which runs the strategy with defaults while the user thinks it was configured |
+| Every strategy parameter has a **default** and every strategy accepts `position_size` / `risk_manager` | Add a required constructor argument - the library builds strategies as `strategy_class(**parameters)` |
 
-Scope limits that are deliberate, not oversights: long-only, no live trading, one strategy,
-Kelly risk manager is a stub. Slippage/spread/market impact **are** modelled now
+Scope limits that are deliberate, not oversights: long-only, no live trading, three
+textbook strategies rather than an edge, Kelly risk manager is a stub. Slippage/spread/market impact **are** modelled now
 (`niffler/backtesting/cost_model.py`) but default to off, and a run with no cost model
 labels itself as frictionless. There is **no multiple-testing correction and no deflated
 Sharpe ratio**: a p-value from a run whose parameters were fitted on the same data
@@ -221,7 +225,20 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
   - `backtest_result.py` - Performance metrics and results
 - `niffler/strategies/` - Trading strategy implementations
   - `base_strategy.py` - Abstract base class for strategies
+  - `registry.py` - **The** strategy registry (`STRATEGY_CLASSES`,
+    `get_strategy_class`, `get_available_strategies`, `get_parameter_spec`,
+    `get_strategy_parameter_names`, `create_strategy`). Every `--strategy` choice in
+    every CLI derives from it, so adding a strategy is one entry in one file. It
+    deliberately does **not** import from `niffler.optimization`: a strategy declares
+    its search space as a plain `PARAMETER_SPEC` dict and the optimization layer wraps
+    it, because `niffler/optimization/__init__.py` imports `optimizer_factory`, which
+    imports this module
   - `simple_ma_strategy.py` - Simple moving average crossover strategy
+  - `rsi_strategy.py` - Mean reversion on Wilder's RSI, entering on the threshold
+    **crossing** so a persistently oversold market is one signal, not one per bar
+  - `breakout_strategy.py` - Donchian channel breakout. The rolling extremes are
+    `.shift(1)`-ed off the current bar; without that the close is compared against a
+    band its own high helped set
 - `niffler/optimization/` - Parameter optimization framework
   - `base_optimizer.py` - Abstract base class for optimizers. `_lattice_size` is the
     **single** definition of the values a stepped parameter can take (`min + k * step`);
@@ -235,8 +252,11 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
     `n_jobs`**: `n_jobs=1` keeps the lazy path that never materialises the combination
     list, above that the shared process pool is used
   - `random_search_optimizer.py` - Random parameter sampling optimization
-  - `optimizer_factory.py` - Factory for creating optimizers and parameter spaces
-  - `parameter_space.py` - Defines parameter ranges for strategies
+  - `optimizer_factory.py` - Factory for creating optimizers, plus `get_parameter_space`,
+    which wraps a strategy's `PARAMETER_SPEC` in a `ParameterSpace`. The strategy name to
+    class lookup is **not** here - it lives in `niffler/strategies/registry.py`
+  - `parameter_space.py` - `ParameterSpace` validation only. It holds **no** per-strategy
+    constant; a strategy owns its own space
   - `optimization_result.py` - Stores and analyzes optimization results
   - `plateau.py` - **Pure analysis** of the score surface an optimisation already
     produced: it re-runs nothing and recomputes no metric. `build_surface` turns results
@@ -504,7 +524,12 @@ The modular export system enables flexible output of backtest results to multipl
 - Validate argument parsing and data output formats
 - Test packages mirror the source layout: `tests/test_backtesting`, `test_analysis`,
   `test_downloaders`, `test_preprocessors`, `test_optimization`, `test_risk`,
-  `test_exporters`, `test_scripts`, `test_utils`
+  `test_exporters`, `test_scripts`, `test_strategies`, `test_utils`
+- `tests/test_strategies/test_registry.py` holds the **shared strategy contract**: it
+  iterates the registry, so a newly registered strategy is covered automatically. Its
+  look-ahead check recomputes each bar's signal from data truncated at that bar. That
+  catches dependence on *later* bars; an **intra-bar** leak (judging a close against its
+  own high) is invisible to it and needs a per-strategy test
 - Integration and functional testing to ensure end-to-end workflow reliability
 - Isolated testing with proper mocking and teardown procedures — tests must not leave files
   in the repository root

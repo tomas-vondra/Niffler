@@ -5,7 +5,13 @@ import pandas as pd
 from niffler.optimization.optimizer_factory import create_optimizer
 from niffler.optimization.grid_search_optimizer import GridSearchOptimizer
 from niffler.optimization.random_search_optimizer import RandomSearchOptimizer
-from niffler.optimization.parameter_space import ParameterSpace, SIMPLE_MA_PARAMETER_SPACE
+from niffler.optimization.parameter_space import ParameterSpace
+from niffler.optimization.optimizer_factory import get_parameter_space
+
+# The simple_ma space is now derived from the strategy's own PARAMETER_SPEC via
+# the registry rather than being a constant in parameter_space.py. Built once so
+# the identity assertions below still compare the object that was passed in.
+SIMPLE_MA_PARAMETER_SPACE = get_parameter_space('simple_ma')
 from niffler.strategies.simple_ma_strategy import SimpleMAStrategy
 from niffler.strategies.base_strategy import BaseStrategy
 
