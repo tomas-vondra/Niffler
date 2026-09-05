@@ -16,7 +16,9 @@ from unittest.mock import patch
 project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
 
+from niffler.backtesting.run_config import RunConfig
 from scripts.compare import (
+    FoldSchedule,
     evaluate,
     main,
     paired_folds,
@@ -29,7 +31,7 @@ def base_args(**overrides) -> argparse.Namespace:
     # The cost flags stay None: build_cost_model treats a flag set alongside
     # --cost-model none as an error, which is the behaviour we want everywhere else.
     values = {
-        'capital': 10000.0, 'commission': 0.001, 'cost_model': 'none',
+        'initial_capital': 10000.0, 'commission': 0.001, 'cost_model': 'none',
         'slippage_bps': None, 'half_spread_bps': None, 'impact_coefficient': None,
         'max_participation': None, 'clean': False,
         'train_window': 12, 'test_window': 6, 'step': 6, 'anchored': False,
@@ -87,7 +89,8 @@ class TestEvaluateFailureHandling(unittest.TestCase):
     def test_a_failing_pair_becomes_a_row_carrying_the_error(self):
         """One broken dataset must not abort a batch, nor vanish from the table."""
         with patch('scripts.compare.load_ohlcv_csv', side_effect=ValueError('bad file')):
-            row = evaluate('data/BROKEN_research.csv', 'breakout', base_args())
+            row = evaluate('data/BROKEN_research.csv', 'breakout',
+                           RunConfig(), FoldSchedule(n_jobs=1))
 
         self.assertEqual(row['symbol'], 'BROKEN')
         self.assertEqual(row['strategy'], 'breakout')
@@ -114,9 +117,9 @@ class TestMainArgumentHandling(unittest.TestCase):
         """
         captured = {}
 
-        def fake_evaluate(path, strategy, args):
-            captured['step'] = args.step
-            captured['test_window'] = args.test_window
+        def fake_evaluate(path, strategy, run_config, schedule):
+            captured['step'] = schedule.effective_step_months
+            captured['test_window'] = schedule.test_window_months
             return {'symbol': 'X', 'strategy': strategy, 'error': 'stop'}
 
         argv = ['compare.py', '--data', __file__, '--strategy', 'breakout']
@@ -129,8 +132,8 @@ class TestMainArgumentHandling(unittest.TestCase):
     def test_explicit_step_is_respected(self):
         captured = {}
 
-        def fake_evaluate(path, strategy, args):
-            captured['step'] = args.step
+        def fake_evaluate(path, strategy, run_config, schedule):
+            captured['step'] = schedule.effective_step_months
             return {'symbol': 'X', 'strategy': strategy, 'error': 'stop'}
 
         argv = ['compare.py', '--data', __file__, '--strategy', 'breakout',

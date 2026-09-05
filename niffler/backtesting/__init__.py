@@ -19,12 +19,14 @@ from .cost_model import (
 )
 from .portfolio import Portfolio
 from .round_trip import RoundTrip, pair_trades
+from .run_config import RunConfig, resolve_run_config
 from .significance import SignificanceResult, assess_significance
 from .trade import Trade, TradeSide
 
 __all__ = ['BacktestEngine', 'BacktestResult', 'CostModel', 'FillRequest',
            'FixedSlippageModel', 'VolumeShareSlippageModel', 'ZeroCostModel',
-           'Portfolio', 'RoundTrip', 'pair_trades', 'Trade', 'TradeSide',
+           'Portfolio', 'RoundTrip', 'pair_trades', 'RunConfig',
+           'resolve_run_config', 'Trade', 'TradeSide',
            'BENCHMARK_BUY_AND_HOLD', 'BENCHMARK_CHOICES', 'BENCHMARK_NONE',
            'BenchmarkError', 'BenchmarkResult', 'compute_benchmark',
            'compute_buy_and_hold', 'information_ratio',

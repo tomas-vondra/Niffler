@@ -21,6 +21,7 @@ sys.path.insert(0, str(project_root))
 from niffler.analysis.monte_carlo_analyzer import MonteCarloAnalyzer
 from niffler.analysis.walk_forward_analyzer import WalkForwardAnalyzer
 from niffler.backtesting.cost_model import FixedSlippageModel, ZeroCostModel
+from niffler.backtesting.run_config import RunConfig
 from niffler.optimization.parameter_space import ParameterSpace
 from niffler.strategies.simple_ma_strategy import SimpleMAStrategy
 
@@ -59,7 +60,7 @@ class TestWalkForwardCarriesTheCostModel(unittest.TestCase):
             test_window_months=3,
             step_months=3,
             n_jobs=n_jobs,
-            cost_model=cost_model,
+            run_config=RunConfig(cost_model=cost_model),
         )
 
     def test_the_reusable_engine_gets_it(self):
@@ -81,17 +82,16 @@ class TestWalkForwardCarriesTheCostModel(unittest.TestCase):
                 parameter_space=PARAMETER_SPACE,
                 optimization_method='grid',
                 optimization_metric='total_return',
-                initial_capital=10000.0,
-                commission=0.001,
-                cost_model=self.cost_model,
+                run_config=RunConfig(cost_model=self.cost_model),
             )
 
-        self.assertIs(factory.call_args.kwargs['cost_model'], self.cost_model)
+        self.assertIs(factory.call_args.kwargs['run_config'].cost_model, self.cost_model)
 
     def test_a_fold_without_a_shared_engine_still_gets_it(self):
         """The parallel path builds a fresh engine per fold."""
         with patch('niffler.analysis.walk_forward_analyzer.BacktestEngine') as engine_cls:
-            engine_cls.return_value.run_backtest.side_effect = RuntimeError('stop here')
+            engine_cls.from_config.return_value.run_backtest.side_effect = RuntimeError(
+                'stop here')
 
             with self.assertRaises(RuntimeError):
                 WalkForwardAnalyzer._execute_fold(
@@ -104,13 +104,11 @@ class TestWalkForwardCarriesTheCostModel(unittest.TestCase):
                     mode='segmented_in_sample',
                     optimization_method='grid',
                     optimization_metric='total_return',
-                    initial_capital=10000.0,
-                    commission=0.001,
-                    cost_model=self.cost_model,
+                    run_config=RunConfig(cost_model=self.cost_model),
                     backtest_engine=None,
                 )
 
-        self.assertIs(engine_cls.call_args.kwargs['cost_model'], self.cost_model)
+        self.assertIs(engine_cls.from_config.call_args.args[0].cost_model, self.cost_model)
 
     def test_the_cost_model_is_reported_in_the_analysis_parameters(self):
         analyzer = self._analyzer(self.cost_model)
@@ -146,7 +144,7 @@ class TestMonteCarloCarriesTheCostModel(unittest.TestCase):
             n_simulations=n_simulations,
             n_jobs=n_jobs,
             random_seed=7,
-            cost_model=cost_model,
+            run_config=RunConfig(cost_model=cost_model),
         )
 
     def test_the_reusable_engine_gets_it(self):
@@ -160,11 +158,11 @@ class TestMonteCarloCarriesTheCostModel(unittest.TestCase):
     def test_the_static_worker_applies_it(self):
         free = MonteCarloAnalyzer._run_single_simulation_static(
             self.data, 'TEST', 0, SimpleMAStrategy, OPTIMAL_PARAMETERS,
-            0.8, 30, 10000.0, 0.001, 7, None
+            0.8, 30, 7, RunConfig()
         )
         costed = MonteCarloAnalyzer._run_single_simulation_static(
             self.data, 'TEST', 0, SimpleMAStrategy, OPTIMAL_PARAMETERS,
-            0.8, 30, 10000.0, 0.001, 7, self.cost_model
+            0.8, 30, 7, RunConfig(cost_model=self.cost_model)
         )
 
         self.assertIsNotNone(free)
@@ -189,7 +187,7 @@ class TestMonteCarloCarriesTheCostModel(unittest.TestCase):
                 analyzer._run_simulations_parallel(self.data, 'TEST')
 
         for call in executor.submit.call_args_list:
-            self.assertIs(call.args[-1], self.cost_model)
+            self.assertIs(call.args[-1].cost_model, self.cost_model)
 
     def test_the_cost_model_is_reported_in_the_analysis_parameters(self):
         analyzer = self._analyzer(self.cost_model)

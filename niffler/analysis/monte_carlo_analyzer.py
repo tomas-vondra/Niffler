@@ -8,7 +8,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from niffler.strategies.base_strategy import BaseStrategy
 from niffler.backtesting.backtest_engine import BacktestEngine
-from niffler.backtesting.cost_model import CostModel
+from niffler.backtesting.run_config import RunConfig, resolve_run_config
 from .analysis_result import AnalysisResult, log_failure_rate
 
 
@@ -33,12 +33,10 @@ class MonteCarloAnalyzer:
                  n_simulations: int = 1000,
                  bootstrap_sample_pct: float = 0.8,
                  block_size_days: int = 30,
-                 initial_capital: float = 10000.0,
-                 commission: float = 0.001,
                  n_jobs: Optional[int] = None,
                  max_results_in_memory: int = 10000,
                  random_seed: Optional[int] = None,
-                 cost_model: Optional[CostModel] = None):
+                 run_config: Optional[RunConfig] = None):
         """
         Initialize Monte Carlo Analyzer.
         
@@ -48,28 +46,26 @@ class MonteCarloAnalyzer:
             n_simulations: Number of Monte Carlo simulations to run
             bootstrap_sample_pct: Percentage of data to sample in each simulation
             block_size_days: Size of blocks for block bootstrap (days)
-            initial_capital: Starting capital for backtests
-            commission: Commission rate for trades
             n_jobs: Number of parallel jobs (None = auto-detect)
             max_results_in_memory: Maximum number of results to keep in memory
             random_seed: Base random seed. Each simulation derives its own seed from it
                 (``random_seed + simulation_id``) so sequential and parallel runs - and
                 therefore Windows spawn-based workers - reproduce identical results.
-            cost_model: Transaction cost model applied to every fill of every
-                simulated path, so the distribution describes the market the
-                strategy would actually trade in.
+            run_config: Every engine setting every simulated path is backtested
+                under, as one value, so the distribution describes the market
+                the strategy would actually trade in - and so a worker process
+                receives all of it rather than the three settings that happened
+                to be forwarded. None uses the engine's own defaults.
         """
         self.strategy_class = strategy_class
         self.optimal_parameters = optimal_parameters
         self.n_simulations = n_simulations
         self.bootstrap_sample_pct = bootstrap_sample_pct
         self.block_size_days = block_size_days
-        self.initial_capital = initial_capital
-        self.commission = commission
+        self.run_config = resolve_run_config(run_config)
         self.n_jobs = n_jobs or min(mp.cpu_count(), 4)  # Default to max 4 processes
         self.max_results_in_memory = max_results_in_memory
         self.random_seed = random_seed
-        self.cost_model = cost_model
 
         # Seed the global generators too, so any strategy code that reaches for them is
         # reproducible as well. The bootstrap itself uses the explicit generator below.
@@ -83,11 +79,7 @@ class MonteCarloAnalyzer:
         
         # Create reusable instances for better performance
         self._strategy = self.strategy_class(**self.optimal_parameters)
-        self._backtest_engine = BacktestEngine(
-            initial_capital=self.initial_capital,
-            commission=self.commission,
-            cost_model=self.cost_model
-        )
+        self._backtest_engine = BacktestEngine.from_config(self.run_config)
     
     def _validate_parameters(self) -> None:
         """Validate initialization parameters."""
@@ -99,10 +91,8 @@ class MonteCarloAnalyzer:
             raise ValueError("bootstrap_sample_pct must be between 0.1 and 1.0")
         if self.block_size_days <= 0:
             raise ValueError("block_size_days must be positive")
-        if self.initial_capital <= 0:
-            raise ValueError("initial_capital must be positive")
-        if self.commission < 0:
-            raise ValueError("commission cannot be negative")
+        # Capital, commission and the rest were validated when the RunConfig
+        # was constructed; there is exactly one copy of those checks.
     
     def _validate_strategy_parameters(self) -> None:
         """Validate that optimal parameters are compatible with the strategy class."""
@@ -195,8 +185,8 @@ class MonteCarloAnalyzer:
                 'bootstrap_sample_pct': self.bootstrap_sample_pct,
                 'block_size_days': self.block_size_days,
                 'random_seed': self.random_seed,
-                'cost_model': (self.cost_model.description
-                               if self.cost_model is not None else None),
+                # The whole engine configuration the paths were priced under.
+                **self.run_config.to_metadata(),
                 'success_rate': len(results) / attempted
             },
             stability_metrics=distribution_stats,
@@ -278,8 +268,7 @@ class MonteCarloAnalyzer:
                             self._run_single_simulation_static,
                             data, symbol, i, self.strategy_class, self.optimal_parameters,
                             self.bootstrap_sample_pct, self.block_size_days,
-                            self.initial_capital, self.commission,
-                            self._simulation_seed(i), self.cost_model
+                            self._simulation_seed(i), self.run_config
                         )
                         future_to_sim_id[future] = i
                     except Exception as e:
@@ -373,9 +362,8 @@ class MonteCarloAnalyzer:
     def _run_single_simulation_static(data: pd.DataFrame, symbol: str, sim_id: int,
                                      strategy_class: Type[BaseStrategy], optimal_parameters: Dict[str, Any],
                                      bootstrap_sample_pct: float, block_size_days: int,
-                                     initial_capital: float, commission: float,
                                      random_seed: Optional[int] = None,
-                                     cost_model: Optional[CostModel] = None) -> Optional[Any]:
+                                     run_config: Optional[RunConfig] = None) -> Optional[Any]:
         """
         Static method for parallel processing (must be picklable).
 
@@ -387,12 +375,12 @@ class MonteCarloAnalyzer:
             optimal_parameters: Fixed strategy parameters
             bootstrap_sample_pct: Fraction of the history length to synthesise
             block_size_days: Bootstrap block size
-            initial_capital: Starting capital for backtests
-            commission: Commission rate for trades
             random_seed: Seed for THIS simulation. Must be passed explicitly: on spawn
                 based platforms (Windows) the worker process does not inherit the
                 parent's seeded global generators.
-            cost_model: Transaction cost model applied to every fill
+            run_config: Engine settings for this path, passed whole for the same
+                reason the seed is passed explicitly - a spawned worker inherits
+                nothing
 
         Returns:
             The backtest result, or None if the simulation could not be run
@@ -405,11 +393,9 @@ class MonteCarloAnalyzer:
                 n_simulations=1,  # Not used in static method
                 bootstrap_sample_pct=bootstrap_sample_pct,
                 block_size_days=block_size_days,
-                initial_capital=initial_capital,
-                commission=commission,
                 n_jobs=1,  # Single job for static method
                 random_seed=random_seed,
-                cost_model=cost_model
+                run_config=run_config
             )
 
             # Run the simulation with the seed derived for it, so the worker reproduces
