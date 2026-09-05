@@ -32,6 +32,7 @@ from niffler.optimization.optimizer_factory import (
     get_parameter_space,
 )
 from niffler.strategies.registry import get_available_strategies, get_strategy_class
+from niffler.utils.json_utils import safe_json_dump
 from niffler.utils.provenance import collect_provenance
 from scripts.common import (
     add_cost_model_arguments,
@@ -564,7 +565,7 @@ def save_results(result, output_file: str, provenance: dict = None) -> None:
 
         # Save to file
         with open(output_file, 'w') as f:
-            json.dump(output_data, f, indent=2, default=str)
+            safe_json_dump(output_data, f, indent=2, default=str)
         
         logging.info(f"Results saved to {output_file}")
 

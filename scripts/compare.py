@@ -20,7 +20,6 @@ because the whole point of this script is counting independent evidence.
 """
 
 import argparse
-import json
 import logging
 import os
 import sys
@@ -34,13 +33,18 @@ if __package__ in (None, ''):
 
 from niffler.analysis import WalkForwardAnalyzer
 from niffler.config.logging import setup_logging
-from niffler.optimization.optimizer_factory import get_parameter_space
+from niffler.optimization.optimizer_factory import (
+    get_available_optimizers,
+    get_parameter_space,
+)
 from niffler.strategies.registry import get_available_strategies, get_strategy_class
+from niffler.utils.json_utils import safe_json_dump
 from niffler.utils.provenance import collect_provenance
 from scripts.common import (
     add_cost_model_arguments,
     build_cost_model,
     load_ohlcv_csv,
+    report_cost_model,
 )
 
 logger = logging.getLogger(__name__)
@@ -248,7 +252,7 @@ Examples:
     parser.add_argument('--anchored', action='store_true',
                         help='Anchor the training window at the start of the data')
     parser.add_argument('--optimization_method', default='grid',
-                        choices=['grid', 'random'],
+                        choices=get_available_optimizers(),
                         help='Per-fold optimizer (default: grid)')
     parser.add_argument('--optimization_metric', default='total_return',
                         help='Per-fold selection metric (default: total_return)')
@@ -273,6 +277,8 @@ Examples:
         print(f"Error: data file(s) not found: {', '.join(missing)}", file=sys.stderr)
         return 1
 
+    report_cost_model(build_cost_model(args))
+
     print(f"Comparing {len(strategies)} strategy(ies) across {len(args.data)} dataset(s) "
           f"= {len(strategies) * len(args.data)} walk-forward runs")
     print(f"Folds: train {args.train_window}m / test {args.test_window}m / "
@@ -289,7 +295,9 @@ Examples:
 
     if args.output:
         payload = {
-            'provenance': collect_provenance(args.data[0]),
+            # One record per dataset: a single provenance block would hash one
+            # file and imply it covered every row in the table.
+            'provenance': {p: collect_provenance(p) for p in args.data},
             'settings': {
                 'train_window_months': args.train_window,
                 'test_window_months': args.test_window,
@@ -300,7 +308,7 @@ Examples:
             'rows': rows,
         }
         with open(args.output, 'w') as f:
-            json.dump(payload, f, indent=2, default=str)
+            safe_json_dump(payload, f, indent=2, default=str)
         print(f"\nWrote {args.output}")
 
     return 1 if any(r['error'] for r in rows) else 0

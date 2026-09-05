@@ -150,5 +150,61 @@ class TestMainArgumentHandling(unittest.TestCase):
             self.assertEqual(main(), 1)
 
 
+class TestOutputInvariants(unittest.TestCase):
+    """Invariants compare.py has to honour because every other CLI does.
+
+    These were all missed on the first pass. They are the kind that fail silently:
+    nothing raises, the run exits 0, and the damage is a malformed file or an
+    unlabelled frictionless result read months later as if it were realistic.
+    """
+
+    def test_optimizer_choices_come_from_the_registry(self):
+        """A hardcoded choices list goes stale the moment an optimizer is added.
+
+        The same failure the strategy registry was built to end, one seam over.
+        """
+        import io
+        from contextlib import redirect_stdout
+
+        from niffler.optimization.optimizer_factory import get_available_optimizers
+
+        buf = io.StringIO()
+        argv = ['compare.py', '--data', __file__, '--help']
+        # redirect_stdout must wrap assertRaises, not sit inside it: --help exits
+        # via SystemExit, so anything after main() in the inner block never runs.
+        with patch.object(sys, 'argv', argv), redirect_stdout(buf):
+            with self.assertRaises(SystemExit):
+                main()
+        help_text = buf.getvalue()
+
+        self.assertIn('--optimization_method', help_text)
+        for name in get_available_optimizers():
+            with self.subTest(optimizer=name):
+                self.assertIn(name, help_text)
+
+    def test_output_json_is_standards_compliant_with_non_finite_values(self):
+        """A NaN metric must land as null, not a bare NaN literal.
+
+        `json.dump` writes `NaN`, which no strict parser will read back - so the
+        record silently becomes unloadable rather than loudly failing to write.
+        """
+        import json
+        import tempfile
+        from niffler.utils.json_utils import safe_json_dump
+
+        payload = {'rows': [{'symbol': 'X', 'median_excess_pct': float('nan'),
+                             'oos_sharpe': float('inf')}]}
+        with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False) as f:
+            safe_json_dump(payload, f, indent=2, default=str)
+            path = f.name
+
+        with open(path) as f:
+            text = f.read()
+        self.assertNotIn('NaN', text)
+        self.assertNotIn('Infinity', text)
+        # The real test: it parses back.
+        self.assertIsNone(json.loads(text)['rows'][0]['median_excess_pct'])
+
+
 if __name__ == '__main__':
     unittest.main()
