@@ -1,5 +1,6 @@
 import unittest
-from niffler.optimization.parameter_space import ParameterSpace, SIMPLE_MA_PARAMETER_SPACE
+from niffler.optimization.parameter_space import ParameterSpace
+from niffler.optimization.optimizer_factory import get_parameter_space
 
 
 class TestParameterSpace(unittest.TestCase):
@@ -205,8 +206,8 @@ class TestParameterSpace(unittest.TestCase):
         self.assertIn('continuous_param', space.parameters)
     
     def test_predefined_simple_ma_parameter_space(self):
-        """Test the predefined Simple MA parameter space."""
-        space = SIMPLE_MA_PARAMETER_SPACE
+        """Test the Simple MA parameter space built from the strategy's spec."""
+        space = get_parameter_space('simple_ma')
         
         # Should have the expected parameters
         self.assertIn('short_window', space.parameters)

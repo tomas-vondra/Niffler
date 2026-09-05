@@ -14,8 +14,16 @@ class SimpleMAStrategy(BaseStrategy):
     is intentional and bias-free: BacktestEngine defers execution to the next
     bar's open, so a signal is never filled at a price the strategy already saw.
     """
-    
-    def __init__(self, short_window: int = 10, long_window: int = 30, 
+
+    #: Optimisation search space. Keys must be ``__init__`` keyword arguments -
+    #: see :mod:`niffler.strategies.registry`. 16 x 17 x 6 = 1632 combinations.
+    PARAMETER_SPEC = {
+        'short_window': {'type': 'int', 'min': 5, 'max': 20, 'step': 1},
+        'long_window': {'type': 'int', 'min': 20, 'max': 100, 'step': 5},
+        'position_size': {'type': 'float', 'min': 0.5, 'max': 1.0, 'step': 0.1},
+    }
+
+    def __init__(self, short_window: int = 10, long_window: int = 30,
                  position_size: float = 1.0, risk_manager=None):
         """
         Initialize the strategy.

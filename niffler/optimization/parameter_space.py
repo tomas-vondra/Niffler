@@ -45,9 +45,9 @@ class ParameterSpace:
             else:
                 raise ValueError(f"Parameter '{name}' has unknown type '{param_type}'")
 
-# Predefined parameter spaces for common strategies
-SIMPLE_MA_PARAMETER_SPACE = ParameterSpace({
-    'short_window': {'type': 'int', 'min': 5, 'max': 20, 'step': 1},
-    'long_window': {'type': 'int', 'min': 20, 'max': 100, 'step': 5},
-    'position_size': {'type': 'float', 'min': 0.5, 'max': 1.0, 'step': 0.1}
-})
+# There is deliberately no per-strategy ParameterSpace constant here. A strategy
+# declares its own search space as a PARAMETER_SPEC class attribute (see
+# niffler/strategies/registry.py) and
+# niffler.optimization.optimizer_factory.get_parameter_space wraps it. Defining a
+# space here as well would be a second definition that can drift from the
+# constructor it is supposed to describe.

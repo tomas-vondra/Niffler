@@ -2,8 +2,8 @@ from typing import Dict, Type, List, Optional
 import pandas as pd
 from niffler.backtesting.cost_model import CostModel
 from niffler.strategies.base_strategy import BaseStrategy
-from niffler.strategies.simple_ma_strategy import SimpleMAStrategy
-from .parameter_space import ParameterSpace, SIMPLE_MA_PARAMETER_SPACE
+from niffler.strategies.registry import get_parameter_spec
+from .parameter_space import ParameterSpace
 from .base_optimizer import BaseOptimizer
 from .grid_search_optimizer import GridSearchOptimizer
 from .random_search_optimizer import RandomSearchOptimizer
@@ -76,28 +76,27 @@ def get_available_optimizers() -> List[str]:
     return list(OPTIMIZER_CLASSES.keys())
 
 
-# Strategy class mapping for CLI
-STRATEGY_CLASSES = {
-    'simple_ma': SimpleMAStrategy
-}
-
-# Parameter space mapping for CLI  
-PARAMETER_SPACES = {
-    'simple_ma': SIMPLE_MA_PARAMETER_SPACE
-}
-
-
-def get_strategy_class(name: str) -> Type[BaseStrategy]:
-    """Get strategy class by name."""
-    if name not in STRATEGY_CLASSES:
-        available = ', '.join(STRATEGY_CLASSES.keys())
-        raise ValueError(f"Unknown strategy '{name}'. Available: {available}")
-    return STRATEGY_CLASSES[name]
-
-
 def get_parameter_space(name: str) -> ParameterSpace:
-    """Get parameter space by strategy name."""
-    if name not in PARAMETER_SPACES:
-        available = ', '.join(PARAMETER_SPACES.keys())
-        raise ValueError(f"No parameter space defined for strategy '{name}'. Available: {available}")
-    return PARAMETER_SPACES[name]
+    """Build the optimisation search space for a registered strategy.
+
+    The space itself is declared by the strategy as a plain dict
+    (``PARAMETER_SPEC``) and lives in :mod:`niffler.strategies.registry`; this
+    function only wraps it in the optimization layer's ``ParameterSpace``. That
+    split is why :mod:`niffler.strategies` never has to import
+    :mod:`niffler.optimization`.
+
+    The strategy name to class lookup itself is *not* here - import
+    ``get_strategy_class`` from :mod:`niffler.strategies.registry`, which is the
+    single registry every CLI derives its ``--strategy`` choices from.
+
+    Args:
+        name: Registered strategy name, e.g. ``'simple_ma'``.
+
+    Returns:
+        A validated ParameterSpace for that strategy.
+
+    Raises:
+        ValueError: If the strategy is not registered or declares no
+            PARAMETER_SPEC.
+    """
+    return ParameterSpace(get_parameter_spec(name))

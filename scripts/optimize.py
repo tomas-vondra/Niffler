@@ -39,11 +39,10 @@ from niffler.utils.provenance import collect_provenance
 from niffler.optimization import plateau as plateau_analysis
 from niffler.optimization.optimizer_factory import (
     create_optimizer,
-    get_strategy_class,
     get_parameter_space,
     get_available_optimizers,
-    STRATEGY_CLASSES
 )
+from niffler.strategies.registry import get_available_strategies, get_strategy_class
 from scripts.common import (
     add_cost_model_arguments,
     build_cost_model,
@@ -171,7 +170,7 @@ def main() -> int:
     parser.add_argument('--data', required=True,
                        help='Path to CSV file with OHLCV data')
     parser.add_argument('--strategy', required=True, 
-                       choices=list(STRATEGY_CLASSES.keys()),
+                       choices=get_available_strategies(),
                        help='Trading strategy to optimize')
     
     # Optimization method

@@ -24,11 +24,11 @@ sys.path.insert(0, str(project_root))
 from niffler.optimization.base_optimizer import BaseOptimizer
 from niffler.optimization.grid_search_optimizer import GridSearchOptimizer
 from niffler.optimization.optimization_result import OptimizationResult
-from niffler.optimization.parameter_space import (
-    SIMPLE_MA_PARAMETER_SPACE,
-    ParameterSpace,
-)
+from niffler.optimization.parameter_space import ParameterSpace
+from niffler.optimization.optimizer_factory import get_parameter_space
 from niffler.strategies.base_strategy import BaseStrategy
+
+SIMPLE_MA_PARAMETER_SPACE = get_parameter_space('simple_ma')
 
 
 class RetentionTestStrategy(BaseStrategy):

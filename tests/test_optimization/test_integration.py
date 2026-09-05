@@ -165,7 +165,8 @@ class TestOptimizationIntegration(unittest.TestCase):
         mock_engine.run_backtest.return_value = self.mock_backtest_results[0]
         
         # Create optimizer through factory
-        from niffler.optimization.optimizer_factory import get_strategy_class, get_parameter_space
+        from niffler.optimization.optimizer_factory import get_parameter_space
+        from niffler.strategies.registry import get_strategy_class
         optimizer = create_optimizer(
             method='grid',
             strategy_class=get_strategy_class('simple_ma'),
