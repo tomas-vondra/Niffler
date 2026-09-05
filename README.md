@@ -121,7 +121,21 @@ Niffler follows a systematic approach to quantitative trading strategy developme
 - **Walk-Forward Analysis**: Tests temporal stability across rolling time windows
 - **Monte Carlo Analysis**: Tests performance across thousands of market scenarios
 
-### 6. Results Export
+### 6. Cross-Asset Comparison
+**Repeat** the same validation across several instruments, because a strategy that
+survives on one asset over one window is an anecdote:
+
+```bash
+python scripts/compare.py --data data/BTCUSDT_research.csv data/SPY_research.csv   data/TSLA_research.csv --cost-model fixed --slippage-bps 5 --half-spread-bps 5
+```
+
+Each out-of-sample fold is measured against buy-and-hold **over the same bars** and the
+same costs — an absolute return says more about the asset than the strategy — and the
+folds do not overlap by default (`--step` defaults to `--test_window`), so the rows count
+independent evidence. The headline column is `BEAT%`: the share of folds where the
+strategy actually beat holding the asset.
+
+### 7. Results Export
 **Export** backtest results to multiple formats for analysis and monitoring:
 - **Console**: Immediate human-readable feedback
 - **CSV Files**: Structured data for external analysis tools

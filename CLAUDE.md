@@ -36,6 +36,7 @@ The short version, because these are easy to "helpfully" undo:
 | Whole-grid statistics come from a **complete** result set; a score-truncated one reports nothing | Print quartiles or a beat-the-baseline fraction computed from the survivors of `_manage_memory_efficient_results` |
 | There is **one** strategy registry (`niffler/strategies/registry.py`) and every CLI's `--strategy` choices derive from it | Hardcode a `choices=[...]` list, or define a second name→class map in a script (that exact shadowing bug made `analyze.py` reject strategies `optimize.py` accepted) |
 | `niffler/strategies/` imports **nothing** from `niffler/optimization/`; a strategy declares `PARAMETER_SPEC` as a plain dict | Import `ParameterSpace` into a strategy module - `niffler/optimization/__init__` imports `optimizer_factory`, which imports the registry, so it is a circular import |
+| A cross-asset comparison pairs each fold with buy-and-hold over the **same bars** | Compare a fold return against a benchmark computed over the whole file, or against a fixed number - the window length would drive the verdict |
 | A strategy parameter the chosen strategy does not accept is an **error** | Silently drop an unknown `--params` key or a foreign flag, which runs the strategy with defaults while the user thinks it was configured |
 | Every strategy parameter has a **default** and every strategy accepts `position_size` / `risk_manager` | Add a required constructor argument - the library builds strategies as `strategy_class(**parameters)` |
 
@@ -320,9 +321,18 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
 - `config/elasticsearch/mappings/` - Elasticsearch schema definitions
   (`backtests`, `portfolio`, `trades`, `positions`)
 - `scripts/` - Command-line interfaces for core functionality
+  - `compare.py` - Cross-dataset comparison. Runs the same walk-forward over several
+    datasets and reports them side by side. Two conventions make the table mean
+    something: every fold is measured against buy-and-hold over the **same bars** with
+    the same costs (an absolute return is not comparable across assets, and a six-month
+    fold judged against a multi-year benchmark is not comparable to anything), and
+    `--step` defaults to `--test_window` so the folds being counted as evidence do not
+    overlap. A pair that fails becomes a row carrying its error and makes the run exit
+    non-zero - it never silently shrinks the table
   - `common.py` - **The** shared OHLCV CSV loader (`load_ohlcv_csv`) *and* the shared
     transaction-cost CLI (`add_cost_model_arguments`, `build_cost_model`,
-    `report_cost_model`), used by `backtest.py`, `analyze.py` and `optimize.py`. A cost
+    `report_cost_model`), used by `backtest.py`, `analyze.py`, `optimize.py` and
+    `compare.py`. A cost
     flag belonging to a different `--cost-model` is an error, never silently ignored.Header normalisation, timestamp-column detection
     (`timestamp`/`date`/`datetime`/`time` plus pandas' unnamed index column), datetime
     parsing, required-column and duplicate-timestamp validation, index sorting, optional
