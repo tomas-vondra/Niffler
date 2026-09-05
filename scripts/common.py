@@ -8,6 +8,13 @@ identical validation errors.
 The transaction-cost command line lives here for the same reason: all three
 scripts must be able to express the *same* market assumption, or a strategy gets
 optimised in one market and traded in another.
+
+So does the run configuration. ``build_run_config`` is the single place that
+turns parsed arguments into a
+:class:`~niffler.backtesting.run_config.RunConfig`; every CLI hands the result
+straight to the optimizer or an analyzer, which hand it to the engine. Because
+there is one builder, a knob added to the config reaches every script at once,
+and no script can populate half of it.
 """
 
 import argparse
@@ -19,11 +26,24 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
+from niffler.backtesting.benchmark import BENCHMARK_BUY_AND_HOLD, BENCHMARK_CHOICES
 from niffler.backtesting.cost_model import (
     CostModel,
     FixedSlippageModel,
     VolumeShareSlippageModel,
     ZeroCostModel,
+)
+from niffler.backtesting.run_config import (
+    BOOTSTRAP_DISABLED,
+    DEFAULT_COMMISSION,
+    DEFAULT_INITIAL_CAPITAL,
+    DEFAULT_MIN_ORDER_VALUE,
+    RunConfig,
+)
+from niffler.backtesting.significance import (
+    DEFAULT_BOOTSTRAP_SAMPLES,
+    DEFAULT_BOOTSTRAP_SEED,
+    DEFAULT_MIN_TRADES,
 )
 
 logger = logging.getLogger(__name__)
@@ -385,3 +405,142 @@ def report_cost_model(cost_model: CostModel, stream=None) -> bool:
 
     print(FRICTIONLESS_WARNING, file=stream if stream is not None else sys.stderr)
     return True
+
+
+# ---------------------------------------------------------------------------
+# Run configuration CLI
+#
+# The engine takes ten settings. Before RunConfig existed, five of the six
+# places that built one passed three of them, so a benchmark or an
+# annualisation factor chosen on the command line never reached the engine
+# inside a walk-forward fold. There is now one builder and one object, so a
+# knob added to RunConfig is reachable from every script that calls
+# build_run_config.
+# ---------------------------------------------------------------------------
+
+
+def add_engine_arguments(parser: argparse.ArgumentParser,
+                         bootstrap: bool = False,
+                         benchmark: bool = True) -> None:
+    """Add the shared engine-setting flags to a script's parser.
+
+    ``--capital``/``--initial_capital`` and ``--commission`` are *not* added
+    here: every script already declares them under its own established
+    spelling. What they must all share is ``dest='initial_capital'`` so
+    :func:`build_run_config` reads one attribute name.
+
+    ``execution_timing`` is deliberately absent. ``same_bar_close`` is
+    look-ahead biased and the repository's invariants forbid exposing it on a
+    CLI; it stays a library-only field of ``RunConfig``.
+
+    Args:
+        parser: Parser to extend.
+        bootstrap: Add the bootstrap Sharpe interval flags. Only the backtest
+            CLI prints that interval, and the resample loop is the one
+            expensive part of the assessment - putting it behind an
+            optimisation or a thousand Monte Carlo paths would cost hours for a
+            number nothing reads.
+        benchmark: Add ``--benchmark``. ``compare.py`` passes False: every one
+            of its rows is an excess over buy-and-hold on the same bars, so
+            ``--benchmark none`` would empty the table rather than configure it.
+    """
+    group = parser.add_argument_group('engine settings')
+    group.add_argument(
+        '--min-order-value', type=float, default=DEFAULT_MIN_ORDER_VALUE,
+        help=(f"Smallest order notional that executes; smaller orders are "
+              f"skipped (default: {DEFAULT_MIN_ORDER_VALUE:g})")
+    )
+    group.add_argument(
+        '--periods-per-year', type=float, default=None,
+        help=("Annualisation factor for the Sharpe ratio. Omitted (default) "
+              "means it is inferred from the index - daily crypto 365, daily "
+              "equities 252, hourly crypto 8760. Set it only to override that "
+              "inference; there is no safe fixed number")
+    )
+    if benchmark:
+        group.add_argument(
+            '--benchmark', choices=list(BENCHMARK_CHOICES),
+            default=BENCHMARK_BUY_AND_HOLD,
+            help=("Passive alternative every backtest is measured against: "
+                  "'buy_and_hold' (default) pays the same commission and cost "
+                  "model over the same bars; 'none' reports the strategy's "
+                  "numbers with nothing to compare them to")
+        )
+    group.add_argument(
+        '--min-trades-for-significance', type=int, default=DEFAULT_MIN_TRADES,
+        help=(f"Round trips below which no significance verdict is rendered "
+              f"(default: {DEFAULT_MIN_TRADES}). Below this the metrics are "
+              f"still reported, labelled as not meaningful")
+    )
+    if bootstrap:
+        group.add_argument(
+            '--bootstrap-samples', type=int, default=DEFAULT_BOOTSTRAP_SAMPLES,
+            help=f"Resamples for the bootstrap Sharpe confidence interval "
+                 f"(default: {DEFAULT_BOOTSTRAP_SAMPLES}); 0 skips it"
+        )
+        group.add_argument(
+            '--bootstrap-seed', type=int, default=DEFAULT_BOOTSTRAP_SEED,
+            help=f"Seed for that bootstrap, so the interval is reproducible "
+                 f"(default: {DEFAULT_BOOTSTRAP_SEED})"
+        )
+
+
+def build_run_config(args: argparse.Namespace) -> RunConfig:
+    """Build the run configuration a parsed command line asks for.
+
+    The single place arguments become engine settings. A script that did not
+    declare a given flag falls back to that setting's documented default, which
+    is ``RunConfig``'s own default and therefore the engine's - so adding a flag
+    to one CLI never silently changes another.
+
+    ``bootstrap_samples`` falls back to 0, not to the backtest CLI's 1000: only
+    that script prints the interval, and defaulting it on would run a
+    thousand-resample bootstrap inside every grid cell of every fold.
+
+    Args:
+        args: Parsed arguments. Cost-model flags are read through
+            :func:`build_cost_model`, so an unusable combination fails here.
+
+    Returns:
+        The configuration every backtest of this run will use.
+
+    Raises:
+        ValueError: If a setting is out of range or the cost-model flags are
+            inconsistent.
+        TypeError: If the cost model is not a CostModel.
+    """
+    return RunConfig(
+        initial_capital=getattr(args, 'initial_capital', DEFAULT_INITIAL_CAPITAL),
+        commission=getattr(args, 'commission', DEFAULT_COMMISSION),
+        min_order_value=getattr(args, 'min_order_value', DEFAULT_MIN_ORDER_VALUE),
+        periods_per_year=getattr(args, 'periods_per_year', None),
+        cost_model=build_cost_model(args),
+        benchmark=getattr(args, 'benchmark', BENCHMARK_BUY_AND_HOLD),
+        min_trades_for_significance=getattr(
+            args, 'min_trades_for_significance', DEFAULT_MIN_TRADES),
+        bootstrap_samples=getattr(args, 'bootstrap_samples', BOOTSTRAP_DISABLED),
+        bootstrap_seed=getattr(args, 'bootstrap_seed', DEFAULT_BOOTSTRAP_SEED),
+    )
+
+
+def report_run_config(run_config: RunConfig, stream=None) -> bool:
+    """Print the settings this run uses, cost model included.
+
+    Args:
+        run_config: The configuration the run will use.
+        stream: Stream the frictionless warning goes to (default stderr).
+
+    Returns:
+        True when the frictionless warning was emitted.
+    """
+    print(f"Capital: ${run_config.initial_capital:,.2f}   "
+          f"Commission: {run_config.commission:.4f}   "
+          f"Benchmark: {run_config.benchmark}")
+    annualisation = ('inferred from the index' if run_config.periods_per_year is None
+                     else f"{run_config.periods_per_year:g} periods/year")
+    print(f"Annualisation: {annualisation}   "
+          f"Significance gate: {run_config.min_trades_for_significance} round trips")
+    return report_cost_model(
+        run_config.cost_model if run_config.cost_model is not None else ZeroCostModel(),
+        stream=stream,
+    )

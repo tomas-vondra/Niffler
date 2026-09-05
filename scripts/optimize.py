@@ -45,9 +45,10 @@ from niffler.optimization.optimizer_factory import (
 from niffler.strategies.registry import get_available_strategies, get_strategy_class
 from scripts.common import (
     add_cost_model_arguments,
-    build_cost_model,
+    add_engine_arguments,
+    build_run_config,
     load_ohlcv_csv,
-    report_cost_model,
+    report_run_config,
 )
 
 
@@ -198,7 +199,12 @@ def main() -> int:
 
     # Transaction costs (slippage, spread, liquidity)
     add_cost_model_arguments(parser)
-    
+
+    # Benchmark, annualisation, order floor and the significance gate. The
+    # benchmark in particular is what makes --sort-by excess_return_pct mean
+    # anything, so it has to be settable here.
+    add_engine_arguments(parser)
+
     # Data processing
     parser.add_argument('--clean', action='store_true',
                        help='Apply data preprocessing before optimization')
@@ -238,30 +244,29 @@ def main() -> int:
         strategy_class = get_strategy_class(args.strategy)
         parameter_space = get_parameter_space(args.strategy)
 
-        # Transaction costs. Parameters fitted without them are fitted for a
-        # market nobody trades in, so the model is reported up front.
-        cost_model = build_cost_model(args)
-        report_cost_model(cost_model)
-        
+        # Engine settings. Parameters fitted without transaction costs are
+        # fitted for a market nobody trades in, so the whole configuration is
+        # reported up front.
+        run_config = build_run_config(args)
+        report_run_config(run_config)
+
         # Create optimizer
         optimizer = create_optimizer(
             method=args.method,
             strategy_class=strategy_class,
             parameter_space=parameter_space,
             data=data,
-            initial_capital=args.initial_capital,
-            commission=args.commission,
             sort_by=args.sort_by,
             n_jobs=args.jobs,
-            cost_model=cost_model,
+            run_config=run_config,
             max_results_in_memory=CLI_MAX_RESULTS_IN_MEMORY
         )
         
         # Run optimization
         logger.info(f"Starting {args.method} optimization for {args.strategy} strategy")
         logger.info(f"Sorting by: {args.sort_by}")
-        logger.info(f"Initial capital: ${args.initial_capital:,.2f}")
-        logger.info(f"Commission: {args.commission:.4f}")
+        logger.info(f"Initial capital: ${run_config.initial_capital:,.2f}")
+        logger.info(f"Commission: {run_config.commission:.4f}")
         
         start_time = datetime.now()
         

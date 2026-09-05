@@ -31,6 +31,7 @@ CLI_SCRIPT_MODULES = [
     'scripts.download_data',
     'scripts.optimize',
     'scripts.preprocessor',
+    'scripts.screen',
 ]
 
 

@@ -23,8 +23,9 @@ import argparse
 import logging
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
@@ -32,6 +33,7 @@ if __package__ in (None, ''):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from niffler.analysis import WalkForwardAnalyzer
+from niffler.backtesting.run_config import RunConfig
 from niffler.config.logging import setup_logging
 from niffler.optimization.optimizer_factory import (
     get_available_optimizers,
@@ -42,12 +44,52 @@ from niffler.utils.json_utils import safe_json_dump
 from niffler.utils.provenance import collect_provenance
 from scripts.common import (
     add_cost_model_arguments,
-    build_cost_model,
+    add_engine_arguments,
+    build_run_config,
     load_ohlcv_csv,
-    report_cost_model,
+    report_run_config,
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class FoldSchedule:
+    """How the walk-forward folds are cut and fitted.
+
+    Separated from the parsed command line so ``evaluate`` can be called by
+    another script (``screen.py``) without fabricating an argparse namespace.
+    The engine settings are *not* here: they live in ``RunConfig``, and having
+    two objects that both carry commission is exactly the split this change
+    exists to remove.
+
+    Attributes:
+        train_window_months: In-sample window each fold fits on.
+        test_window_months: Out-of-sample window each fold is graded on.
+        step_months: Months between folds. Defaulting it to the test window is
+            what keeps folds non-overlapping, so ``None`` here means "match the
+            test window" rather than "3".
+        optimization_method: Per-fold optimizer.
+        optimization_metric: Metric the per-fold optimizer selects by.
+        anchored: Anchor every training window at the first bar.
+        n_jobs: Parallel jobs for folds.
+        clean: Run the preprocessing pipeline on each dataset first.
+    """
+
+    train_window_months: int = 12
+    test_window_months: int = 6
+    step_months: Optional[int] = None
+    optimization_method: str = 'grid'
+    optimization_metric: str = 'total_return'
+    anchored: bool = False
+    n_jobs: Optional[int] = None
+    clean: bool = False
+
+    @property
+    def effective_step_months(self) -> int:
+        """Months between folds, defaulting to non-overlapping windows."""
+        return (self.step_months if self.step_months is not None
+                else self.test_window_months)
 
 
 def symbol_from_path(path: str) -> str:
@@ -94,13 +136,15 @@ def paired_folds(result) -> List[tuple]:
     ]
 
 
-def evaluate(data_path: str, strategy: str, args) -> Dict[str, Any]:
+def evaluate(data_path: str, strategy: str, run_config: RunConfig,
+             schedule: FoldSchedule) -> Dict[str, Any]:
     """Walk-forward one strategy on one dataset and summarise it as a row.
 
     Args:
         data_path: Path to the OHLCV CSV.
         strategy: Registered strategy name.
-        args: Parsed command line arguments.
+        run_config: Engine settings every fold runs under.
+        schedule: How the folds are cut and fitted.
 
     Returns:
         A row dict. On failure the row carries ``error`` and every metric is None,
@@ -110,20 +154,18 @@ def evaluate(data_path: str, strategy: str, args) -> Dict[str, Any]:
     row: Dict[str, Any] = {'symbol': symbol, 'strategy': strategy, 'error': None}
 
     try:
-        data = load_ohlcv_csv(data_path, clean=args.clean)
+        data = load_ohlcv_csv(data_path, clean=schedule.clean)
         analyzer = WalkForwardAnalyzer(
             strategy_class=get_strategy_class(strategy),
             parameter_space=get_parameter_space(strategy),
-            train_window_months=args.train_window,
-            test_window_months=args.test_window,
-            step_months=args.step,
-            initial_capital=args.capital,
-            commission=args.commission,
-            optimization_method=args.optimization_method,
-            optimization_metric=args.optimization_metric,
-            anchored=args.anchored,
-            n_jobs=args.n_jobs,
-            cost_model=build_cost_model(args),
+            train_window_months=schedule.train_window_months,
+            test_window_months=schedule.test_window_months,
+            step_months=schedule.effective_step_months,
+            optimization_method=schedule.optimization_method,
+            optimization_metric=schedule.optimization_metric,
+            anchored=schedule.anchored,
+            n_jobs=schedule.n_jobs,
+            run_config=run_config,
         )
         result = analyzer.analyze(data, symbol)
     except Exception as e:
@@ -237,7 +279,7 @@ Examples:
     parser.add_argument('--clean', action='store_true',
                         help='Run the preprocessing pipeline on each dataset first')
 
-    parser.add_argument('--capital', type=float, default=10000.0,
+    parser.add_argument('--capital', dest='initial_capital', type=float, default=10000.0,
                         help='Initial capital (default: 10000)')
     parser.add_argument('--commission', type=float, default=0.001,
                         help='Commission rate (default: 0.001)')
@@ -262,13 +304,25 @@ Examples:
                         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'])
 
     add_cost_model_arguments(parser)
+    # No --benchmark here: every row of this table is an excess over
+    # buy-and-hold on the same bars, so 'none' would empty the table rather
+    # than configure it.
+    add_engine_arguments(parser, benchmark=False)
     args = parser.parse_args()
 
     setup_logging(level=args.log_level)
 
-    # Non-overlapping folds unless the user deliberately asks otherwise.
-    if args.step is None:
-        args.step = args.test_window
+    schedule = FoldSchedule(
+        train_window_months=args.train_window,
+        test_window_months=args.test_window,
+        step_months=args.step,
+        optimization_method=args.optimization_method,
+        optimization_metric=args.optimization_metric,
+        anchored=args.anchored,
+        n_jobs=args.n_jobs,
+        clean=args.clean,
+    )
+    step_months = schedule.effective_step_months
 
     strategies = args.strategy or get_available_strategies()
 
@@ -277,19 +331,20 @@ Examples:
         print(f"Error: data file(s) not found: {', '.join(missing)}", file=sys.stderr)
         return 1
 
-    report_cost_model(build_cost_model(args))
+    run_config = build_run_config(args)
+    report_run_config(run_config)
 
     print(f"Comparing {len(strategies)} strategy(ies) across {len(args.data)} dataset(s) "
           f"= {len(strategies) * len(args.data)} walk-forward runs")
     print(f"Folds: train {args.train_window}m / test {args.test_window}m / "
-          f"step {args.step}m"
-          f"{' (OVERLAPPING)' if args.step < args.test_window else ''}")
+          f"step {step_months}m"
+          f"{' (OVERLAPPING)' if step_months < args.test_window else ''}")
 
     rows: List[Dict[str, Any]] = []
     for path in args.data:
         for strategy in strategies:
             print(f"  {symbol_from_path(path)} / {strategy} ...", flush=True)
-            rows.append(evaluate(path, strategy, args))
+            rows.append(evaluate(path, strategy, run_config, schedule))
 
     render(rows)
 
@@ -301,9 +356,8 @@ Examples:
             'settings': {
                 'train_window_months': args.train_window,
                 'test_window_months': args.test_window,
-                'step_months': args.step,
-                'commission': args.commission,
-                'cost_model': args.cost_model,
+                'step_months': step_months,
+                **run_config.to_metadata(),
             },
             'rows': rows,
         }
