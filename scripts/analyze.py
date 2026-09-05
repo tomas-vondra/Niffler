@@ -32,12 +32,14 @@ from niffler.optimization.optimizer_factory import (
     get_parameter_space,
 )
 from niffler.strategies.registry import get_available_strategies, get_strategy_class
+from niffler.utils.json_utils import safe_json_dump
 from niffler.utils.provenance import collect_provenance
 from scripts.common import (
     add_cost_model_arguments,
-    build_cost_model,
+    add_engine_arguments,
+    build_run_config,
     load_ohlcv_csv,
-    report_cost_model,
+    report_run_config,
 )
 
 
@@ -119,7 +121,13 @@ Examples:
 
     # Transaction costs (slippage, spread, liquidity)
     add_cost_model_arguments(parser)
-    
+
+    # Benchmark, annualisation, order floor and the significance gate. These
+    # reach the engine inside every fold and every simulated path now that the
+    # analyzers carry a RunConfig rather than three loose numbers.
+    add_engine_arguments(parser)
+
+
     # Walk-forward specific arguments
     parser.add_argument(
         '--mode',
@@ -308,7 +316,7 @@ def validate_parameters(strategy_class, parameters: dict):
 
 
 def run_walk_forward_analysis(args, data: pd.DataFrame, parameters: dict = None,
-                              cost_model=None):
+                              run_config=None):
     """Run walk-forward analysis.
 
     In the default ``walk_forward`` mode the strategy parameters are re-optimised on
@@ -320,8 +328,8 @@ def run_walk_forward_analysis(args, data: pd.DataFrame, parameters: dict = None,
         args: Parsed command line arguments.
         data: OHLCV data with a DatetimeIndex.
         parameters: Fixed strategy parameters, required only for segmented_in_sample mode.
-        cost_model: Transaction cost model applied to every fill, in the per-fold
-            optimisation as well as the out-of-sample evaluation.
+        run_config: Engine settings used by the per-fold optimisation and by
+            the out-of-sample evaluation alike.
 
     Returns:
         The AnalysisResult produced by WalkForwardAnalyzer.
@@ -362,12 +370,10 @@ def run_walk_forward_analysis(args, data: pd.DataFrame, parameters: dict = None,
         train_window_months=args.train_window,
         test_window_months=args.test_window,
         step_months=args.step,
-        initial_capital=args.initial_capital,
-        commission=args.commission,
         optimization_method=args.optimization_method,
         optimization_metric=args.optimization_metric,
         n_jobs=args.n_jobs,
-        cost_model=cost_model
+        run_config=run_config
     )
 
     # Run analysis
@@ -434,14 +440,14 @@ def run_walk_forward_analysis(args, data: pd.DataFrame, parameters: dict = None,
 
 
 def run_monte_carlo_analysis(args, data: pd.DataFrame, parameters: dict,
-                            cost_model=None):
+                            run_config=None):
     """Run Monte Carlo analysis.
 
     Args:
         args: Parsed command line arguments.
         data: OHLCV data with a DatetimeIndex.
         parameters: Fixed strategy parameters to simulate.
-        cost_model: Transaction cost model applied to every fill of every path.
+        run_config: Engine settings every simulated path is backtested under.
 
     Returns:
         The AnalysisResult produced by MonteCarloAnalyzer.
@@ -461,11 +467,9 @@ def run_monte_carlo_analysis(args, data: pd.DataFrame, parameters: dict,
         n_simulations=args.simulations,
         bootstrap_sample_pct=args.bootstrap_pct,
         block_size_days=args.block_size,
-        initial_capital=args.initial_capital,
-        commission=args.commission,
         n_jobs=args.n_jobs,
         random_seed=args.random_seed,
-        cost_model=cost_model
+        run_config=run_config
     )
     
     # Run analysis
@@ -564,7 +568,7 @@ def save_results(result, output_file: str, provenance: dict = None) -> None:
 
         # Save to file
         with open(output_file, 'w') as f:
-            json.dump(output_data, f, indent=2, default=str)
+            safe_json_dump(output_data, f, indent=2, default=str)
         
         logging.info(f"Results saved to {output_file}")
 
@@ -607,15 +611,16 @@ def main() -> int:
         else:
             parameters = None
 
-        # Transaction costs, shared by both analyses.
-        cost_model = build_cost_model(args)
-        report_cost_model(cost_model)
+        # Engine settings, shared by both analyses and by the per-fold
+        # optimiser inside walk-forward.
+        run_config = build_run_config(args)
+        report_run_config(run_config)
 
         # Run analysis
         if args.analysis == 'walk_forward':
-            result = run_walk_forward_analysis(args, data, parameters, cost_model)
+            result = run_walk_forward_analysis(args, data, parameters, run_config)
         elif args.analysis == 'monte_carlo':
-            result = run_monte_carlo_analysis(args, data, parameters, cost_model)
+            result = run_monte_carlo_analysis(args, data, parameters, run_config)
         else:
             raise ValueError(f"Unknown analysis type: {args.analysis}")
         

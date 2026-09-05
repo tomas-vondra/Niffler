@@ -36,6 +36,9 @@ The short version, because these are easy to "helpfully" undo:
 | Whole-grid statistics come from a **complete** result set; a score-truncated one reports nothing | Print quartiles or a beat-the-baseline fraction computed from the survivors of `_manage_memory_efficient_results` |
 | There is **one** strategy registry (`niffler/strategies/registry.py`) and every CLI's `--strategy` choices derive from it | Hardcode a `choices=[...]` list, or define a second name→class map in a script (that exact shadowing bug made `analyze.py` reject strategies `optimize.py` accepted) |
 | `niffler/strategies/` imports **nothing** from `niffler/optimization/`; a strategy declares `PARAMETER_SPEC` as a plain dict | Import `ParameterSpace` into a strategy module - `niffler/optimization/__init__` imports `optimizer_factory`, which imports the registry, so it is a circular import |
+| Engine settings travel as **one** `RunConfig`, built once by `scripts/common.build_run_config` | Add an eleventh knob to `BacktestEngine.__init__` without a field on `RunConfig`, hand an analyzer or a worker a loose `initial_capital`/`commission`/`cost_model` triple, or re-check a range that `RunConfig.__post_init__` already checks |
+| A screening gate with **no** measurable value stops the run | Treat a `None` retention / efficiency / BEAT% as a pass, or as a 0.0 |
+| A cross-asset comparison pairs each fold with buy-and-hold over the **same bars** | Compare a fold return against a benchmark computed over the whole file, or against a fixed number - the window length would drive the verdict |
 | A strategy parameter the chosen strategy does not accept is an **error** | Silently drop an unknown `--params` key or a foreign flag, which runs the strategy with defaults while the user thinks it was configured |
 | There is **one** registry per extension point - strategies, exporters (`niffler/exporters/registry.py`), data sources (`niffler/data/downloaders/registry.py`) - and what each accepts is derived with `inspect.signature` | Hand-write a per-name kwargs filter or an `--source`/`--exporters` `choices=[...]` list; a forgotten branch builds the exporter on **defaults**, reports success and exits 0 |
 | The exported metadata document has **one** builder, `ExporterManager.create_metadata` | Add a `create_metadata` back to `BaseExporter` - the deleted one silently omitted `profit_factor`, the six trade statistics and every benchmark and significance field |
@@ -185,6 +188,30 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
 python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_carlo --strategy simple_ma --params_file optimization_results.json --n_jobs 8
 ```
 
+Note: `--benchmark`, `--periods-per-year`, `--min-order-value` and
+`--min-trades-for-significance` now reach the engine inside every fold and every
+simulated path, because the analyzers carry a `RunConfig` rather than three loose
+numbers. `--execution-timing` deliberately does not exist on any CLI.
+
+### Screening
+Run the whole pipeline as a funnel via `scripts/screen.py`, stopping at the first gate
+that fails:
+
+```bash
+# backtest -> optimize -> walk-forward -> cross-asset compare
+python scripts/screen.py --data data/SPY_research.csv --strategy breakout \
+  --compare-data data/QQQ_research.csv data/GLD_research.csv data/BTCUSDT_research.csv
+
+# Argue with a threshold; the chosen value is printed whether or not it fires
+python scripts/screen.py --data data/SPY_research.csv --strategy simple_ma \
+  --min-efficiency 0.5 --min-beat-pct 60 --cost-model fixed --slippage-bps 5
+
+# Report every stage even after one fails (still exits 3)
+python scripts/screen.py --data data/SPY_research.csv --strategy rsi --force
+```
+
+Exit codes: `0` every gate passed, `3` a gate stopped the run, `1` the run failed.
+
 ## Architecture
 
 ### Core Components
@@ -240,6 +267,19 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
     Student-t survival function (`student_t_two_sided_p`,
     `regularized_incomplete_beta`) - scipy is **not** a dependency and a normal
     approximation is not acceptable at n=30
+  - `run_config.py` - `RunConfig`, the **single** carrier of the engine's ten
+    settings, plus `resolve_run_config` and the `EXECUTION_TIMINGS` tuple. A frozen,
+    picklable dataclass, so it crosses the spawn boundary into a worker intact - which
+    is where knobs used to be dropped: five of the six engine construction sites
+    forwarded only `initial_capital`, `commission` and `cost_model`, so there was no
+    way to run walk-forward at `periods_per_year=252` or without a benchmark. It
+    imports only leaf modules of its own layer and never `backtest_engine`, so the
+    engine can import it; `BacktestEngine.from_config` is the one place a config
+    becomes an engine, and `RunConfig.__post_init__` is the one place the ranges are
+    checked (the engine builds one from its own arguments rather than repeating them,
+    and `BaseOptimizer` / both analyzers no longer re-check a subset).
+    `to_metadata()` is the one serialisation, used by the optimizer's saved results,
+    both analyzers' `analysis_parameters`, `compare.py` and `screen.py`
   - `backtest_result.py` - Performance metrics and results
 - `niffler/strategies/` - Trading strategy implementations
   - `base_strategy.py` - Abstract base class for strategies
@@ -348,9 +388,38 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
 - `config/elasticsearch/mappings/` - Elasticsearch schema definitions
   (`backtests`, `portfolio`, `trades`, `positions`)
 - `scripts/` - Command-line interfaces for core functionality
-  - `common.py` - **The** shared OHLCV CSV loader (`load_ohlcv_csv`) *and* the shared
+  - `compare.py` - Cross-dataset comparison. Runs the same walk-forward over several
+    datasets and reports them side by side. Two conventions make the table mean
+    something: every fold is measured against buy-and-hold over the **same bars** with
+    the same costs (an absolute return is not comparable across assets, and a six-month
+    fold judged against a multi-year benchmark is not comparable to anything), and
+    `--step` defaults to `--test_window` so the folds being counted as evidence do not
+    overlap. A pair that fails becomes a row carrying its error and makes the run exit
+    non-zero - it never silently shrinks the table
+  - `screen.py` - The pipeline as a funnel: backtest → optimize → walk-forward →
+    cross-asset compare, stopping at the first gate that fails with a line that names
+    the stage, the measurement, the threshold and the flag that set it. It computes
+    nothing itself - every gated number comes from the library or from
+    `compare.evaluate`, which it calls once for the primary asset and reads twice
+    (stages 3 and 4). `Gate` is a pure dataclass, so every threshold decision is
+    testable without market data. A gate whose value is `None` **stops**: `retention`,
+    `fraction_beating_baseline` and `median_efficiency_ratio` are all legitimately
+    `None`, and that is an absence of evidence rather than a zero. Exit codes: `0`
+    every gate passed, `3` a gate stopped the run (a normal outcome - `1` is a real
+    failure and argparse owns `2`), and `--force` runs every stage but still exits `3`
+  - `common.py` - **The** shared OHLCV CSV loader (`load_ohlcv_csv`), the shared
     transaction-cost CLI (`add_cost_model_arguments`, `build_cost_model`,
-    `report_cost_model`), used by `backtest.py`, `analyze.py` and `optimize.py`. A cost
+    `report_cost_model`) *and* the shared run-configuration CLI
+    (`add_engine_arguments`, `build_run_config`, `report_run_config`), used by
+    `backtest.py`, `analyze.py`, `optimize.py`, `compare.py` and `screen.py`.
+    `build_run_config` is **the** place parsed arguments become engine settings, so a
+    field added to `RunConfig` is reachable from every script at once and no script can
+    populate half of it. Every CLI spells its capital flag differently
+    (`--capital` / `--initial_capital` / `--initial-capital`) but they all use
+    `dest='initial_capital'`. `execution_timing` deliberately has **no** flag.
+    `compare.py` and `screen.py` pass `benchmark=False`: both gate on beating
+    buy-and-hold, so `--benchmark none` would empty the table rather than configure it.
+    A cost
     flag belonging to a different `--cost-model` is an error, never silently ignored.Header normalisation, timestamp-column detection
     (`timestamp`/`date`/`datetime`/`time` plus pandas' unnamed index column), datetime
     parsing, required-column and duplicate-timestamp validation, index sorting, optional

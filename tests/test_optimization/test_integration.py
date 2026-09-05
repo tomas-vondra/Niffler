@@ -14,6 +14,7 @@ from niffler.optimization import (
 )
 from niffler.strategies.simple_ma_strategy import SimpleMAStrategy
 from niffler.backtesting.backtest_result import BacktestResult
+from niffler.backtesting.run_config import RunConfig
 
 
 class TestOptimizationIntegration(unittest.TestCase):
@@ -77,8 +78,7 @@ class TestOptimizationIntegration(unittest.TestCase):
             strategy_class=SimpleMAStrategy,
             parameter_space=self.parameter_space,
             data=self.test_data,
-            initial_capital=10000,
-            commission=0.001,
+            run_config=RunConfig(initial_capital=10000, commission=0.001),
             n_jobs=1  # Disable parallel processing for mocking to work
         )
 
@@ -131,8 +131,7 @@ class TestOptimizationIntegration(unittest.TestCase):
             strategy_class=SimpleMAStrategy,
             parameter_space=self.parameter_space,
             data=self.test_data,
-            initial_capital=10000,
-            commission=0.001,
+            run_config=RunConfig(initial_capital=10000, commission=0.001),
             n_jobs=1  # Disable parallel processing for mocking to work
         )
         
@@ -172,8 +171,7 @@ class TestOptimizationIntegration(unittest.TestCase):
             strategy_class=get_strategy_class('simple_ma'),
             parameter_space=get_parameter_space('simple_ma'),
             data=self.test_data,
-            initial_capital=5000,
-            commission=0.002,
+            run_config=RunConfig(initial_capital=5000, commission=0.002),
             n_jobs=1  # Disable parallel processing for mocking to work
         )
 

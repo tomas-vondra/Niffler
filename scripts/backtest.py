@@ -14,12 +14,6 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from niffler.backtesting import BacktestEngine
-from niffler.backtesting.benchmark import BENCHMARK_BUY_AND_HOLD, BENCHMARK_CHOICES
-from niffler.backtesting.significance import (
-    DEFAULT_BOOTSTRAP_SAMPLES,
-    DEFAULT_BOOTSTRAP_SEED,
-    DEFAULT_MIN_TRADES,
-)
 from niffler.strategies.registry import (
     create_strategy,
     get_available_strategies,
@@ -29,7 +23,13 @@ from niffler.risk import FixedRiskManager
 from niffler.exporters import ExporterManager, get_available_exporters
 from niffler.utils.provenance import collect_provenance
 from niffler.config.logging import setup_logging
-from scripts.common import add_cost_model_arguments, build_cost_model, load_ohlcv_csv, report_cost_model
+from scripts.common import (
+    add_cost_model_arguments,
+    add_engine_arguments,
+    build_run_config,
+    load_ohlcv_csv,
+    report_cost_model,
+)
 
 
 def extract_symbol_from_filename(file_path: str) -> str:
@@ -270,8 +270,9 @@ Examples:
     parser.add_argument('--position-size', type=float, default=None,
                        help='Position size as fraction of portfolio (default: 1.0)')
     
-    # Backtest parameters
-    parser.add_argument('--capital', type=float, default=10000.0,
+    # Backtest parameters. --capital keeps its established spelling; the dest
+    # is what build_run_config reads, and every script spells it the same way.
+    parser.add_argument('--capital', dest='initial_capital', type=float, default=10000.0,
                        help='Initial capital amount (default: 10000)')
     parser.add_argument('--commission', type=float, default=0.001,
                        help='Commission rate per trade (default: 0.001)')
@@ -279,31 +280,10 @@ Examples:
     # Transaction costs (slippage, spread, liquidity)
     add_cost_model_arguments(parser)
 
-    # Benchmark and statistical significance
-    benchmark_group = parser.add_argument_group('benchmark and significance')
-    benchmark_group.add_argument(
-        '--benchmark', choices=list(BENCHMARK_CHOICES), default=BENCHMARK_BUY_AND_HOLD,
-        help=("Passive alternative the strategy is measured against: "
-              "'buy_and_hold' (default) buys at the first executable bar and holds "
-              "to the end, paying the same commission and the same cost model; "
-              "'none' reports the strategy's numbers with nothing to compare them to")
-    )
-    benchmark_group.add_argument(
-        '--min-trades-for-significance', type=int, default=DEFAULT_MIN_TRADES,
-        help=(f"Round trips below which no significance verdict is rendered "
-              f"(default: {DEFAULT_MIN_TRADES}). Below this the metrics are still "
-              f"reported, labelled as not meaningful")
-    )
-    benchmark_group.add_argument(
-        '--bootstrap-samples', type=int, default=DEFAULT_BOOTSTRAP_SAMPLES,
-        help=(f"Resamples for the bootstrap Sharpe confidence interval "
-              f"(default: {DEFAULT_BOOTSTRAP_SAMPLES}); 0 skips it")
-    )
-    benchmark_group.add_argument(
-        '--bootstrap-seed', type=int, default=DEFAULT_BOOTSTRAP_SEED,
-        help=(f"Seed for that bootstrap, so the interval is reproducible "
-              f"(default: {DEFAULT_BOOTSTRAP_SEED})")
-    )
+    # Benchmark, annualisation, order floor and statistical significance. This
+    # script is the only one that prints the bootstrap Sharpe interval, so it
+    # is the only one that gets the flags for it.
+    add_engine_arguments(parser, bootstrap=True)
 
 
     # Output options
@@ -354,9 +334,7 @@ Examples:
     parser.add_argument('--log-level', default='INFO',
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                        help='Set logging level (default: INFO)')
-    parser.add_argument('--min-order-value', type=float, default=1.0,
-                       help='Minimum order value to execute trades (default: 1.0)')
-    
+
     args = parser.parse_args()
     
     # Configure logging
@@ -406,24 +384,14 @@ Examples:
         else:
             print("Risk Management: None")
         
-        # Transaction costs. Built before the engine so an unusable combination
-        # of flags fails before any work is done.
-        cost_model = build_cost_model(args)
-        report_cost_model(cost_model)
+        # Engine settings, built once. Constructed before the engine so an
+        # unusable combination of flags fails before any work is done.
+        run_config = build_run_config(args)
+        report_cost_model(run_config.cost_model)
 
-        # Initialize backtest engine
-        engine = BacktestEngine(
-            initial_capital=args.capital,
-            commission=args.commission,
-            min_order_value=args.min_order_value,
-            cost_model=cost_model,
-            benchmark=args.benchmark,
-            min_trades_for_significance=args.min_trades_for_significance,
-            bootstrap_samples=args.bootstrap_samples,
-            bootstrap_seed=args.bootstrap_seed
-        )
+        engine = BacktestEngine.from_config(run_config)
 
-        print(f"Benchmark: {args.benchmark}")
+        print(f"Benchmark: {run_config.benchmark}")
 
         print("Running backtest...")
 
@@ -459,10 +427,10 @@ Examples:
             result=result,
             strategy_params=strategy_params,
             symbol=symbol,
-            initial_capital=args.capital,
-            commission=args.commission,
+            initial_capital=run_config.initial_capital,
+            commission=run_config.commission,
             provenance=provenance,
-            cost_model=cost_model.description
+            cost_model=engine.cost_model.description
         )
 
         return report_export_outcome(export_result, exporter_manager.get_exporter_names())

@@ -27,9 +27,11 @@ sys.path.insert(0, project_root)
 CLI_SCRIPT_MODULES = [
     'scripts.analyze',
     'scripts.backtest',
+    'scripts.compare',
     'scripts.download_data',
     'scripts.optimize',
     'scripts.preprocessor',
+    'scripts.screen',
 ]
 
 
