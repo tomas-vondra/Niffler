@@ -324,6 +324,11 @@ prices will differ.
 - **Scaling into a position keeps its cost basis.** A second buy used to overwrite the entry
   price and could replace the stop with `None`, permanently disarming it. The entry price is
   now a quantity-weighted average and a stop is only ever tightened.
+- **Exposure is measured now, not at the last fill.** The risk manager used to record each
+  position's weight when it was filled and never revalue it, so a position whose price had
+  risen still reported its entry-day weight and `max_total_exposure` quietly stopped
+  binding. `Portfolio.risk_snapshot(price)` values it at the current price. Runs with
+  `--risk-manager fixed` move; runs with no risk manager (the default) do not.
 - **Stops are probed against the bar's traded range**, not just its execution price, and
   fill at `min(open, stop)` for a long so a gap-through fills at the open. Stops fire
   earlier and at the stop price.
@@ -391,9 +396,17 @@ Being explicit, so nobody discovers these the expensive way:
   stocked.
 - **Kelly risk manager is a stub.** `KellyRiskManager` exists as a class, but
   `calculate_position_size()`, `calculate_stop_loss()` and `should_close_position()` all
-  raise `NotImplementedError`. `FixedRiskManager` is the only working risk manager.
-- **Single-asset backtests.** The engine runs one symbol at a time; the portfolio-level
-  risk limits (max concurrent positions, total exposure) are not exercised by it.
+  raise `NotImplementedError`. It is deliberately not registered in
+  `niffler/risk/registry.py`, so `--risk-manager kelly` is rejected rather than crashing
+  mid-run. `FixedRiskManager` is the only working risk manager. What blocks Kelly is design,
+  not plumbing: the engine↔risk contract carries prices but no realised round trips, and a
+  minimum-sample gate with nothing to seed it never trades. The class docstring spells out
+  all three blockers.
+- **Single-asset backtests.** The engine runs one symbol at a time, so `max_positions` only
+  bites at 1 and total exposure is a single position's own weight.
+- **No risk manager in validation.** Risk managers are now stateless and therefore safe to
+  share across parallel folds, but nothing threads one into `optimize.py`, `analyze.py` or
+  `compare.py` yet — those have no `--risk-manager` flag.
 - **Walk-forward folds still overlap by default** (`test_window=6`, `step=3`). Repeated
   out-of-sample bars are counted once for the combined Sharpe and the overlap is reported
   and warned about, but per-fold counters still treat each fold as one sample.
@@ -561,6 +574,32 @@ Strategy parameters reach `backtest.py` through `--params` as JSON. A parameter 
 strategy does not accept is an **error naming the accepted ones**, never silently dropped,
 so `--strategy rsi --short-window 5` fails loudly instead of quietly running RSI with
 default settings.
+
+## Adding a risk manager
+
+Same shape, same promise: **one class plus one registry line** in
+[`niffler/risk/registry.py`](niffler/risk/registry.py). `backtest.py`'s `--risk-manager`
+choices derive from it and construction goes through `create_risk_manager()`, so a
+registered manager is selectable with no edit to any script.
+
+1. Write the class in `niffler/risk/`, subclassing `BaseRiskManager` and implementing
+   `calculate_position_size`, `calculate_stop_loss`, `should_close_position` and
+   `_validate_config`. Give every constructor parameter a default.
+2. Add one line to `RISK_MANAGER_CLASSES`.
+
+Two rules the base class enforces for you:
+
+- **A risk manager holds no position state.** Everything it needs about the portfolio
+  arrives per call as a frozen `PortfolioSnapshot` (`niffler/risk/contract.py`), built by
+  `Portfolio.risk_snapshot(price)`. That is what makes a single manager safe to share across
+  parallel walk-forward folds, each of which is an independent hypothetical history.
+- **`niffler/risk/` imports nothing from `niffler/backtesting/` or `niffler/strategies/`.**
+  The engine imports the `RiskManager` Protocol and `Portfolio` builds the snapshot, so the
+  dependency runs one way; a test pins the direction.
+
+A parameter the chosen manager does not accept is an error naming the accepted ones, exactly
+as with `--params`. Note that `backtest.py`'s four risk flags are still
+`FixedRiskManager`-shaped — a `--risk-params` JSON flag is the follow-up.
 
 ## Architecture
 

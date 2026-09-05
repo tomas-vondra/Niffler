@@ -38,6 +38,8 @@ The short version, because these are easy to "helpfully" undo:
 | `niffler/strategies/` imports **nothing** from `niffler/optimization/`; a strategy declares `PARAMETER_SPEC` as a plain dict | Import `ParameterSpace` into a strategy module - `niffler/optimization/__init__` imports `optimizer_factory`, which imports the registry, so it is a circular import |
 | A strategy parameter the chosen strategy does not accept is an **error** | Silently drop an unknown `--params` key or a foreign flag, which runs the strategy with defaults while the user thinks it was configured |
 | Every strategy parameter has a **default** and every strategy accepts `position_size` / `risk_manager` | Add a required constructor argument - the library builds strategies as `strategy_class(**parameters)` |
+| There is **one** risk registry (`niffler/risk/registry.py`); `--risk-manager` choices derive from it, and `niffler/risk/` imports nothing from `niffler/backtesting/` or `niffler/strategies/` | Hardcode `choices=['none', 'fixed']`, or import the engine into a risk module - the engine imports the `RiskManager` protocol, so it closes an import cycle |
+| A risk manager holds **no position state**; it receives a `PortfolioSnapshot` per call, and `evaluate_trade` has **no default** for it | Put `self._positions` back, or default the snapshot to flat - which silently disables `max_positions` and re-breaks parallel walk-forward folds |
 
 Scope limits that are deliberate, not oversights: long-only, no live trading, three
 textbook strategies rather than an edge, Kelly risk manager is a stub. Slippage/spread/market impact **are** modelled now
@@ -196,8 +198,9 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
     `_process_buy`, `_process_sell`
   - `portfolio.py` - `Portfolio` owns cash / position / entry price / stop / side and the
     operations on them (`apply_buy`, `apply_sell`, `open_position`, `add_to_position`,
-    `close_position`, `market_value`, `position_fraction`, `unrealized_pnl`, `is_flat`).
-    The engine holds no parallel mutable state
+    `close_position`, `market_value`, `position_fraction`, `unrealized_pnl`, `is_flat`,
+    `risk_snapshot`). The engine holds no parallel mutable state, and neither does the risk
+    manager: `risk_snapshot(price)` is what it gets instead
   - `round_trip.py` - `pair_trades()` → `List[RoundTrip]`, the **single** FIFO trade-pairing
     routine (correct partial fills both directions, pro-rata commission, P&L net of entry
     and exit commission). Used by engine statistics *and* the Elasticsearch position export
@@ -284,11 +287,19 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
   - `analysis_result.py` - Unified result container with stability metrics, failure
     accounting (`attempted_runs`, `failed_runs`, `failure_rate`, `is_survivorship_biased`)
     and the shared `log_failure_rate()` / `FAILURE_RATE_WARNING_THRESHOLD`
-- `niffler/risk/` - Risk management framework
-  - `base_risk_manager.py` - Abstract base class for risk management systems
+- `niffler/risk/` - Risk management framework. Imports **nothing** from
+  `niffler/backtesting/` or `niffler/strategies/`; the dependency runs the other way
+  - `contract.py` - `PortfolioSnapshot` (frozen portfolio state handed to a manager per
+    call) and the `RiskManager` Protocol the engine checks before the first bar
+  - `registry.py` - The single name→class map. Adding a risk manager is one line here;
+    `'none'` maps to `None`, not to a null-object manager
+  - `base_risk_manager.py` - Abstract base class. **Stateless with respect to open
+    positions**: no `_positions`, no `update_position_state` / `clear_position`
   - `fixed_risk_manager.py` - Fixed position sizing and stop-loss risk management
   - `kelly_risk_manager.py` - **Stub.** The class and constructor exist; all three abstract
-    methods raise `NotImplementedError`. `FixedRiskManager` is the only usable one
+    methods raise `NotImplementedError`, and it is deliberately **not registered** so
+    `--risk-manager kelly` is rejected by argparse rather than crashing mid-run.
+    `FixedRiskManager` is the only usable one
 - `niffler/exporters/` - Modular result export system
   - `base_exporter.py` - Abstract base class for result exporters
   - `console_exporter.py` - Human-readable console output
@@ -350,6 +361,9 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
 - **Trade statistics** derive from `pair_trades()` only. `_calculate_win_rate` and
   `_calculate_profit_factor` are thin wrappers over it — do not reintroduce a second
   pairing loop
+- **Risk state**: the engine hands the manager `Portfolio.risk_snapshot(execution_price)`
+  and calls exactly two methods on it (`evaluate_trade`, `should_close_position`). It no
+  longer pushes position state into the manager
 - **Exits**: `RiskDecision.position_size` sizes *entries* only. A sell uses the strategy's
   own `position_size` (a fraction of held units); the risk manager can veto an exit via
   `allow_trade` but cannot resize it
@@ -460,15 +474,35 @@ The risk management system provides position sizing, stop-loss calculation, and 
 - **Purpose**: Optimal position sizing based on historical strategy performance
 - **Method**: Would use the Kelly Criterion formula: f* = (bp - q) / b
 - **Status**: **Stub.** `calculate_position_size()`, `calculate_stop_loss()` and
-  `should_close_position()` all raise `NotImplementedError`. It is not selectable from the
-  `backtest.py` CLI (`--risk-manager` accepts `none` and `fixed` only) and must not be
-  described as working
+  `should_close_position()` all raise `NotImplementedError`. It is deliberately **not
+  registered** in `RISK_MANAGER_CLASSES`, so `--risk-manager kelly` is rejected by argparse
+  instead of loading data and raising at the first signal. It must not be described as
+  working. Registering it is one line, so what blocks it is design, not plumbing: the
+  contract carries prices but no realised round trips, a minimum-sample gate with nothing to
+  seed it never trades, and `min_trades_for_kelly=10` contradicts
+  `significance.DEFAULT_MIN_TRADES=30`. The class docstring carries the full argument
+
+#### The seam
+- **One registry**: `niffler/risk/registry.py`. `--risk-manager` choices come from
+  `get_available_risk_managers()` and construction from `create_risk_manager()`, so adding a
+  manager needs no edit to `backtest.py`. An argument the chosen manager does not accept is
+  a `ValueError` naming the ones it does
+- **One contract**: `niffler/risk/contract.py` declares the two methods the engine calls
+  (`evaluate_trade`, `should_close_position`) as a `runtime_checkable` Protocol, checked in
+  `_validate_inputs` before the first bar. `runtime_checkable` verifies the attributes
+  exist, not their signatures
 
 #### Risk Management Features
-- **Position Tracking**: Real-time monitoring of all open positions
-- **Portfolio Risk Controls**: Total exposure limits, maximum concurrent positions
+- **State ownership**: `Portfolio` owns the position; a manager is handed a frozen
+  `PortfolioSnapshot` (`open_positions`, `total_exposure`, `current_position`) per call and
+  keeps nothing. This is what makes one manager safe across parallel walk-forward folds
+- **Portfolio Risk Controls**: Total exposure limits and maximum concurrent positions, both
+  read from that snapshot. Exposure is valued at the **current** price - the old manager
+  recorded the fraction at each fill and never revalued it, so the cap quietly stopped
+  binding once a position appreciated
 - **Stop Loss Management**: Automated stop-loss calculation and monitoring
-- **Risk Metrics**: Comprehensive risk reporting and portfolio utilization tracking
+- **Risk Metrics**: `get_risk_metrics()` reports **configuration only**; a stateless manager
+  cannot report live positions or utilisation
 
 ### Export System Architecture
 The modular export system enables flexible output of backtest results to multiple destinations:
