@@ -351,6 +351,12 @@ prices will differ.
   (`successes`, `failures`, `backtest_id`, `ok`) instead of a bare id, exporters raise
   rather than logging "skipping", and `backtest.py` prints a per-exporter report and exits 1
   on any failure — including exporters whose constructor was rejected.
+- An exporter or data-source option nobody accepts **raises**. It used to be filtered out
+  by a hand-written per-name kwargs branch, so a forgotten branch built the exporter on its
+  defaults, reported success and exited 0 — a CSV landed in the working directory instead
+  of the `--csv-output-dir` that was passed. Options now come from the constructor
+  signature, and `--exporters console --csv-output-dir results/` or
+  `--source yahoo --exchange binance` exit 1 naming what is accepted.
 - Walk-forward and Monte Carlo count and report failed folds/simulations
   (`attempted_runs`, `failed_runs`, `failure_rate`, `is_survivorship_biased`), and warn by
   name about survivorship bias above a 5% failure rate. Result trimming keeps the **most
@@ -603,6 +609,37 @@ strategy does not accept is an **error naming the accepted ones**, never silentl
 so `--strategy rsi --short-window 5` fails loudly instead of quietly running RSI with
 default settings.
 
+## Adding an exporter or a data source
+
+Both follow the strategy registry's shape: **one class plus one registry line**, and every
+CLI picks it up.
+
+**An exporter** goes in `niffler/exporters/`, subclassing `BaseExporter` and implementing
+`export_backtest_result`, then one line in `EXPORTER_CLASSES` in
+[`niffler/exporters/registry.py`](niffler/exporters/registry.py). There is no kwargs
+branch to update: the options an exporter accepts are read off its `__init__` with
+`inspect.signature`, so `--csv-output-dir` reaches a CSV exporter and
+`--exporter-params '{"output_dir": "results"}'` reaches any exporter at all. Give every
+constructor parameter a default and do not take `**kwargs` —
+`tests/test_exporters/test_registry.py` enforces both, because `**kwargs` would make the
+derived option set "everything" and put the silent-defaults bug back.
+
+**A data source** goes in `niffler/data/downloaders/`, subclassing `BaseDownloader`, then
+one entry in `DOWNLOAD_SOURCES` in
+[`niffler/data/downloaders/registry.py`](niffler/data/downloaders/registry.py). The entry
+carries the class plus how a source-neutral `DownloadRequest` becomes that downloader's
+`download()` arguments — the two shipped downloaders genuinely disagree about their
+signatures, so the translation is data in the registration rather than a branch in
+`download_data.py`. `--source` choices, the default output filename and the download call
+all derive from it.
+
+In both cases an argument the chosen exporter or source does not accept is an **error
+naming the accepted ones**, exactly as `--params` behaves for strategies: `--exporters
+console --csv-output-dir results/` and `--source yahoo --exchange binance` both exit 1
+rather than being quietly ignored. Metadata is built once by
+`ExporterManager.create_metadata` and handed to every exporter, so an exporter never
+builds its own document.
+
 ## Architecture
 
 ### Core Components
@@ -633,6 +670,15 @@ Notable pieces:
 - **`pair_trades()` / `RoundTrip`** (`niffler/backtesting/round_trip.py`) is the single FIFO
   trade-pairing routine used by the engine's statistics *and* the Elasticsearch position
   export, so those can no longer disagree.
+- **The three registries** — `niffler/strategies/registry.py`,
+  `niffler/exporters/registry.py` and `niffler/data/downloaders/registry.py` — are the only
+  name→class maps in the project. Every `--strategy`, `--exporters` and `--source` choice
+  derives from one of them, and what each accepts is read off the relevant signature with
+  `inspect.signature` rather than restated in a list a script has to keep in sync.
+- **`ExporterManager.create_metadata`** is the single builder of the exported metadata
+  document. `BaseExporter` deliberately has no `create_metadata`: a second builder on the
+  base class silently produced a document missing the trade statistics, benchmark and
+  significance fields.
 - **`scripts/common.py::load_ohlcv_csv`** is the one CSV loader for `backtest.py`,
   `analyze.py` and `optimize.py`: identical header normalisation, timestamp detection,
   index sorting, duplicate detection and error messages.
@@ -664,7 +710,7 @@ The suite is the source of truth for its own size. Run it:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-At the time of writing this reports **1188 tests, 0 failures, 0 errors**. Treat that as a
+At the time of writing this reports **1240 tests, 0 failures, 0 errors**. Treat that as a
 sanity check, not a spec — if the command disagrees with this paragraph, believe the
 command. It is the only place in the documentation that quotes a count.
 

@@ -2,6 +2,8 @@
 Unit tests for ExporterManager.
 """
 
+import shutil
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 from datetime import datetime
@@ -12,6 +14,8 @@ from niffler.exporters.base_exporter import BaseExporter
 from niffler.exporters.console_exporter import ConsoleExporter
 from niffler.exporters.csv_exporter import CSVExporter
 from niffler.exporters.elasticsearch_exporter import ElasticsearchExporter
+from niffler.exporters.registry import EXPORTER_CLASSES
+from tests.test_exporters.test_registry import _ProbeExporter
 from niffler.backtesting.backtest_result import BacktestResult
 
 
@@ -67,20 +71,21 @@ class TestExporterManager(unittest.TestCase):
         """Test ExporterManager initialization."""
         manager = ExporterManager()
         self.assertEqual(len(manager.exporters), 0)
-        self.assertIsInstance(manager.EXPORTER_TYPES, dict)
-        self.assertIn('console', manager.EXPORTER_TYPES)
-        self.assertIn('csv', manager.EXPORTER_TYPES)
-        self.assertIn('elasticsearch', manager.EXPORTER_TYPES)
-    
+        self.assertEqual(manager.creation_failures, [])
+
+    def test_the_manager_holds_no_second_name_to_class_map(self):
+        """The registry is the only one; a manager-local copy could shadow it."""
+        self.assertFalse(hasattr(ExporterManager, 'EXPORTER_TYPES'))
+
     def test_exporter_types_registry(self):
-        """Test that EXPORTER_TYPES contains the correct mappings."""
+        """Test that the registry contains the correct mappings."""
         expected_types = {
             'console': ConsoleExporter,
             'csv': CSVExporter,
             'elasticsearch': ElasticsearchExporter
         }
-        self.assertEqual(self.manager.EXPORTER_TYPES, expected_types)
-    
+        self.assertEqual(EXPORTER_CLASSES, expected_types)
+
     def test_get_available_exporter_names(self):
         """Test getting available exporter names."""
         names = ExporterManager.get_available_exporter_names()
@@ -407,7 +412,7 @@ class TestExporterManager(unittest.TestCase):
         initial_capital = 10000.0
         commission = 0.001
         
-        metadata = self.manager._create_metadata(
+        metadata = self.manager.create_metadata(
             self.mock_result, strategy_params, symbol, initial_capital, commission
         )
         
@@ -460,7 +465,39 @@ class TestExporterManager(unittest.TestCase):
         }
 
         self.assertEqual(metadata, expected_metadata)
-    
+
+    def test_the_document_handed_to_exporters_is_the_complete_one(self):
+        """The deleted BaseExporter.create_metadata built a far poorer document.
+
+        It carried neither profit_factor, nor the six trade statistics, nor any
+        benchmark or significance field - a new exporter that called it would have
+        indexed a silently incomplete record.
+        """
+        recorder = Mock(spec=BaseExporter)
+        self.manager.add_exporter(recorder)
+
+        self.manager.export_backtest_result(
+            self.mock_result, {}, 'BTC-USD', 10000.0, 0.001
+        )
+
+        metadata = recorder.export_backtest_result.call_args[0][2]
+        self.assertEqual(
+            set(metadata),
+            set(self.manager.create_metadata(
+                self.mock_result, {}, 'BTC-USD', 10000.0, 0.001
+            ))
+        )
+        for field in ('profit_factor', 'average_win', 'average_loss', 'largest_win',
+                      'largest_loss', 'num_winning_trades', 'num_losing_trades',
+                      'benchmark_name', 'benchmark_return_pct', 'benchmark_sharpe_ratio',
+                      'benchmark_max_drawdown', 'benchmark_total_cost', 'benchmark_error',
+                      'excess_return_pct', 'information_ratio', 'round_trip_count',
+                      'mean_trade_return_pct', 't_statistic', 'p_value', 'sharpe_ci_low',
+                      'sharpe_ci_high', 'sharpe_ci_confidence', 'significance_min_trades',
+                      'is_sample_sufficient', 'is_significant', 'significance_verdict'):
+            with self.subTest(field=field):
+                self.assertIn(field, metadata)
+
     def test_get_exporter_count(self):
         """Test getting exporter count."""
         self.assertEqual(self.manager.get_exporter_count(), 0)
@@ -581,6 +618,65 @@ class TestExporterCreationFailuresAreReported(unittest.TestCase):
         self.manager.create_exporters_from_list(['console'])
 
         self.assertTrue(self._export().ok)
+
+
+class TestOptionBroadcast(unittest.TestCase):
+    """Options are matched to constructors by signature, not by an if/elif chain."""
+
+    def setUp(self):
+        self.manager = ExporterManager()
+        self.temp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.temp_dir)
+
+    def test_each_exporter_receives_only_what_it_accepts(self):
+        self.manager.create_exporters_from_list(
+            ['console', 'csv', 'elasticsearch'],
+            output_dir=self.temp_dir, host='es.example', port=9201
+        )
+
+        console, csv_exporter, elasticsearch = self.manager.exporters
+        self.assertIsInstance(console, ConsoleExporter)
+        self.assertEqual(str(csv_exporter.output_dir), self.temp_dir)
+        self.assertEqual(elasticsearch.host, 'es.example')
+        self.assertEqual(elasticsearch.port, 9201)
+
+    def test_a_newly_registered_exporter_needs_no_kwargs_branch(self):
+        """One registry entry, and the option reaches the constructor."""
+        with patch.dict(EXPORTER_CLASSES, {'probe': _ProbeExporter}):
+            self.manager.create_exporters_from_list(
+                ['probe', 'csv'], probe_token='niffler-probe', output_dir=self.temp_dir
+            )
+
+        probe, csv_exporter = self.manager.exporters
+        self.assertEqual(probe.probe_token, 'niffler-probe')
+        # The probe's option must not leak into the exporter that does not accept it.
+        self.assertEqual(str(csv_exporter.output_dir), self.temp_dir)
+
+    def test_an_option_no_requested_exporter_accepts_raises(self):
+        """Silently dropping it is how --csv-output-dir used to be ignored."""
+        with self.assertRaises(ValueError) as context:
+            self.manager.create_exporters_from_list(['console'], output_dir=self.temp_dir)
+
+        message = str(context.exception)
+        self.assertIn('No requested exporter accepts: output_dir', message)
+        self.assertIn('console accepts config', message)
+        self.assertEqual(self.manager.exporters, [])
+
+    def test_an_option_one_of_several_accepts_is_fine(self):
+        self.manager.create_exporters_from_list(
+            ['console', 'csv'], output_dir=self.temp_dir
+        )
+
+        self.assertEqual(len(self.manager.exporters), 2)
+
+    def test_an_unknown_exporter_name_is_still_only_a_recorded_failure(self):
+        with patch('niffler.exporters.exporter_manager.logger'):
+            failures = self.manager.create_exporters_from_list(
+                ['csv', 'nope'], output_dir=self.temp_dir
+            )
+
+        self.assertEqual([name for name, _ in failures], ['nope'])
+        self.assertEqual(len(self.manager.exporters), 1)
 
 
 if __name__ == '__main__':

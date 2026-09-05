@@ -111,34 +111,18 @@ class _RecordingExporter(BaseExporter):
 
 
 class TestMetadataCarriesProvenance(unittest.TestCase):
-    """Both metadata builders accept and embed a provenance record."""
+    """The one metadata builder accepts and embeds a provenance record."""
 
     def setUp(self):
         self.result = _make_result()
         self.manager = ExporterManager()
 
-    def test_base_exporter_metadata_includes_provenance(self):
-        exporter = _RecordingExporter()
-
-        metadata = exporter.create_metadata(
-            self.result, {'short_window': 10}, 'BTC/USDT', 10000.0, 0.001,
-            provenance=SAMPLE_PROVENANCE
-        )
-
-        self.assertEqual(metadata['provenance'], SAMPLE_PROVENANCE)
-
-    def test_base_exporter_metadata_omits_key_without_provenance(self):
-        """Opting out must not index a null field for every run."""
-        exporter = _RecordingExporter()
-
-        metadata = exporter.create_metadata(
-            self.result, {'short_window': 10}, 'BTC/USDT', 10000.0, 0.001
-        )
-
-        self.assertNotIn('provenance', metadata)
+    def test_exporters_do_not_build_metadata_themselves(self):
+        """One builder, so no exporter can hand its sink a poorer document."""
+        self.assertFalse(hasattr(BaseExporter, 'create_metadata'))
 
     def test_manager_metadata_includes_provenance(self):
-        metadata = self.manager._create_metadata(
+        metadata = self.manager.create_metadata(
             self.result, {'short_window': 10}, 'BTC/USDT', 10000.0, 0.001,
             SAMPLE_PROVENANCE
         )
@@ -146,7 +130,7 @@ class TestMetadataCarriesProvenance(unittest.TestCase):
         self.assertEqual(metadata['provenance'], SAMPLE_PROVENANCE)
 
     def test_manager_metadata_omits_key_without_provenance(self):
-        metadata = self.manager._create_metadata(
+        metadata = self.manager.create_metadata(
             self.result, {'short_window': 10}, 'BTC/USDT', 10000.0, 0.001
         )
 
@@ -154,7 +138,7 @@ class TestMetadataCarriesProvenance(unittest.TestCase):
 
     def test_metadata_with_provenance_round_trips_through_safe_json_dumps(self):
         """allow_nan=False must not choke on the record the exporters carry."""
-        metadata = self.manager._create_metadata(
+        metadata = self.manager.create_metadata(
             self.result, {'short_window': 10}, 'BTC/USDT', 10000.0, 0.001,
             SAMPLE_PROVENANCE
         )

@@ -40,6 +40,8 @@ The short version, because these are easy to "helpfully" undo:
 | A screening gate with **no** measurable value stops the run | Treat a `None` retention / efficiency / BEAT% as a pass, or as a 0.0 |
 | A cross-asset comparison pairs each fold with buy-and-hold over the **same bars** | Compare a fold return against a benchmark computed over the whole file, or against a fixed number - the window length would drive the verdict |
 | A strategy parameter the chosen strategy does not accept is an **error** | Silently drop an unknown `--params` key or a foreign flag, which runs the strategy with defaults while the user thinks it was configured |
+| There is **one** registry per extension point - strategies, exporters (`niffler/exporters/registry.py`), data sources (`niffler/data/downloaders/registry.py`) - and what each accepts is derived with `inspect.signature` | Hand-write a per-name kwargs filter or an `--source`/`--exporters` `choices=[...]` list; a forgotten branch builds the exporter on **defaults**, reports success and exits 0 |
+| The exported metadata document has **one** builder, `ExporterManager.create_metadata` | Add a `create_metadata` back to `BaseExporter` - the deleted one silently omitted `profit_factor`, the six trade statistics and every benchmark and significance field |
 | Every strategy parameter has a **default** and every strategy accepts `position_size` / `risk_manager` | Add a required constructor argument - the library builds strategies as `strategy_class(**parameters)` |
 
 Scope limits that are deliberate, not oversights: long-only, no live trading, three
@@ -125,7 +127,14 @@ python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv 
 
 # Run backtest with risk management
 python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv --strategy simple_ma --risk-manager fixed --max-position-size 0.1 --stop-loss-pct 0.05
+
+# Any registered exporter is configured through --exporter-params (mirrors --params)
+python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv --strategy simple_ma \
+  --exporters csv --exporter-params '{"output_dir": "results/"}'
 ```
+
+Note: an option none of the chosen exporters accepts is an error. `--exporters console
+--csv-output-dir results/` exits 1 rather than writing nothing and reporting success.
 
 ### Strategy Optimization
 Parameter optimization for trading strategies via `scripts/optimize.py`:
@@ -208,6 +217,15 @@ Exit codes: `0` every gate passed, `3` a gate stopped the run, `1` the run faile
 ### Core Components
 - `niffler/data/downloaders/` - Data acquisition from exchanges and APIs
   - `base_downloader.py` - Abstract base class for data downloaders
+  - `registry.py` - **The** data-source registry (`DOWNLOAD_SOURCES`, `DownloadSource`,
+    `DownloadRequest`, `get_available_sources`, `get_source`, `get_source_option_names`,
+    `create_downloader`, `build_request`, `build_download_kwargs`). `--source` choices,
+    the default output filename (`DownloadSource.file_tag`) and the `download()` call all
+    derive from it, so adding a source is one entry. The two downloaders genuinely
+    disagree about `download()` (CCXT: exchange id + millisecond epochs; Yahoo: ticker +
+    date strings), so each entry carries its own `build_download_kwargs`; the result is
+    checked against the real signature. Which options a source accepts is read off
+    `download()`, which is why `--exchange` belongs to ccxt and is an error on yahoo
   - `ccxt_downloader.py` - Cryptocurrency exchange data via CCXT
   - `yahoo_finance_downloader.py` - Traditional financial data via yfinance
 - `niffler/data/preprocessors/` - Data cleaning and validation pipeline
@@ -330,11 +348,21 @@ Exit codes: `0` every gate passed, `3` a gate stopped the run, `1` the run faile
   - `kelly_risk_manager.py` - **Stub.** The class and constructor exist; all three abstract
     methods raise `NotImplementedError`. `FixedRiskManager` is the only usable one
 - `niffler/exporters/` - Modular result export system
-  - `base_exporter.py` - Abstract base class for result exporters
+  - `base_exporter.py` - Abstract base class for result exporters. It deliberately has
+    **no** `create_metadata`: the document is built once by the manager
+  - `registry.py` - **The** exporter registry (`EXPORTER_CLASSES`, `get_exporter_class`,
+    `get_available_exporters`, `get_exporter_option_names`, `create_exporter`). Options
+    come from each exporter's `__init__` via `inspect.signature`, so registering the class
+    is the whole edit; an option the exporter does not accept raises naming what it does
   - `console_exporter.py` - Human-readable console output
   - `csv_exporter.py` - CSV file export for analysis tools
   - `elasticsearch_exporter.py` - Elasticsearch integration for visualization
-  - `exporter_manager.py` - Multi-exporter coordination, registry and `ExportSummary`
+  - `exporter_manager.py` - Multi-exporter coordination, `create_metadata` and
+    `ExportSummary`. It holds **no** name→class map of its own.
+    `create_exporters_from_list` broadcasts one option pool over several exporters and
+    hands each the subset its signature declares; an option **none** of them accepts
+    raises, which is kept distinct from a constructor rejecting its own config (that stays
+    a recorded creation failure)
   - `json_utils.py` - Compatibility re-export of `niffler/utils/json_utils.py`
 - `niffler/utils/` - Layer-neutral helpers. **Nothing here may import from the
   backtesting / optimization / exporters layers**, so importing a helper never drags an
@@ -477,6 +505,9 @@ Exit codes: `0` every gate passed, `3` a gate stopped the run, `1` the run faile
   boundary that reports a message and exits; library code catches specific types
 - `ExporterManager.export_backtest_result` returns an `ExportSummary`; exporters raise
   `ExportError` rather than logging "skipping" and returning normally
+- An exporter option no chosen exporter accepts, and a `--source` option the chosen source
+  does not accept, both **raise** rather than being filtered away - the failure they used
+  to produce was invisible (defaults used, success reported, exit 0)
 - Analyzers count failed folds/simulations and warn about survivorship bias above 5%
 
 ### Analysis Framework Architecture
@@ -547,6 +578,13 @@ The modular export system enables flexible output of backtest results to multipl
 - **CSV Exporter**: Structured file export for external analysis tools (Excel, Python, R)
 - **Elasticsearch Exporter**: Database integration for advanced visualization and dashboards
 
+#### Adding an Exporter
+One class in `niffler/exporters/` plus one line in `EXPORTER_CLASSES`. No kwargs branch, no
+CLI flag: `--exporters` choices and `--exporter-params` (a JSON object, mirroring
+`--params`) both derive from the registry. Every constructor parameter needs a default and
+no exporter may take `**kwargs` - `tests/test_exporters/test_registry.py` enforces both,
+because `**kwargs` makes the derived option set "everything".
+
 #### Export Features
 - **Multi-Export Support**: Results can be exported to multiple destinations simultaneously
 - **Unique Identification**: Each backtest receives a UUID for tracking and correlation
@@ -559,8 +597,8 @@ The modular export system enables flexible output of backtest results to multipl
   flag, data-file SHA-256, Python and library versions). Collected **once** by the caller
   that owns the run (`scripts/backtest.py`) and passed into
   `ExporterManager.export_backtest_result(..., provenance=...)`; collecting it per exporter
-  would re-hash the input file for every destination. `BaseExporter.create_metadata` and
-  `ExporterManager._create_metadata` add the key only when a record is supplied. The
+  would re-hash the input file for every destination. `ExporterManager.create_metadata` -
+  the **only** metadata builder - adds the key only when a record is supplied. The
   console exporter prints a one-line summary with a `DIRTY` marker, the CSV exporter writes
   a `{base}_provenance.json` sidecar (named with the shared `sanitize_path_component`), and
   `config/elasticsearch/mappings/backtests.json` maps the block explicitly - SHAs, versions
@@ -581,7 +619,10 @@ The modular export system enables flexible output of backtest results to multipl
   - `ELASTICSEARCH_USERNAME` / `ELASTICSEARCH_PASSWORD` - basic auth (both required)
   - `ELASTICSEARCH_TIMEOUT` - Request timeout in seconds (default 30)
   - `ELASTICSEARCH_VERIFY_CERTS` - TLS certificate verification for https (default true)
-- **Command-line Overrides**: Runtime configuration via `--es-host`, `--es-port`, `--es-index-prefix`
+- **Command-line Overrides**: Runtime configuration via `--es-host`, `--es-port`,
+  `--es-index-prefix`, `--csv-output-dir` and the generic `--exporter-params`. Each flag
+  defaults to `None` so an explicitly passed one can be told apart from an unset one, and
+  only what was passed is forwarded
 - **Mapping Files**: Elasticsearch schema definitions in `config/elasticsearch/mappings/`
 - **Failure Reporting**: `ExporterManager.export_backtest_result` returns an `ExportSummary`
   (`successes`, `failures`, `backtest_id`, `ok`). Exporters raise rather than skipping
@@ -594,6 +635,9 @@ The modular export system enables flexible output of backtest results to multipl
 - Test packages mirror the source layout: `tests/test_backtesting`, `test_analysis`,
   `test_downloaders`, `test_preprocessors`, `test_optimization`, `test_risk`,
   `test_exporters`, `test_scripts`, `test_strategies`, `test_utils`
+- `tests/test_exporters/test_registry.py` and `tests/test_downloaders/test_registry.py`
+  do the same for exporters and data sources: they iterate their registry, so a newly
+  registered exporter or source is covered automatically
 - `tests/test_strategies/test_registry.py` holds the **shared strategy contract**: it
   iterates the registry, so a newly registered strategy is covered automatically. Its
   look-ahead check recomputes each bar's signal from data truncated at that bar. That

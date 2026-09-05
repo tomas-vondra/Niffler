@@ -81,10 +81,10 @@ exporter_manager.export_backtest_result(..., provenance=provenance)
 ```
 
 Collecting it inside each exporter instead would re-hash the input file once per
-destination and shell out to `git` once per exported result. `BaseExporter.create_metadata`
-and `ExporterManager._create_metadata` take an optional `provenance` argument and add the
-key **only when a record is supplied**, so an opted-out caller gets the previous metadata
-shape unchanged.
+destination and shell out to `git` once per exported result.
+`ExporterManager.create_metadata` - the single builder of the exported document - takes an
+optional `provenance` argument and adds the key **only when a record is supplied**, so an
+opted-out caller gets the previous metadata shape unchanged.
 
 How it degrades:
 
@@ -280,12 +280,35 @@ package installed raises a clear `RuntimeError`.
 ## Adding an Exporter
 
 1. Subclass `BaseExporter` and implement `export_backtest_result(result, backtest_id, ...)`.
+   Give **every** constructor parameter a default, and do not take `**kwargs`:
+   `ExporterManager` reads the options an exporter accepts off its `__init__` with
+   `inspect.signature`, and `**kwargs` would make that "everything".
 2. **Raise on failure.** Do not log and return — the manager cannot distinguish that from
    success, which is exactly the bug this contract exists to prevent. Call the inherited
    `self.require_valid_result(result, destination)` for the standard precondition check;
    it raises `ExportError`.
-3. Register it in `ExporterManager.EXPORTER_TYPES`, keyed by the name users pass to
-   `--exporters`.
+3. Add one line to `EXPORTER_CLASSES` in `niffler/exporters/registry.py`, keyed by the name
+   users pass to `--exporters`.
+
+That is the whole procedure. `--exporters` choices derive from the registry, and the new
+exporter's options are reachable immediately through
+`--exporter-params '{"my_option": "value"}'` — no new flag, and no kwargs branch to update.
+`tests/test_exporters/test_registry.py` then applies the shared contract to it
+automatically.
+
+Do **not** build metadata in an exporter. The document is built once by
+`ExporterManager.create_metadata` and handed to every exporter; `BaseExporter` used to
+carry a second builder that silently omitted `profit_factor`, the trade statistics and all
+the benchmark and significance fields.
+
+### Options that nobody accepts are errors
+
+`create_exporters_from_list` broadcasts one option pool over the requested exporters and
+hands each the subset its constructor declares. An option **none** of them accepts raises,
+so `--exporters console --csv-output-dir results/` exits 1 naming what `console` does
+accept. That is distinct from an exporter whose constructor rejects its own configuration
+(an invalid Elasticsearch scheme, say): those stay recorded creation failures and surface
+in the `ExportSummary`.
 
 ## See Also
 
