@@ -13,31 +13,16 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import numpy as np
-import pandas as pd
-
 project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from scripts.compare import (
-    benchmark_for_window,
     evaluate,
     main,
     paired_folds,
     render,
     symbol_from_path,
 )
-
-
-def make_data(bars: int = 400, start: str = '2020-01-01') -> pd.DataFrame:
-    """Build a deterministic OHLCV frame."""
-    rng = np.random.default_rng(11)
-    price = 100 * np.exp(np.cumsum(rng.normal(0, 0.01, bars)))
-    index = pd.date_range(start, periods=bars, freq='D')
-    return pd.DataFrame({
-        'open': price, 'high': price * 1.01, 'low': price * 0.99,
-        'close': price, 'volume': np.full(bars, 1000.0),
-    }, index=index)
 
 
 def base_args(**overrides) -> argparse.Namespace:
@@ -65,74 +50,36 @@ class TestSymbolFromPath(unittest.TestCase):
         self.assertEqual(symbol_from_path('data/QQQ.csv'), 'QQQ')
 
 
-class TestBenchmarkForWindow(unittest.TestCase):
-
-    def test_returns_a_number_for_a_normal_window(self):
-        data = make_data()
-        value = benchmark_for_window(data, data.index[0], data.index[-1], 'X',
-                                     base_args())
-        self.assertIsInstance(value, float)
-
-    def test_single_bar_window_is_none_not_zero(self):
-        """A window too short to hold a position has no benchmark.
-
-        Zero would read as "the market went nowhere", which is a claim about the
-        market rather than an admission that nothing could be computed.
-        """
-        data = make_data()
-        self.assertIsNone(
-            benchmark_for_window(data, data.index[0], data.index[0], 'X', base_args())
-        )
-
-    def test_window_is_sliced_not_taken_whole(self):
-        """The benchmark must reflect the fold, not the whole file.
-
-        This is the failure the paired comparison exists to prevent: a six-month fold
-        judged against a multi-year buy-and-hold figure.
-        """
-        data = make_data()
-        early = benchmark_for_window(data, data.index[0], data.index[50], 'X',
-                                     base_args())
-        whole = benchmark_for_window(data, data.index[0], data.index[-1], 'X',
-                                     base_args())
-        self.assertNotAlmostEqual(early, whole, places=6)
-
-
 class TestPairedFolds(unittest.TestCase):
+    """The benchmark comes from the fold itself, never from a second computation.
 
-    def test_each_fold_is_paired_with_its_own_window(self):
-        data = make_data()
+    ``BacktestEngine`` defaults to buy-and-hold and ``WalkForwardAnalyzer`` runs every
+    fold through it, so each fold already carries a benchmark priced over its own bars.
+    Recomputing one here would be a parallel implementation free to drift from what the
+    rest of the platform reports.
+    """
+
+    def test_each_fold_contributes_its_own_benchmark(self):
         folds = [
-            SimpleNamespace(start_date=data.index[0], end_date=data.index[100],
-                            total_return_pct=5.0),
-            SimpleNamespace(start_date=data.index[100], end_date=data.index[200],
-                            total_return_pct=-3.0),
+            SimpleNamespace(total_return_pct=5.0, benchmark_return_pct=2.0),
+            SimpleNamespace(total_return_pct=-3.0, benchmark_return_pct=1.5),
         ]
-        result = SimpleNamespace(individual_results=folds)
-        pairs = paired_folds(result, data, 'X', base_args())
+        pairs = paired_folds(SimpleNamespace(individual_results=folds))
 
-        self.assertEqual(len(pairs), 2)
-        self.assertEqual([p[0] for p in pairs], [5.0, -3.0])
-        # Two different windows must not produce one shared benchmark figure.
-        self.assertNotAlmostEqual(pairs[0][1], pairs[1][1], places=6)
+        self.assertEqual(pairs, [(5.0, 2.0), (-3.0, 1.5)])
 
     def test_fold_without_a_benchmark_is_dropped_not_zero_filled(self):
-        data = make_data()
+        """A missing benchmark is not a flat market, so it cannot become 0.0."""
         folds = [
-            SimpleNamespace(start_date=data.index[0], end_date=data.index[0],
-                            total_return_pct=5.0),
-            SimpleNamespace(start_date=data.index[0], end_date=data.index[100],
-                            total_return_pct=1.0),
+            SimpleNamespace(total_return_pct=5.0, benchmark_return_pct=None),
+            SimpleNamespace(total_return_pct=1.0, benchmark_return_pct=0.5),
         ]
-        result = SimpleNamespace(individual_results=folds)
-        pairs = paired_folds(result, data, 'X', base_args())
+        pairs = paired_folds(SimpleNamespace(individual_results=folds))
 
-        self.assertEqual(len(pairs), 1)
-        self.assertEqual(pairs[0][0], 1.0)
+        self.assertEqual(pairs, [(1.0, 0.5)])
 
     def test_no_folds_gives_no_pairs(self):
-        result = SimpleNamespace(individual_results=[])
-        self.assertEqual(paired_folds(result, make_data(), 'X', base_args()), [])
+        self.assertEqual(paired_folds(SimpleNamespace(individual_results=[])), [])
 
 
 class TestEvaluateFailureHandling(unittest.TestCase):

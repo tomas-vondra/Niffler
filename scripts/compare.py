@@ -25,7 +25,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import pandas as pd
 
@@ -33,8 +33,6 @@ if __package__ in (None, ''):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from niffler.analysis import WalkForwardAnalyzer
-from niffler.backtesting.backtest_engine import BacktestEngine
-from niffler.backtesting.benchmark import compute_buy_and_hold, BenchmarkError
 from niffler.config.logging import setup_logging
 from niffler.optimization.optimizer_factory import get_parameter_space
 from niffler.strategies.registry import get_available_strategies, get_strategy_class
@@ -61,65 +59,35 @@ def symbol_from_path(path: str) -> str:
     return Path(path).stem.split('_')[0].upper()
 
 
-def benchmark_for_window(data: pd.DataFrame, start, end, symbol,
-                         args) -> Optional[float]:
-    """Buy-and-hold total return over one fold's window, on the run's own terms.
-
-    Priced through ``BacktestEngine`` so the benchmark pays the same commission and cost
-    model the strategy paid. A benchmark that cannot be computed is None, never 0.0 - a
-    zero would read as "flat", which is a claim about the market.
-
-    Args:
-        data: The full OHLCV frame.
-        start: First timestamp of the fold.
-        end: Last timestamp of the fold.
-        symbol: Display symbol, for the benchmark's trade record.
-        args: Parsed arguments, for capital / commission / cost model.
-
-    Returns:
-        Total return percent, or None if it could not be computed.
-    """
-    window = data.loc[start:end]
-    if len(window) < 2:
-        return None
-
-    engine = BacktestEngine(
-        initial_capital=args.capital,
-        commission=args.commission,
-        cost_model=build_cost_model(args),
-    )
-    try:
-        return compute_buy_and_hold(engine, window, symbol).total_return_pct
-    except (BenchmarkError, ValueError) as e:
-        logger.warning("Benchmark failed for %s %s-%s: %s", symbol, start, end, e)
-        return None
-
-
-def paired_folds(result, data: pd.DataFrame, symbol: str, args) -> List[tuple]:
+def paired_folds(result) -> List[tuple]:
     """Pair every out-of-sample fold with buy-and-hold over the *same* bars.
 
-    This pairing is the whole point. Comparing a six-month fold return against a
-    buy-and-hold figure computed over the entire multi-year span would flatter or damn a
-    strategy purely through the length of the window, telling you nothing about it.
+    This pairing is the whole point of the script: comparing a six-month fold return
+    against a buy-and-hold figure computed over the entire multi-year span would flatter
+    or damn a strategy purely through the length of the window.
+
+    The benchmark is **not** recomputed here. ``BacktestEngine`` defaults to
+    ``benchmark='buy_and_hold'`` and ``WalkForwardAnalyzer`` runs every fold through it,
+    so each fold already carries a benchmark priced over its own bars, entered through
+    ``_execute_buy_trade`` and charged the same commission and cost model as the strategy.
+    Computing a second one here would be a parallel implementation that can drift from the
+    one the rest of the platform reports - the same reason there is only one FIFO pairing
+    routine and one equity-metrics module. (Verified identical to six decimal places
+    across seven SPY folds before this was collapsed into the built-in field.)
 
     Args:
         result: The ``AnalysisResult`` from a walk-forward run.
-        data: The full OHLCV frame the folds were cut from.
-        symbol: Display symbol.
-        args: Parsed arguments.
 
     Returns:
-        ``(strategy_return_pct, benchmark_return_pct)`` per fold whose benchmark could be
-        computed. A fold without one is dropped rather than compared against a fabricated
+        ``(strategy_return_pct, benchmark_return_pct)`` per fold that has a benchmark. A
+        fold whose benchmark is None is dropped rather than compared against a fabricated
         baseline.
     """
-    pairs = []
-    for fold in result.individual_results:
-        benchmark = benchmark_for_window(data, fold.start_date, fold.end_date,
-                                         symbol, args)
-        if benchmark is not None:
-            pairs.append((fold.total_return_pct, benchmark))
-    return pairs
+    return [
+        (fold.total_return_pct, fold.benchmark_return_pct)
+        for fold in result.individual_results
+        if fold.benchmark_return_pct is not None
+    ]
 
 
 def evaluate(data_path: str, strategy: str, args) -> Dict[str, Any]:
@@ -162,7 +130,7 @@ def evaluate(data_path: str, strategy: str, args) -> Dict[str, Any]:
         return row
 
     stats = {**result.combined_metrics, **result.stability_metrics}
-    pairs = paired_folds(result, data, symbol, args)
+    pairs = paired_folds(result)
 
     row.update({
         'folds': int(stats.get('total_periods', 0)),
