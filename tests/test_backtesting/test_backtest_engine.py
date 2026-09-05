@@ -45,16 +45,21 @@ class MockStrategy(BaseStrategy):
 
 
 class MockRiskManager:
-    """Mock risk manager for testing."""
-    
+    """Mock risk manager for testing.
+
+    Holds no position state - it records the snapshots the engine hands it so a
+    test can assert on what the engine reported, not on what the manager kept.
+    """
+
     def __init__(self, allow_trade=True, position_size=0.5, stop_loss_price=95.0):
         self.allow_trade = allow_trade
-        self.position_size = position_size  
+        self.position_size = position_size
         self.stop_loss_price = stop_loss_price
-        self.positions = {}
-        
-    def evaluate_trade(self, signal, current_price, portfolio_value, historical_data, current_position):
+        self.snapshots = []
+
+    def evaluate_trade(self, signal, current_price, portfolio_value, historical_data, portfolio):
         from niffler.risk.base_risk_manager import RiskDecision
+        self.snapshots.append(portfolio)
         return RiskDecision(
             position_size=self.position_size,
             stop_loss_price=self.stop_loss_price,
@@ -62,27 +67,30 @@ class MockRiskManager:
             allow_trade=self.allow_trade,
             reason="Mock risk decision"
         )
-        
+
     def should_close_position(self, current_price, entry_price, stop_loss_price, signal, unrealized_pnl):
         if stop_loss_price and current_price <= stop_loss_price:
             return True, "Mock stop loss triggered"
         return False, "Mock stop loss not triggered"
-        
-    def update_position_state(self, symbol, position_size, entry_price, stop_loss_price, entry_timestamp):
-        # Debug print to see what values we're getting
-        # print(f"MockRiskManager.update_position_state: {symbol}, position_size={position_size}")
-        # Always update the position state - the backtest engine handles calling clear_position when needed
-        self.positions[symbol] = {
-            'position_size': position_size,
-            'entry_price': entry_price,
-            'stop_loss_price': stop_loss_price,
-            'entry_timestamp': entry_timestamp
-        }
-        
-    def clear_position(self, symbol):
-        # print(f"MockRiskManager.clear_position called for {symbol}")
-        if symbol in self.positions:
-            del self.positions[symbol]
+
+
+class RecordingEngine(BacktestEngine):
+    """Engine that records portfolio state after each executed buy.
+
+    The risk manager used to be the only place a test could observe the engine's
+    view of an open position. It no longer keeps one, so a test that needs the
+    cost basis or the armed stop reads them off the Portfolio the engine owns.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.entry_prices = []
+        self.stops = []
+
+    def _process_buy(self, portfolio, *args, **kwargs):
+        super()._process_buy(portfolio, *args, **kwargs)
+        self.entry_prices.append(portfolio.entry_price)
+        self.stops.append(portfolio.stop_loss)
 
 
 class TestBacktestEngine(unittest.TestCase):
@@ -423,10 +431,11 @@ class TestBacktestEngine(unittest.TestCase):
         
         self.assertIsInstance(result, BacktestResult)
         self.assertGreater(len(result.trades), 0)  # Should have trades
-        # Risk manager position size should be used (0.3 instead of 1.0)
-        
-        # Check that risk manager state was updated
-        self.assertIn("TEST", risk_manager.positions)
+        # The risk manager's 0.3 is used in place of the strategy's 1.0.
+        self.assertAlmostEqual(result.trades[0].value / 10000.0, 0.3, places=2)
+        # It was handed a snapshot of a flat portfolio, and kept nothing.
+        self.assertEqual(len(risk_manager.snapshots), 1)
+        self.assertEqual(risk_manager.snapshots[0].open_positions, 0)
         
     def test_backtest_with_risk_manager_blocked_trade(self):
         """Test backtest with risk manager that blocks trades."""
@@ -453,21 +462,25 @@ class TestBacktestEngine(unittest.TestCase):
         # Should have both buy trade and stop loss sell trade
         self.assertGreaterEqual(len(result.trades), 1)
         
-    def test_backtest_risk_manager_position_state_sync(self):
-        """Test that risk manager position state stays synchronized."""
+    def test_backtest_risk_manager_sees_the_portfolio_it_created(self):
+        """The snapshot at the exit reflects the entry the engine just made."""
         risk_manager = MockRiskManager(allow_trade=True, position_size=1.0)  # Use 100% to ensure full close
         signals_data = {
             self.sample_data.index[1]: 1,   # Buy
             self.sample_data.index[4]: -1   # Sell
         }
         strategy = MockStrategy(signals_data, risk_manager)
-        
+
         result = self.engine.run_backtest(strategy, self.sample_data, "TEST")
-        
-        # After backtest completes, position should be cleared
-        self.assertNotIn("TEST", risk_manager.positions)
-        
-        # Should have buy and sell trades
+
+        self.assertEqual(len(risk_manager.snapshots), 2)
+        self.assertEqual(risk_manager.snapshots[0].open_positions, 0)  # flat before the buy
+        self.assertEqual(risk_manager.snapshots[1].open_positions, 1)  # positioned before the sell
+
+        # Everything bought is sold back.
+        bought = sum(t.quantity for t in result.trades if t.side == TradeSide.BUY)
+        sold = sum(t.quantity for t in result.trades if t.side == TradeSide.SELL)
+        self.assertAlmostEqual(bought, sold, places=9)
         self.assertGreaterEqual(len(result.trades), 2)
 
 
@@ -590,37 +603,29 @@ class TestFirstBarRiskManagement(unittest.TestCase):
         self.assertEqual(len(result.trades), 1)
         self.assertEqual(result.trades[0].timestamp, self.data.index[1])
 
-    def test_risk_manager_receives_value_based_position_fraction(self):
-        """Position size reported to the risk manager is value/value, not units/value."""
+    def test_risk_manager_receives_value_based_exposure(self):
+        """Exposure reported to the risk manager is value/value, not units/value."""
         risk_manager = MockRiskManager(allow_trade=True, position_size=1.0,
                                        stop_loss_price=None)
-        strategy = MockStrategy({self.data.index[0]: 1}, risk_manager)
-
-        self.engine.run_backtest(strategy, self.data, "TEST")
-
-        recorded = risk_manager.positions["TEST"]['position_size']
-        # All-in buy => essentially the whole portfolio is in the position.
-        # The old code divided units by currency and reported ~0.01 here.
-        self.assertAlmostEqual(recorded, 1.0, places=6)
-
-    def test_risk_manager_current_position_is_value_based(self):
-        """The current_position passed into evaluate_trade is a value fraction."""
-        observed = []
-
-        class RecordingRiskManager(MockRiskManager):
-            def evaluate_trade(self, signal, current_price, portfolio_value,
-                               historical_data, current_position):
-                observed.append(current_position)
-                return super().evaluate_trade(signal, current_price, portfolio_value,
-                                              historical_data, current_position)
-
-        risk_manager = RecordingRiskManager(allow_trade=True, position_size=1.0,
-                                            stop_loss_price=None)
         strategy = MockStrategy({self.data.index[0]: 1, self.data.index[2]: -1},
                                 risk_manager)
 
         self.engine.run_backtest(strategy, self.data, "TEST")
 
+        # All-in buy => essentially the whole portfolio is in the position.
+        # The old code divided units by currency and reported ~0.01 here.
+        self.assertAlmostEqual(risk_manager.snapshots[1].total_exposure, 1.0, places=6)
+
+    def test_risk_manager_current_position_is_value_based(self):
+        """The current_position on the snapshot is a value fraction."""
+        risk_manager = MockRiskManager(allow_trade=True, position_size=1.0,
+                                       stop_loss_price=None)
+        strategy = MockStrategy({self.data.index[0]: 1, self.data.index[2]: -1},
+                                risk_manager)
+
+        self.engine.run_backtest(strategy, self.data, "TEST")
+
+        observed = [snapshot.current_position for snapshot in risk_manager.snapshots]
         self.assertEqual(len(observed), 2)
         self.assertAlmostEqual(observed[0], 0.0, places=6)   # flat before the buy
         self.assertAlmostEqual(observed[1], 1.0, places=6)   # fully invested before the sell
@@ -902,7 +907,7 @@ class TestStopLossExecution(unittest.TestCase):
             'volume': [1000.0] * 6
         }, index=dates)
 
-    def test_stop_loss_closes_position_and_clears_state(self):
+    def test_stop_loss_closes_position_and_leaves_the_portfolio_flat(self):
         risk_manager = MockRiskManager(allow_trade=True, position_size=1.0,
                                        stop_loss_price=95.0)
         strategy = MockStrategy({self.data.index[0]: 1}, risk_manager)
@@ -919,7 +924,7 @@ class TestStopLossExecution(unittest.TestCase):
         # bar 2 at the stop price, not on bar 3's open.
         self.assertEqual(stop_exit.timestamp, self.data.index[2])
         self.assertEqual(stop_exit.price, 95.0)
-        self.assertNotIn("TEST", risk_manager.positions)
+        self.assertAlmostEqual(stop_exit.quantity, buy.quantity, places=9)
         self.assertLess(result.total_return, 0)
         self.assertEqual(result.num_losing_trades, 1)
 
@@ -939,9 +944,10 @@ class EchoingRiskManager(MockRiskManager):
         self.entry_fraction = entry_fraction
 
     def evaluate_trade(self, signal, current_price, portfolio_value, historical_data,
-                       current_position):
+                       portfolio):
         from niffler.risk.base_risk_manager import RiskDecision
-        size = self.entry_fraction if signal == 1 else abs(current_position)
+        self.snapshots.append(portfolio)
+        size = self.entry_fraction if signal == 1 else abs(portfolio.current_position)
         return RiskDecision(
             position_size=size,
             stop_loss_price=self.stop_loss_price,
@@ -980,7 +986,6 @@ class TestRiskManagedExit(unittest.TestCase):
         self.assertEqual(sell.side, TradeSide.SELL)
         # The whole position is liquidated: the old code sold only ~10% of it.
         self.assertAlmostEqual(sell.quantity, buy.quantity, places=9)
-        self.assertNotIn("TEST", risk_manager.positions)
 
     def test_portfolio_is_flat_after_a_risk_managed_exit(self):
         """Everything bought is sold back, so the strategy really exits."""
@@ -1105,30 +1110,22 @@ class TestScalingIntoAPosition(unittest.TestCase):
 
     def test_second_buy_averages_the_entry_price_in_a_backtest(self):
         """Two engine-executed buys leave a volume-weighted entry price."""
-        captured = {}
-
-        class CapturingRiskManager(MockRiskManager):
-            def update_position_state(self, symbol, position_size, entry_price,
-                                      stop_loss_price, entry_timestamp):
-                super().update_position_state(symbol, position_size, entry_price,
-                                              stop_loss_price, entry_timestamp)
-                captured['entry_price'] = entry_price
-                captured['stop_loss_price'] = stop_loss_price
-
-        risk_manager = CapturingRiskManager(allow_trade=True, position_size=0.5,
-                                            stop_loss_price=None)
+        engine = RecordingEngine(initial_capital=10000.0, commission=0.0,
+                                 min_order_value=1.0)
+        risk_manager = MockRiskManager(allow_trade=True, position_size=0.5,
+                                       stop_loss_price=None)
         strategy = MockStrategy({self.data.index[0]: 1, self.data.index[2]: 1},
                                 risk_manager)
 
-        result = self.engine.run_backtest(strategy, self.data, "TEST")
+        result = engine.run_backtest(strategy, self.data, "TEST")
 
         self.assertEqual(len(result.trades), 2)
         first, second = result.trades
         expected = ((first.price * first.quantity + second.price * second.quantity)
                     / (first.quantity + second.quantity))
-        self.assertAlmostEqual(captured['entry_price'], expected, places=9)
+        self.assertAlmostEqual(engine.entry_prices[-1], expected, places=9)
         # The last fill's price is NOT the whole book's entry price.
-        self.assertNotAlmostEqual(captured['entry_price'], second.price, places=6)
+        self.assertNotAlmostEqual(engine.entry_prices[-1], second.price, places=6)
 
     def test_second_buy_without_a_stop_leaves_the_original_stop_armed(self):
         """A risk decision carrying no stop must not disarm the position."""
@@ -1139,7 +1136,7 @@ class TestScalingIntoAPosition(unittest.TestCase):
                 self.calls = 0
 
             def evaluate_trade(self, signal, current_price, portfolio_value,
-                               historical_data, current_position):
+                               historical_data, portfolio):
                 from niffler.risk.base_risk_manager import RiskDecision
                 self.calls += 1
                 stop = 95.0 if self.calls == 1 else None
@@ -1151,13 +1148,15 @@ class TestScalingIntoAPosition(unittest.TestCase):
                                       stop_loss_price, signal, unrealized_pnl):
                 return False, "not triggered"
 
+        engine = RecordingEngine(initial_capital=10000.0, commission=0.0,
+                                 min_order_value=1.0)
         risk_manager = StopThenNoneRiskManager()
         strategy = MockStrategy({self.data.index[0]: 1, self.data.index[2]: 1},
                                 risk_manager)
 
-        self.engine.run_backtest(strategy, self.data, "TEST")
+        engine.run_backtest(strategy, self.data, "TEST")
 
-        self.assertEqual(risk_manager.positions["TEST"]['stop_loss_price'], 95.0)
+        self.assertEqual(engine.stops[-1], 95.0)
 
 
 class TestIntrabarStopLoss(unittest.TestCase):

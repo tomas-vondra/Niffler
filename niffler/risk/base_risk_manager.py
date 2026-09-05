@@ -1,20 +1,17 @@
+"""Base class for risk managers.
+
+A risk manager is **stateless with respect to open positions**. It owns its
+configuration and its sizing rule, and nothing else; the position state it needs
+arrives as a :class:`~niffler.risk.contract.PortfolioSnapshot` on every call.
+See :mod:`niffler.risk.contract` for why.
+"""
+
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Tuple
 import pandas as pd
 from dataclasses import dataclass
 
-
-@dataclass
-class PositionInfo:
-    """
-    Information about a current position for risk management tracking.
-    """
-    symbol: str
-    position_size: float  # Fraction of portfolio
-    entry_price: float
-    stop_loss_price: Optional[float]
-    entry_timestamp: pd.Timestamp
-    unrealized_pnl: float = 0.0
+from .contract import PortfolioSnapshot
 
 
 @dataclass
@@ -47,7 +44,6 @@ class BaseRiskManager(ABC):
             config: Configuration dictionary with risk management parameters
         """
         self.config = config
-        self._positions: Dict[str, PositionInfo] = {}  # Track current positions by symbol
         self._validate_config()
         self.validate_config_relationships()
         
@@ -105,98 +101,23 @@ class BaseRiskManager(ABC):
         """
         pass
         
-    def update_position_state(self, symbol: str, position_size: float, entry_price: float,
-                            stop_loss_price: Optional[float], entry_timestamp: pd.Timestamp):
-        """
-        Update or add position state for risk tracking.
-        
-        Args:
-            symbol: Trading symbol
-            position_size: Position size as fraction of portfolio
-            entry_price: Entry price for the position
-            stop_loss_price: Stop loss price (can be None)
-            entry_timestamp: When the position was entered
-        """
-        if abs(position_size) < 1e-10:  # Effectively zero with floating point tolerance
-            # Remove position if size is effectively zero
-            self.clear_position(symbol)
-        else:
-            self._positions[symbol] = PositionInfo(
-                symbol=symbol,
-                position_size=position_size,
-                entry_price=entry_price,
-                stop_loss_price=stop_loss_price,
-                entry_timestamp=entry_timestamp
-            )
-            
-    def clear_position(self, symbol: str):
-        """
-        Remove position from tracking when closed.
-        
-        Args:
-            symbol: Trading symbol to remove
-        """
-        if symbol in self._positions:
-            del self._positions[symbol]
-            
-    def get_position_info(self, symbol: str) -> Optional[PositionInfo]:
-        """
-        Get current position information for a symbol.
-        
-        Args:
-            symbol: Trading symbol
-            
-        Returns:
-            PositionInfo if position exists, None otherwise
-        """
-        return self._positions.get(symbol)
-        
-    def get_total_exposure(self) -> float:
-        """
-        Calculate total portfolio exposure across all positions.
-        
-        Returns:
-            Total exposure as fraction of portfolio
-        """
-        return sum(abs(pos.position_size) for pos in self._positions.values())
-        
-    def get_portfolio_summary(self) -> Dict[str, Any]:
-        """
-        Get summary of current portfolio state.
-        
-        Returns:
-            Dictionary with portfolio metrics
-        """
-        total_positions = len(self._positions)
-        total_exposure = self.get_total_exposure()
-        
-        long_positions = sum(1 for pos in self._positions.values() if pos.position_size > 0)
-        short_positions = total_positions - long_positions
-        
-        avg_position_size = total_exposure / total_positions if total_positions > 0 else 0.0
-        
-        return {
-            'total_positions': total_positions,
-            'long_positions': long_positions,
-            'short_positions': short_positions,
-            'total_exposure': total_exposure,
-            'avg_position_size': avg_position_size,
-            'symbols': list(self._positions.keys())
-        }
-        
-    def evaluate_trade(self, signal: int, current_price: float, 
+    def evaluate_trade(self, signal: int, current_price: float,
                       portfolio_value: float, historical_data: pd.DataFrame,
-                      current_position: float = 0.0) -> RiskDecision:
+                      portfolio: PortfolioSnapshot) -> RiskDecision:
         """
         Comprehensive risk evaluation for a potential trade.
-        
+
+        Every piece of portfolio state this needs arrives in ``portfolio``. The
+        manager keeps none of it, so two evaluations can never see each other's
+        positions.
+
         Args:
             signal: Trading signal (1 for buy, -1 for sell, 0 for hold)
             current_price: Current asset price
             portfolio_value: Current portfolio value
             historical_data: Historical price and performance data
-            current_position: Current position size
-            
+            portfolio: Portfolio state at the moment of the call
+
         Returns:
             RiskDecision object with position sizing and risk parameters
         """
@@ -208,32 +129,33 @@ class BaseRiskManager(ABC):
                 allow_trade=False,
                 reason="No signal"
             )
-            
+
         # Calculate position size
         position_size = self.calculate_position_size(
-            signal, current_price, portfolio_value, historical_data, current_position
+            signal, current_price, portfolio_value, historical_data,
+            portfolio.current_position
         )
-        
+
         # Calculate stop loss
         stop_loss_price = self.calculate_stop_loss(
             current_price, signal, historical_data
         )
-        
+
         # Calculate maximum risk per trade
         if stop_loss_price is not None:
             if signal == 1:  # Long position
                 risk_per_share = abs(current_price - stop_loss_price)
-            else:  # Short position  
+            else:  # Short position
                 risk_per_share = abs(stop_loss_price - current_price)
-            
+
             max_risk_per_trade = (risk_per_share / current_price) * position_size
         else:
             max_risk_per_trade = position_size  # Full position at risk if no stop
-            
+
         # Portfolio-level risk checks
-        allow_trade = self._portfolio_risk_check(position_size, max_risk_per_trade, 
-                                               portfolio_value)
-        
+        allow_trade = self._portfolio_risk_check(position_size, max_risk_per_trade,
+                                                 portfolio_value, portfolio)
+
         # Adjust position size and reason if trade is blocked
         if not allow_trade:
             position_size = 0.0
@@ -241,7 +163,7 @@ class BaseRiskManager(ABC):
             reason = "Portfolio risk check failed"
         else:
             reason = "Risk evaluation completed"
-        
+
         return RiskDecision(
             position_size=position_size,
             stop_loss_price=stop_loss_price,
@@ -249,17 +171,19 @@ class BaseRiskManager(ABC):
             allow_trade=allow_trade,
             reason=reason
         )
-        
+
     def _portfolio_risk_check(self, position_size: float, max_risk: float,
-                            portfolio_value: float) -> bool:
+                            portfolio_value: float,
+                            portfolio: PortfolioSnapshot) -> bool:
         """
-        Check portfolio-level risk constraints using position tracking.
-        
+        Check portfolio-level risk constraints against the caller's snapshot.
+
         Args:
             position_size: Proposed position size
             max_risk: Maximum risk per trade
             portfolio_value: Current portfolio value
-            
+            portfolio: Portfolio state at the moment of the call
+
         Returns:
             True if trade passes portfolio risk checks
         """
@@ -267,25 +191,24 @@ class BaseRiskManager(ABC):
         max_position = self.config.get('max_position_size', 1.0)
         if position_size > max_position:
             return False
-            
+
         # Maximum risk per trade check
         max_risk_per_trade = self.config.get('max_risk_per_trade', 0.1)
         if max_risk > max_risk_per_trade:
             return False
-            
+
         # Portfolio exposure check
-        current_exposure = self.get_total_exposure()
         max_total_exposure = self.config.get('max_total_exposure', 2.0)  # Allow some leverage
-        if current_exposure + position_size > max_total_exposure:
+        if portfolio.total_exposure + position_size > max_total_exposure:
             return False
-            
+
         # Maximum positions check
         max_positions = self.config.get('max_positions', 10)
-        if len(self._positions) >= max_positions:
+        if portfolio.open_positions >= max_positions:
             return False
-            
+
         return True
-        
+
     @abstractmethod
     def _validate_config(self):
         """Validate configuration parameters for the specific risk manager."""
@@ -331,12 +254,10 @@ class BaseRiskManager(ABC):
         Returns:
             Dictionary containing risk metrics and configuration
         """
-        portfolio_summary = self.get_portfolio_summary()
-        
         return {
             'config': self.config.copy(),
             'type': self.__class__.__name__,
-            'portfolio_summary': portfolio_summary,
-            'current_exposure': self.get_total_exposure(),
-            'positions_tracked': len(self._positions)
+            # backtest.py prints this straight after construction, so every
+            # registered manager must have one without overriding this method.
+            'risk_management_type': self.__class__.__name__,
         }

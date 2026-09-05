@@ -170,28 +170,19 @@ class FixedRiskManager(BaseRiskManager):
         """Get comprehensive fixed risk manager metrics."""
         metrics = super().get_risk_metrics()
         
-        # Calculate current portfolio utilization
-        current_positions = len([pos for pos in self._positions.values() if pos.position_size != 0])
-        position_utilization = current_positions / self.max_positions if self.max_positions > 0 else 0
-        
-        # Calculate theoretical maximum risk
+        # Theoretical maximum risk. Live utilisation is deliberately absent: the
+        # manager holds no position state, so it cannot report one.
         estimated_risk_per_trade = self.position_size_pct * self.stop_loss_pct
         max_portfolio_risk = self.max_positions * estimated_risk_per_trade
-        
-        # Calculate current actual risk exposure
-        current_risk_exposure = current_positions * estimated_risk_per_trade
-        
+
         metrics.update({
             'position_size_pct': self.position_size_pct,
             'stop_loss_pct': self.stop_loss_pct,
             'max_positions': self.max_positions,
             'max_risk_per_trade': self.max_risk_per_trade,
             'max_total_exposure': self.max_positions * self.position_size_pct,
-            'current_positions': current_positions,
-            'position_utilization': position_utilization,
             'estimated_risk_per_trade': estimated_risk_per_trade,
             'max_portfolio_risk': max_portfolio_risk,
-            'current_risk_exposure': current_risk_exposure,
             'risk_efficiency': estimated_risk_per_trade / self.max_risk_per_trade if self.max_risk_per_trade > 0 else 0,
             'risk_management_type': 'Fixed Risk Manager'
         })

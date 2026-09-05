@@ -1,5 +1,7 @@
 from typing import Optional
 
+from niffler.risk.contract import PortfolioSnapshot
+
 from .trade import Trade, TradeSide
 
 
@@ -78,6 +80,33 @@ class Portfolio:
         if portfolio_value <= 0:
             return 0.0
         return (self.position * price) / portfolio_value
+
+    def risk_snapshot(self, price: float) -> PortfolioSnapshot:
+        """
+        Freeze the portfolio state a risk manager is allowed to see.
+
+        The portfolio is the single owner of position state, so this is where a
+        risk manager's view of it comes from. It is a single-symbol backtest, so
+        there is at most one open position and total exposure is that position's
+        own fraction; the snapshot's fields are portfolio-wide by contract and
+        stay correct if a multi-symbol portfolio ever produces one.
+
+        Exposure is valued at the price passed in, i.e. *now*, not at the price
+        of the last fill.
+
+        Args:
+            price: Current price of the traded symbol
+
+        Returns:
+            An immutable snapshot for
+            :meth:`niffler.risk.base_risk_manager.BaseRiskManager.evaluate_trade`
+        """
+        fraction = self.position_fraction(price)
+        return PortfolioSnapshot(
+            open_positions=0 if self.is_flat else 1,
+            total_exposure=abs(fraction),
+            current_position=fraction,
+        )
 
     def unrealized_pnl(self, price: float) -> float:
         """
