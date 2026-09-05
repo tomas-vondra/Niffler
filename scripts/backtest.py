@@ -168,16 +168,19 @@ def build_strategy_parameters(args) -> Dict[str, Any]:
     return parameters
 
 
-# Convenience flags that map onto exporter constructor options, in the same shape
-# as STRATEGY_PARAMETER_FLAGS: option name -> (argparse attribute, flag spelling).
-# Each flag defaults to None so an explicitly passed one can be told apart from an
-# unset one, and only the ones actually passed are forwarded - an option nobody
-# asked for must not be broadcast to exporters that would reject it.
+# Convenience flags that map onto exporter constructor options: option name ->
+# argparse attribute. Each flag defaults to None so an explicitly passed one can be
+# told apart from an unset one, and only the ones actually passed are forwarded - an
+# option nobody asked for must not be broadcast to exporters that would reject it.
+#
+# Unlike STRATEGY_PARAMETER_FLAGS this carries no flag spellings: the rejection
+# happens in ExporterManager, which serves callers that have no CLI, so its message
+# names the option (output_dir) rather than the flag (--csv-output-dir).
 EXPORTER_OPTION_FLAGS = {
-    'output_dir': ('csv_output_dir', '--csv-output-dir'),
-    'host': ('es_host', '--es-host'),
-    'port': ('es_port', '--es-port'),
-    'index_prefix': ('es_index_prefix', '--es-index-prefix'),
+    'output_dir': 'csv_output_dir',
+    'host': 'es_host',
+    'port': 'es_port',
+    'index_prefix': 'es_index_prefix',
 }
 
 
@@ -212,7 +215,7 @@ def build_exporter_options(args) -> Dict[str, Any]:
             )
         options.update(parsed)
 
-    for option, (attribute, _flag) in EXPORTER_OPTION_FLAGS.items():
+    for option, attribute in EXPORTER_OPTION_FLAGS.items():
         value = getattr(args, attribute, None)
         if value is not None:
             options[option] = value

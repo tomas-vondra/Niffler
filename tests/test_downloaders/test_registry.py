@@ -208,7 +208,7 @@ class TestOneEditRegistration(unittest.TestCase):
         self.assertIn('probe_venue', message)
 
     def test_a_registration_naming_a_wrong_argument_is_caught(self):
-        """The registration is data; a typo in it must not reach download().'"""
+        """The registration is data; a typo in it must not reach download()."""
         broken = replace(
             DOWNLOAD_SOURCES['probe'],
             build_download_kwargs=lambda request: {'symbol': request.symbol,
