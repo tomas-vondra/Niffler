@@ -84,6 +84,7 @@ from scripts.common import (
     report_run_config,
 )
 from scripts.compare import FoldSchedule, evaluate, render, symbol_from_path
+from scripts.config_file import add_config_arguments, apply_config, report_config
 from scripts.optimize import CLI_MAX_RESULTS_IN_MEMORY
 
 logger = logging.getLogger(__name__)
@@ -526,7 +527,8 @@ outcome), 1 = the run failed.
                         help='Run every stage even after a gate fails. The failure '
                              'is still reported and the run still exits 3')
 
-    parser.add_argument('--capital', dest='initial_capital', type=float, default=10000.0,
+    parser.add_argument('--capital', '--initial-capital', dest='initial_capital',
+                        type=float, default=10000.0,
                         help='Initial capital (default: 10000)')
     parser.add_argument('--commission', type=float, default=0.001,
                         help='Commission rate (default: 0.001)')
@@ -577,7 +579,7 @@ outcome), 1 = the run failed.
                              'keeps out-of-sample windows non-overlapping)')
     search.add_argument('--anchored', action='store_true',
                         help='Anchor every training window at the first bar')
-    search.add_argument('--n_jobs', type=int, default=None,
+    search.add_argument('--n_jobs', '--jobs', dest='n_jobs', type=int, default=None,
                         help='Parallel jobs (default: auto)')
 
     add_cost_model_arguments(parser)
@@ -589,6 +591,8 @@ outcome), 1 = the run failed.
                         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                         help='Logging level (default: WARNING, so the funnel is '
                              'readable)')
+
+    add_config_arguments(parser)
     return parser
 
 
@@ -599,8 +603,14 @@ def main() -> int:
         ``EXIT_OK`` when every gate that ran passed, ``EXIT_STOPPED`` when a
         gate fired, ``EXIT_ERROR`` when the run could not be completed.
     """
-    args = build_parser().parse_args()
+    parser = build_parser()
+
+    # Persisted defaults, folded in before parsing so a flag still wins.
+    config = apply_config(parser, 'screen')
+
+    args = parser.parse_args()
     setup_logging(level=args.log_level)
+    report_config(config)
 
     datasets = [args.data] + list(args.compare_data or [])
     missing = [path for path in datasets if not os.path.exists(path)]

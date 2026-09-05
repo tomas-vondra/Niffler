@@ -27,6 +27,7 @@ from niffler.data.exceptions import (
     NoDataAvailableError,
 )
 from niffler.config.logging import setup_logging
+from scripts.config_file import add_config_arguments, apply_config, report_config
 
 
 # Flags that carry a source-specific option: option name -> (attribute, flag).
@@ -145,10 +146,15 @@ def main() -> int:
                         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                         help='Set logging level (default: INFO)')
 
+    # Persisted defaults, folded in before parsing so a flag still wins.
+    add_config_arguments(parser)
+    config = apply_config(parser, 'download_data')
+
     args = parser.parse_args()
 
     # Configure logging
     setup_logging(level=args.log_level)
+    report_config(config)
 
     # Set default end_date if not provided
     if not args.end_date:

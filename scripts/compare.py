@@ -49,6 +49,7 @@ from scripts.common import (
     load_ohlcv_csv,
     report_run_config,
 )
+from scripts.config_file import add_config_arguments, apply_config, report_config
 
 logger = logging.getLogger(__name__)
 
@@ -279,7 +280,8 @@ Examples:
     parser.add_argument('--clean', action='store_true',
                         help='Run the preprocessing pipeline on each dataset first')
 
-    parser.add_argument('--capital', dest='initial_capital', type=float, default=10000.0,
+    parser.add_argument('--capital', '--initial-capital', dest='initial_capital',
+                        type=float, default=10000.0,
                         help='Initial capital (default: 10000)')
     parser.add_argument('--commission', type=float, default=0.001,
                         help='Commission rate (default: 0.001)')
@@ -298,7 +300,7 @@ Examples:
                         help='Per-fold optimizer (default: grid)')
     parser.add_argument('--optimization_metric', default='total_return',
                         help='Per-fold selection metric (default: total_return)')
-    parser.add_argument('--n_jobs', type=int, default=None,
+    parser.add_argument('--n_jobs', '--jobs', dest='n_jobs', type=int, default=None,
                         help='Parallel jobs for folds (default: auto)')
     parser.add_argument('--log-level', default='INFO',
                         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'])
@@ -308,9 +310,15 @@ Examples:
     # buy-and-hold on the same bars, so 'none' would empty the table rather
     # than configure it.
     add_engine_arguments(parser, benchmark=False)
+
+    # Persisted defaults, folded in before parsing so a flag still wins.
+    add_config_arguments(parser)
+    config = apply_config(parser, 'compare')
+
     args = parser.parse_args()
 
     setup_logging(level=args.log_level)
+    report_config(config)
 
     schedule = FoldSchedule(
         train_window_months=args.train_window,

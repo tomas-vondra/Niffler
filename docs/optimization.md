@@ -229,6 +229,27 @@ The parameter space system supports flexible parameter definitions:
 - Choice parameters must have non-empty choices list
 - All parameters must specify valid type
 
+#### Overriding the space for one project
+
+The space above is a code constant on the strategy. `[optimize.parameter_space.STRATEGY]`
+in `niffler.toml` replaces the entry for each parameter it names and leaves the rest of the
+`PARAMETER_SPEC` alone, which is what a plateau that has run into the edge of the searched
+range is asking for:
+
+```toml
+[optimize.parameter_space.simple_ma.long_window]
+type = "int"
+min  = 20
+max  = 200
+step = 5
+```
+
+The override is checked against the strategy's constructor signature and against
+`ParameterSpace`, so a parameter the strategy does not accept, or an inverted range, is an
+error rather than a silently ignored line. It applies to `scripts/optimize.py`; the
+per-fold optimizers inside `analyze.py`, `compare.py` and `screen.py` still use the
+strategy's own spec.
+
 ### Best Practices
 
 #### Parameter Space Design

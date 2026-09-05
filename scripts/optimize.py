@@ -42,7 +42,13 @@ from niffler.optimization.optimizer_factory import (
     get_parameter_space,
     get_available_optimizers,
 )
-from niffler.strategies.registry import get_available_strategies, get_strategy_class
+from niffler.optimization.parameter_space import ParameterSpace
+from niffler.strategies.registry import (
+    get_available_strategies,
+    get_parameter_spec,
+    get_strategy_class,
+    get_strategy_parameter_names,
+)
 from scripts.common import (
     add_cost_model_arguments,
     add_engine_arguments,
@@ -50,6 +56,7 @@ from scripts.common import (
     load_ohlcv_csv,
     report_run_config,
 )
+from scripts.config_file import add_config_arguments, apply_config, report_config
 
 
 # Results the CLI retains before the optimizer starts discarding the
@@ -128,6 +135,55 @@ def report_plateau(results, args, selection: str) -> None:
         print(f"Parameter surface ({cells} cells) written to: {args.plateau_csv}")
 
 
+def build_parameter_space(strategy: str, config) -> ParameterSpace:
+    """Build the search space, letting the configuration file widen or move it.
+
+    A strategy declares its space as a ``PARAMETER_SPEC`` code constant, and a
+    plateau that runs into the edge of that window is the run asking for a
+    wider one. ``[optimize.parameter_space.<strategy>]`` replaces the entry for
+    each parameter it names and leaves the rest of the spec alone, so widening
+    one window cannot silently drop the others.
+
+    Args:
+        strategy: Registered strategy name.
+        config: The loaded configuration file, or None.
+
+    Returns:
+        The search space this optimisation will use.
+
+    Raises:
+        ValueError: If the override names a parameter the strategy does not
+            accept, or describes one in a way ParameterSpace rejects.
+    """
+    overrides = (config.tables.get('parameter_space') if config else None) or {}
+    wanted = overrides.get(strategy)
+    if not wanted:
+        return get_parameter_space(strategy)
+
+    accepted = get_strategy_parameter_names(strategy)
+    unknown = sorted(set(wanted) - accepted)
+    if unknown:
+        raise ValueError(
+            f"[optimize.parameter_space.{strategy}] in {config.path} sets "
+            f"{', '.join(unknown)}, which '{strategy}' does not accept. "
+            f"It accepts: {', '.join(sorted(accepted))}"
+        )
+
+    spec = get_parameter_spec(strategy)
+    for name, entry in wanted.items():
+        if not isinstance(entry, dict):
+            raise ValueError(
+                f"[optimize.parameter_space.{strategy}.{name}] in {config.path} "
+                f"must be a table of the form "
+                f"{{ type = 'int', min = 5, max = 40, step = 1 }}"
+            )
+        spec[name] = dict(entry)
+
+    logging.info(f"Parameter space from {config.path}: "
+                 f"overriding {', '.join(sorted(wanted))}")
+    return ParameterSpace(spec)
+
+
 def load_and_validate_data(file_path: str, clean_data: bool = False) -> pd.DataFrame:
     """
     Load and validate price data for optimization.
@@ -192,7 +248,8 @@ def main() -> int:
                              'winner actually beat doing nothing'))
     
     # Backtest parameters
-    parser.add_argument('--initial-capital', type=float, default=10000.0,
+    parser.add_argument('--initial-capital', '--capital', dest='initial_capital',
+                       type=float, default=10000.0,
                        help='Initial capital for backtesting (default: 10000)')
     parser.add_argument('--commission', type=float, default=0.001,
                        help='Commission rate per trade (default: 0.001)')
@@ -210,7 +267,7 @@ def main() -> int:
                        help='Apply data preprocessing before optimization')
     
     # Performance options
-    parser.add_argument('--jobs', type=int, default=None,
+    parser.add_argument('--jobs', '--n_jobs', dest='n_jobs', type=int, default=None,
                        help='Number of parallel jobs (default: auto-detect)')
     parser.add_argument('--seed', type=int, default=None,
                        help='Random seed for reproducible results')
@@ -229,10 +286,16 @@ def main() -> int:
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                        help='Logging level (default: INFO)')
     
+    # Persisted defaults. [optimize.parameter_space.<strategy>] is structured
+    # data rather than a flag value, so it is handed over separately.
+    add_config_arguments(parser)
+    config = apply_config(parser, 'optimize', tables=('parameter_space',))
+
     args = parser.parse_args()
     
     # Setup logging
     setup_logging(level=args.log_level)
+    report_config(config)
     logger = logging.getLogger(__name__)
     
     try:
@@ -242,7 +305,7 @@ def main() -> int:
         
         # Get strategy class and parameter space
         strategy_class = get_strategy_class(args.strategy)
-        parameter_space = get_parameter_space(args.strategy)
+        parameter_space = build_parameter_space(args.strategy, config)
 
         # Engine settings. Parameters fitted without transaction costs are
         # fitted for a market nobody trades in, so the whole configuration is
@@ -257,7 +320,7 @@ def main() -> int:
             parameter_space=parameter_space,
             data=data,
             sort_by=args.sort_by,
-            n_jobs=args.jobs,
+            n_jobs=args.n_jobs,
             run_config=run_config,
             max_results_in_memory=CLI_MAX_RESULTS_IN_MEMORY
         )

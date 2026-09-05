@@ -88,6 +88,18 @@ overstates the evidence, and the docs and console say so rather than pretending 
   (`continue-on-error` in CI) — it currently hits an internal error on
   `niffler/optimization/base_optimizer.py`
 
+### Configuration file
+
+`scripts/config_file.py` folds an optional `niffler.toml` (working directory, or
+`--config PATH` / `$NIFFLER_CONFIG`) into every CLI's argparse defaults, so the flags below
+need not be retyped on each run. Precedence: argparse defaults, then `[common]`/`[costs]`/
+`[engine]`/`[risk]`, then the per-script section (`[backtest]`, `[optimize]`, ...), then
+`[profile.NAME]` via `--profile`, then the command line - which always wins. Keys are
+argparse dests. `niffler.toml.example` is the template; `niffler.toml` is gitignored.
+
+Set `NIFFLER_CONFIG=` (empty) to ignore config files entirely - `tests/test_scripts/__init__.py`
+does exactly that, so a local `niffler.toml` cannot change what the tests assert.
+
 ### Data Download
 Main functionality via `scripts/download_data.py`:
 
@@ -115,7 +127,7 @@ Strategy backtesting via `scripts/backtest.py`:
 
 ```bash
 # Run backtest with Simple MA strategy (console output)
-# NB: the flag is --capital, not --initial_capital
+# --capital and --initial-capital are the same flag in every script
 python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv --strategy simple_ma --capital 10000 --commission 0.001
 
 # Run backtest with CSV export

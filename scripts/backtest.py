@@ -30,6 +30,7 @@ from scripts.common import (
     load_ohlcv_csv,
     report_cost_model,
 )
+from scripts.config_file import add_config_arguments, apply_config, report_config
 
 
 def extract_symbol_from_filename(file_path: str) -> str:
@@ -272,7 +273,8 @@ Examples:
     
     # Backtest parameters. --capital keeps its established spelling; the dest
     # is what build_run_config reads, and every script spells it the same way.
-    parser.add_argument('--capital', dest='initial_capital', type=float, default=10000.0,
+    parser.add_argument('--capital', '--initial-capital', dest='initial_capital',
+                       type=float, default=10000.0,
                        help='Initial capital amount (default: 10000)')
     parser.add_argument('--commission', type=float, default=0.001,
                        help='Commission rate per trade (default: 0.001)')
@@ -335,10 +337,16 @@ Examples:
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                        help='Set logging level (default: INFO)')
 
+    # Persisted defaults, folded in after every flag is declared and before
+    # parsing, so a flag typed on the command line still wins.
+    add_config_arguments(parser)
+    config = apply_config(parser, 'backtest')
+
     args = parser.parse_args()
     
     # Configure logging
     setup_logging(level=args.log_level)
+    report_config(config)
     
     try:
         # Load data

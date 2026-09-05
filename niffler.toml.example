@@ -1,0 +1,125 @@
+# Niffler run configuration.
+#
+# Copy this file to niffler.toml (gitignored) and edit it. Everything here is a
+# DEFAULT: a flag typed on the command line always wins, so no command you
+# already run changes behaviour because this file exists.
+#
+# Precedence, lowest to highest:
+#   argparse defaults, then [common] / [costs] / [engine] / [risk], then the
+#   per-script section, then [profile.NAME], then the command line.
+#
+# Keys are argparse dests: the long flag name with dashes turned into
+# underscores. An unknown key in a per-script section is an error that names
+# the valid ones. Keys in the shared sections that a given script does not
+# declare are skipped instead, because [common] is read by seven scripts that
+# share no single flag - the price is that a typo there is silently ignored.
+#
+# Point at a different file with --config PATH or the NIFFLER_CONFIG
+# environment variable; set NIFFLER_CONFIG to an empty string to ignore files
+# entirely. Select an overlay with --profile NAME.
+
+# ---------------------------------------------------------------------------
+# Shared by every script
+# ---------------------------------------------------------------------------
+[common]
+data      = "data/BTCUSDT_binance_1d_20200101_20251231.csv"
+clean     = true
+log_level = "INFO"
+n_jobs    = 8
+
+# The dest is initial_capital in every script: --capital and --initial-capital both
+# work everywhere, and analyze.py additionally keeps its old --initial_capital.
+initial_capital = 10000.0
+commission      = 0.001
+
+# NOTE: symbol is deliberately not here. download_data.py's --symbol is a
+# provider trading pair (BTC/USDT), not the label backtest.py stamps on a run.
+
+# ---------------------------------------------------------------------------
+# Transaction costs. This section is the reason the file exists: a cost model
+# typed into optimize.py and forgotten in backtest.py silently compares two
+# different markets.
+# ---------------------------------------------------------------------------
+[costs]
+cost_model      = "volume"
+half_spread_bps = 1.0
+# A flag the selected model does not read is still rejected, and the error
+# names this file - so a value you never typed is traceable.
+# impact_coefficient = 0.1
+# max_participation  = 0.1
+
+[engine]
+benchmark                   = "buy_and_hold"
+periods_per_year            = 365
+min_trades_for_significance = 30
+
+# ---------------------------------------------------------------------------
+# Risk management. Only backtest.py declares these flags today, so the section
+# applies there and is skipped everywhere else; it starts reaching optimize,
+# analyze, compare and screen once the risk-manager-in-RunConfig work lands.
+# ---------------------------------------------------------------------------
+[risk]
+risk_manager      = "fixed"
+max_position_size = 0.1
+stop_loss_pct     = 0.05
+max_positions     = 5
+
+# ---------------------------------------------------------------------------
+# Per-script sections, applied over the shared ones
+# ---------------------------------------------------------------------------
+[backtest]
+strategy  = "simple_ma"
+exporters = "console,csv"
+# symbol  = "BTCUSDT"      # default: derived from the data file name
+
+[optimize]
+method  = "grid"
+sort_by = "sharpe_ratio"
+
+# Widen or move a strategy's search space for this project without editing the
+# strategy. Only the parameters named here are replaced; the rest of the
+# strategy's PARAMETER_SPEC is left alone, and a parameter the strategy does
+# not accept is an error.
+[optimize.parameter_space.simple_ma.short_window]
+type = "int"
+min  = 5
+max  = 40
+step = 1
+
+[optimize.parameter_space.simple_ma.long_window]
+type = "int"
+min  = 20
+max  = 200
+step = 5
+
+[analyze]
+test_window = 6
+simulations = 1000
+# analysis  = "monte_carlo"   # a required flag may live here too
+
+[compare]
+# compare.py evaluates several datasets. A single string is read as a
+# one-element list, which is not a cross-asset comparison, so the [common]
+# path is overridden here.
+data = [
+    "data/BTCUSDT_binance_1d_20200101_20251231.csv",
+    "data/SPY_yahoo_1d_20200101_20251231.csv",
+]
+
+[screen]
+min_efficiency = 0.5
+
+[download_data]
+source    = "ccxt"
+exchange  = "binance"
+timeframe = "1d"
+
+[preprocessor]
+suffix = "_cleaned"
+
+# ---------------------------------------------------------------------------
+# Named overlays, applied over everything above: --profile quick
+# ---------------------------------------------------------------------------
+[profile.quick]
+simulations = 100
+n_jobs      = 2

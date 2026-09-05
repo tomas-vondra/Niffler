@@ -41,6 +41,7 @@ from scripts.common import (
     load_ohlcv_csv,
     report_run_config,
 )
+from scripts.config_file import add_config_arguments, apply_config, report_config
 
 
 def create_parser():
@@ -106,7 +107,8 @@ Examples:
     
     # Analysis configuration
     parser.add_argument(
-        '--initial_capital',
+        '--initial_capital', '--capital', '--initial-capital',
+        dest='initial_capital',
         type=float,
         default=10000.0,
         help='Initial capital for backtests (default: 10000.0)'
@@ -204,13 +206,15 @@ Examples:
     )
     
     parser.add_argument(
-        '--random_seed',
+        '--random_seed', '--seed',
+        dest='seed',
         type=int,
         help='Random seed for reproducible Monte Carlo results'
     )
     
     parser.add_argument(
-        '--n_jobs',
+        '--n_jobs', '--jobs',
+        dest='n_jobs',
         type=int,
         help='Number of parallel jobs for analysis (default: auto-detect)'
     )
@@ -231,9 +235,18 @@ Examples:
     parser.add_argument(
         '--verbose', '-v',
         action='store_true',
-        help='Enable verbose logging'
+        help='Enable verbose logging (shorthand for --log-level DEBUG)'
     )
-    
+
+    parser.add_argument(
+        '--log-level',
+        default='INFO',
+        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+        help='Set logging level (default: INFO)'
+    )
+
+    add_config_arguments(parser)
+
     return parser
 
 
@@ -468,7 +481,7 @@ def run_monte_carlo_analysis(args, data: pd.DataFrame, parameters: dict,
         bootstrap_sample_pct=args.bootstrap_pct,
         block_size_days=args.block_size,
         n_jobs=args.n_jobs,
-        random_seed=args.random_seed,
+        random_seed=args.seed,
         run_config=run_config
     )
     
@@ -586,11 +599,17 @@ def main() -> int:
         Process exit code: 0 on success, 1 on failure.
     """
     parser = create_parser()
+
+    # Persisted defaults, folded in before parsing so a flag still wins.
+    config = apply_config(parser, 'analyze')
+
     args = parser.parse_args()
 
-    # Setup logging
-    log_level = "DEBUG" if args.verbose else "INFO"
+    # Setup logging. --verbose stays a shorthand for the level, so the two
+    # spellings cannot disagree.
+    log_level = "DEBUG" if args.verbose else args.log_level
     setup_logging(level=log_level)
+    report_config(config)
 
     try:
         # Load data

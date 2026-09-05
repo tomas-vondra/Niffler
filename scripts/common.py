@@ -45,6 +45,7 @@ from niffler.backtesting.significance import (
     DEFAULT_BOOTSTRAP_SEED,
     DEFAULT_MIN_TRADES,
 )
+from scripts.config_file import CONFIG_ORIGINS_ATTR
 
 logger = logging.getLogger(__name__)
 
@@ -361,15 +362,21 @@ def build_cost_model(args: argparse.Namespace) -> CostModel:
         )
 
     accepted = _COST_MODEL_FLAGS[choice]
+    # A value from a configuration file is indistinguishable from a typed
+    # flag by the time it reaches here, so the rejection says where it came
+    # from - otherwise the user hunts for a flag they never typed.
+    origins = getattr(args, CONFIG_ORIGINS_ATTR, None) or {}
     ignored = sorted(
         f"--{name.replace('_', '-')}"
+        + (f" (set in {origins[name]})" if name in origins else '')
         for name in _COST_MODEL_DEFAULTS
         if getattr(args, name, None) is not None and name not in accepted
     )
     if ignored:
         raise ValueError(
             f"--cost-model {choice} does not use {', '.join(ignored)}. "
-            f"Remove the flag(s), or select a cost model that reads them "
+            f"Remove the flag(s) or the configuration entry, or select a "
+            f"cost model that reads them "
             f"(fixed: --slippage-bps/--half-spread-bps; volume: "
             f"--half-spread-bps/--impact-coefficient/--max-participation)."
         )

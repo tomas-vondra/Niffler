@@ -14,6 +14,7 @@ if __package__ in (None, ''):
 
 from niffler.config.logging import setup_logging
 from scripts.common import load_ohlcv_csv
+from scripts.config_file import add_config_arguments, apply_config, report_config
 
 
 def load_and_clean_csv(file_path: str, timestamp_column: Optional[str] = None) -> Optional[pd.DataFrame]:
@@ -93,10 +94,15 @@ def main() -> int:
                         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                         help='Set logging level (default: INFO)')
 
+    # Persisted defaults, folded in before parsing so a flag still wins.
+    add_config_arguments(parser)
+    config = apply_config(parser, 'preprocessor')
+
     args = parser.parse_args()
 
     # Configure logging
     setup_logging(level=args.log_level)
+    report_config(config)
 
     input_path = Path(args.input)
     
