@@ -9,6 +9,7 @@ import threading
 import signal
 from typing import List
 
+from niffler.backtesting.run_config import RunConfig
 from niffler.optimization.base_optimizer import BaseOptimizer
 from niffler.optimization.parameter_space import ParameterSpace
 from niffler.optimization.optimization_result import OptimizationResult
@@ -87,14 +88,13 @@ class TestBaseOptimizer(unittest.TestCase):
             strategy_class=MockStrategy,
             parameter_space=self.parameter_space,
             data=self.test_data,
-            initial_capital=10000,
-            commission=0.001
+            run_config=RunConfig(initial_capital=10000, commission=0.001)
         )
-        
+
         self.assertEqual(optimizer.strategy_class, MockStrategy)
         self.assertEqual(optimizer.parameter_space, self.parameter_space)
-        self.assertEqual(optimizer.initial_capital, 10000)
-        self.assertEqual(optimizer.commission, 0.001)
+        self.assertEqual(optimizer.run_config.initial_capital, 10000)
+        self.assertEqual(optimizer.run_config.commission, 0.001)
         self.assertEqual(optimizer.sort_by, 'total_return')
     
     def test_optimizer_initialization_with_custom_sort(self):
@@ -109,29 +109,20 @@ class TestBaseOptimizer(unittest.TestCase):
         self.assertEqual(optimizer.sort_by, 'sharpe_ratio')
     
     def test_invalid_initial_capital(self):
-        """Test validation fails with invalid initial capital."""
+        """Capital is validated once, in the RunConfig the optimizer carries."""
         with self.assertRaises(ValueError) as context:
-            TestOptimizer(
-                strategy_class=MockStrategy,
-                parameter_space=self.parameter_space,
-                data=self.test_data,
-                initial_capital=-1000
-            )
-        
-        self.assertIn("initial_capital must be positive", str(context.exception))
-    
+            RunConfig(initial_capital=-1000)
+
+        self.assertIn("Initial capital must be positive", str(context.exception))
+
     def test_invalid_commission(self):
-        """Test validation fails with invalid commission."""
+        """Commission is validated once, in the RunConfig the optimizer carries."""
         with self.assertRaises(ValueError) as context:
-            TestOptimizer(
-                strategy_class=MockStrategy,
-                parameter_space=self.parameter_space,
-                data=self.test_data,
-                commission=-0.1
-            )
-        
-        self.assertIn("commission cannot be negative", str(context.exception))
-    
+            RunConfig(commission=-0.1)
+
+        self.assertIn("Commission cannot be negative", str(context.exception))
+
+
     def test_invalid_sort_by(self):
         """Test validation fails with invalid sort metric."""
         with self.assertRaises(ValueError) as context:

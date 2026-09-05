@@ -5,6 +5,7 @@ import numpy as np
 from unittest.mock import Mock, patch
 
 from niffler.analysis.monte_carlo_analyzer import MonteCarloAnalyzer, MIN_SAMPLE_BARS
+from niffler.backtesting.run_config import RunConfig
 from niffler.strategies.base_strategy import BaseStrategy
 
 
@@ -95,15 +96,17 @@ class TestMonteCarloConfiguration(MonteCarloTestBase):
     """Initialisation and validation."""
 
     def test_init_valid_parameters(self):
-        analyzer = self.make_analyzer(n_simulations=100, bootstrap_sample_pct=0.8,
-                                      block_size_days=30, initial_capital=10000,
-                                      commission=0.001, random_seed=11)
+        analyzer = self.make_analyzer(
+            n_simulations=100, bootstrap_sample_pct=0.8, block_size_days=30,
+            random_seed=11,
+            run_config=RunConfig(initial_capital=10000, commission=0.001))
 
         self.assertEqual(analyzer.strategy_class, self.strategy_class)
         self.assertEqual(analyzer.n_simulations, 100)
         self.assertEqual(analyzer.bootstrap_sample_pct, 0.8)
         self.assertEqual(analyzer.block_size_days, 30)
         self.assertEqual(analyzer.random_seed, 11)
+        self.assertEqual(analyzer.run_config.initial_capital, 10000)
 
     def test_init_invalid_parameters(self):
         for kwargs in (
@@ -111,12 +114,17 @@ class TestMonteCarloConfiguration(MonteCarloTestBase):
             {'n_simulations': -1},
             {'bootstrap_sample_pct': 1.5},
             {'block_size_days': -1},
-            {'initial_capital': -1000},
-            {'commission': -0.001},
         ):
             with self.subTest(**kwargs):
                 with self.assertRaises(ValueError):
                     self.make_analyzer(**kwargs)
+
+    def test_invalid_engine_settings_are_rejected_by_the_run_config(self):
+        """Capital and commission are validated once, where they now live."""
+        for kwargs in ({'initial_capital': -1000}, {'commission': -0.001}):
+            with self.subTest(**kwargs):
+                with self.assertRaises(ValueError):
+                    RunConfig(**kwargs)
 
     def test_strategy_parameter_validation(self):
         self.make_analyzer()
@@ -321,12 +329,12 @@ class TestMonteCarloSeeding(MonteCarloTestBase):
                        return_value=futures):
                 analyzer._run_simulations_parallel(self.test_data, "TEST")
 
-        # The cost model is appended after the seed, so the seed is second to last.
+        # The run config is appended after the seed, so the seed is second to last.
         submitted_seeds = [call.args[-2] for call in executor.submit.call_args_list]
         self.assertEqual(submitted_seeds, [500, 501, 502])
 
-        submitted_cost_models = [call.args[-1] for call in executor.submit.call_args_list]
-        self.assertEqual(submitted_cost_models, [analyzer.cost_model] * 3)
+        submitted_configs = [call.args[-1] for call in executor.submit.call_args_list]
+        self.assertEqual(submitted_configs, [analyzer.run_config] * 3)
 
     def test_static_worker_is_seeded_by_its_argument(self):
         """
@@ -336,7 +344,7 @@ class TestMonteCarloSeeding(MonteCarloTestBase):
         def run(seed):
             return MonteCarloAnalyzer._run_single_simulation_static(
                 self.test_data, "TEST", 0, self.strategy_class, self.optimal_parameters,
-                0.8, 30, 10000.0, 0.001, seed
+                0.8, 30, seed
             )
 
         first = run(4242)
@@ -501,7 +509,7 @@ class TestMonteCarloExecution(MonteCarloTestBase):
         mock_result = Mock()
         engine = Mock()
         engine.run_backtest.return_value = mock_result
-        mock_engine_class.return_value = engine
+        mock_engine_class.from_config.return_value = engine
 
         analyzer = self.make_analyzer(n_simulations=1, random_seed=8)
         result = analyzer._run_single_simulation(self.test_data, "TEST", 0)

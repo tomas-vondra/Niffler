@@ -13,6 +13,7 @@ from niffler.analysis.walk_forward_analyzer import (
     MODE_WALK_FORWARD,
     MODE_SEGMENTED_IN_SAMPLE,
 )
+from niffler.backtesting.run_config import RunConfig
 from niffler.optimization.parameter_space import ParameterSpace
 from niffler.strategies.base_strategy import BaseStrategy
 
@@ -98,16 +99,17 @@ class TestWalkForwardConfiguration(WalkForwardTestBase):
     """Configuration and validation."""
 
     def test_init_valid_parameters(self):
-        analyzer = self.make_analyzer(initial_capital=25000, commission=0.002,
-                                      max_results_in_memory=100)
+        analyzer = self.make_analyzer(
+            run_config=RunConfig(initial_capital=25000, commission=0.002),
+            max_results_in_memory=100)
 
         self.assertEqual(analyzer.strategy_class, self.strategy_class)
         self.assertEqual(analyzer.mode, MODE_WALK_FORWARD)
         self.assertEqual(analyzer.train_window_months, 6)
         self.assertEqual(analyzer.test_window_months, 3)
         self.assertEqual(analyzer.step_months, 3)
-        self.assertEqual(analyzer.initial_capital, 25000)
-        self.assertEqual(analyzer.commission, 0.002)
+        self.assertEqual(analyzer.run_config.initial_capital, 25000)
+        self.assertEqual(analyzer.run_config.commission, 0.002)
         self.assertEqual(analyzer.max_results_in_memory, 100)
         self.assertFalse(analyzer.anchored)
 
@@ -153,12 +155,17 @@ class TestWalkForwardConfiguration(WalkForwardTestBase):
             {'train_window_months': 0},
             {'test_window_months': -1},
             {'step_months': -1},
-            {'initial_capital': -1000},
-            {'commission': -0.001},
         ):
             with self.subTest(**kwargs):
                 with self.assertRaises(ValueError):
                     self.make_analyzer(**kwargs)
+
+    def test_invalid_engine_settings_are_rejected_by_the_run_config(self):
+        """Capital and commission are validated once, where they now live."""
+        for kwargs in ({'initial_capital': -1000}, {'commission': -0.001}):
+            with self.subTest(**kwargs):
+                with self.assertRaises(ValueError):
+                    RunConfig(**kwargs)
 
     def test_segmented_mode_validates_strategy_parameters(self):
         WalkForwardAnalyzer(
@@ -804,7 +811,7 @@ class TestWalkForwardParallelExecution(WalkForwardTestBase):
         args = executor.submit.call_args_list[0][0]
         self.assertIs(args[0], WalkForwardAnalyzer._run_single_fold_static)
         # The positional payload must line up with _run_single_fold_static's signature.
-        self.assertEqual(len(args) - 1, 12)
+        self.assertEqual(len(args) - 1, 10)
         self.assertIs(args[1], self.test_data)
         self.assertIs(args[2], windows[0])
         self.assertEqual(args[3], "TEST")
@@ -813,9 +820,9 @@ class TestWalkForwardParallelExecution(WalkForwardTestBase):
         self.assertEqual(args[7], analyzer.mode)
         self.assertEqual(args[8], analyzer.optimization_method)
         self.assertEqual(args[9], analyzer.optimization_metric)
-        self.assertEqual(args[10], analyzer.initial_capital)
-        self.assertEqual(args[11], analyzer.commission)
-        self.assertIs(args[12], analyzer.cost_model)
+        # One config, not three loose settings the worker could be handed a
+        # subset of.
+        self.assertIs(args[10], analyzer.run_config)
 
     @patch('niffler.analysis.walk_forward_analyzer.as_completed')
     @patch('niffler.analysis.walk_forward_analyzer.ProcessPoolExecutor')

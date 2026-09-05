@@ -12,7 +12,7 @@ import random
 
 from niffler.strategies.base_strategy import BaseStrategy
 from niffler.backtesting.backtest_engine import BacktestEngine
-from niffler.backtesting.cost_model import CostModel
+from niffler.backtesting.run_config import RunConfig, resolve_run_config
 from niffler.utils.json_utils import safe_json_dump
 from .parameter_space import ParameterSpace
 from .optimization_result import OptimizationResult
@@ -69,15 +69,13 @@ class BaseOptimizer(ABC):
     # "Best Total Trades" that means nothing.
     DESCRIPTIVE_METRICS = frozenset({'total_trades'})
     
-    def __init__(self, 
+    def __init__(self,
                  strategy_class: Type[BaseStrategy],
                  parameter_space: ParameterSpace,
                  data: pd.DataFrame,
-                 initial_capital: float = DEFAULT_INITIAL_CAPITAL,
-                 commission: float = DEFAULT_COMMISSION,
                  sort_by: str = DEFAULT_SORT_BY,
                  n_jobs: Optional[int] = None,
-                 cost_model: Optional[CostModel] = None,
+                 run_config: Optional[RunConfig] = None,
                  max_results_in_memory: Optional[int] = None):
         """
         Initialize base optimizer.
@@ -86,13 +84,16 @@ class BaseOptimizer(ABC):
             strategy_class: Strategy class to optimize
             parameter_space: Parameter search space
             data: Historical price data for backtesting
-            initial_capital: Starting capital for backtests
-            commission: Commission rate for trades
             sort_by: Metric to sort results by for display ('total_return', 'sharpe_ratio', etc.)
             n_jobs: Number of parallel jobs (None = auto-detect)
-            cost_model: Transaction cost model applied to every candidate
-                backtest. Optimising frictionlessly and then trading the winner
-                with real costs is exactly the trap this parameter closes.
+            run_config: Every engine setting every candidate backtest runs
+                under, as one value (see
+                :class:`niffler.backtesting.run_config.RunConfig`). None uses
+                the engine's own defaults. It replaced loose
+                ``initial_capital``/``commission``/``cost_model`` arguments:
+                those three were all the optimizer ever forwarded, so a caller
+                who set a benchmark or an annualisation factor silently got the
+                default inside every grid cell.
             max_results_in_memory: How many results to retain before the
                 worst-scoring half is discarded. None (default) uses
                 MAX_RESULTS_IN_MEMORY. Raising it keeps the full grid, which is
@@ -104,11 +105,9 @@ class BaseOptimizer(ABC):
         self.strategy_class = strategy_class
         self.parameter_space = parameter_space
         self.data = data
-        self.initial_capital = initial_capital
-        self.commission = commission
+        self.run_config = resolve_run_config(run_config)
         self.sort_by = sort_by
         self.n_jobs = n_jobs or min(mp.cpu_count(), self.DEFAULT_MAX_WORKERS)
-        self.cost_model = cost_model
         self.max_results_in_memory = (max_results_in_memory
                                       if max_results_in_memory is not None
                                       else self.MAX_RESULTS_IN_MEMORY)
@@ -118,27 +117,22 @@ class BaseOptimizer(ABC):
 
         # Validate inputs
         self._validate_inputs()
-        
+
         # Create reusable backtest engine for better performance
-        self._backtest_engine = BacktestEngine(
-            initial_capital=self.initial_capital,
-            commission=self.commission,
-            cost_model=self.cost_model
-        )
-        
+        self._backtest_engine = BacktestEngine.from_config(self.run_config)
+
         # Initialize shutdown flag for graceful termination with thread safety
         self._shutdown_lock = threading.Lock()
         self._shutdown_requested = False
         self._setup_signal_handlers()
     
     def _validate_inputs(self) -> None:
-        """Validate optimizer input parameters."""
-        if self.initial_capital <= 0:
-            raise ValueError("initial_capital must be positive")
-        
-        if self.commission < 0:
-            raise ValueError("commission cannot be negative")
-        
+        """Validate the optimizer's own inputs.
+
+        The engine settings are not re-checked here: constructing the
+        ``RunConfig`` already validated every one of them, in one place, with
+        one message.
+        """
         if self.max_results_in_memory < 2:
             raise ValueError("max_results_in_memory must be at least 2")
 
@@ -246,8 +240,7 @@ class BaseOptimizer(ABC):
                     try:
                         future = executor.submit(self._evaluate_single_combination_static,
                                                params, self.strategy_class, self.data,
-                                               self.initial_capital, self.commission,
-                                               self.cost_model)
+                                               self.run_config)
                         future_to_index[future] = index
                     except Exception as e:
                         logging.warning(f"Failed to submit job for {params}: {e}")
@@ -383,22 +376,21 @@ class BaseOptimizer(ABC):
     def _evaluate_single_combination_static(parameters: Dict[str, Any],
                                           strategy_class: Type[BaseStrategy],
                                           data: pd.DataFrame,
-                                          initial_capital: float,
-                                          commission: float,
-                                          cost_model: Optional[CostModel] = None
+                                          run_config: Optional[RunConfig] = None
                                           ) -> Optional[OptimizationResult]:
-        """Static method for parallel processing (must be picklable)."""
+        """Static method for parallel processing (must be picklable).
+
+        The worker builds its own engine, so it needs the *whole* run
+        configuration: a worker that received three loose floats ran every
+        candidate under default settings while the parent thought otherwise.
+        """
         try:
             # Create strategy instance
             strategy = strategy_class(**parameters)
-            
+
             # Run backtest
-            engine = BacktestEngine(
-                initial_capital=initial_capital,
-                commission=commission,
-                cost_model=cost_model
-            )
-            
+            engine = BacktestEngine.from_config(resolve_run_config(run_config))
+
             backtest_result = engine.run_backtest(strategy, data)
             
             return OptimizationResult(
@@ -434,10 +426,10 @@ class BaseOptimizer(ABC):
                 'optimizer_class': self.__class__.__name__,
                 'strategy_class': self.strategy_class.__name__,
                 'sort_by': self.sort_by,
-                'initial_capital': self.initial_capital,
-                'commission': self.commission,
-                'cost_model': (self.cost_model.description
-                               if self.cost_model is not None else None),
+                # Every engine setting the grid ran under, not just the three
+                # that used to be forwarded. A saved result whose annualisation
+                # factor or benchmark is unrecorded is not reproducible.
+                **self.run_config.to_metadata(),
                 'n_combinations': len(results),
                 'timestamp': datetime.now().isoformat()
             },

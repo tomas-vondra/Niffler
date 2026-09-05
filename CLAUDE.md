@@ -36,6 +36,7 @@ The short version, because these are easy to "helpfully" undo:
 | Whole-grid statistics come from a **complete** result set; a score-truncated one reports nothing | Print quartiles or a beat-the-baseline fraction computed from the survivors of `_manage_memory_efficient_results` |
 | There is **one** strategy registry (`niffler/strategies/registry.py`) and every CLI's `--strategy` choices derive from it | Hardcode a `choices=[...]` list, or define a second name→class map in a script (that exact shadowing bug made `analyze.py` reject strategies `optimize.py` accepted) |
 | `niffler/strategies/` imports **nothing** from `niffler/optimization/`; a strategy declares `PARAMETER_SPEC` as a plain dict | Import `ParameterSpace` into a strategy module - `niffler/optimization/__init__` imports `optimizer_factory`, which imports the registry, so it is a circular import |
+| Engine settings travel as **one** `RunConfig`, built once by `scripts/common.build_run_config` | Add an eleventh knob to `BacktestEngine.__init__` without a field on `RunConfig`, hand an analyzer or a worker a loose `initial_capital`/`commission`/`cost_model` triple, or re-check a range that `RunConfig.__post_init__` already checks |
 | A cross-asset comparison pairs each fold with buy-and-hold over the **same bars** | Compare a fold return against a benchmark computed over the whole file, or against a fixed number - the window length would drive the verdict |
 | A strategy parameter the chosen strategy does not accept is an **error** | Silently drop an unknown `--params` key or a foreign flag, which runs the strategy with defaults while the user thinks it was configured |
 | Every strategy parameter has a **default** and every strategy accepts `position_size` / `risk_manager` | Add a required constructor argument - the library builds strategies as `strategy_class(**parameters)` |
@@ -177,6 +178,11 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
 python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_carlo --strategy simple_ma --params_file optimization_results.json --n_jobs 8
 ```
 
+Note: `--benchmark`, `--periods-per-year`, `--min-order-value` and
+`--min-trades-for-significance` now reach the engine inside every fold and every
+simulated path, because the analyzers carry a `RunConfig` rather than three loose
+numbers. `--execution-timing` deliberately does not exist on any CLI.
+
 ## Architecture
 
 ### Core Components
@@ -223,6 +229,19 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
     Student-t survival function (`student_t_two_sided_p`,
     `regularized_incomplete_beta`) - scipy is **not** a dependency and a normal
     approximation is not acceptable at n=30
+  - `run_config.py` - `RunConfig`, the **single** carrier of the engine's ten
+    settings, plus `resolve_run_config` and the `EXECUTION_TIMINGS` tuple. A frozen,
+    picklable dataclass, so it crosses the spawn boundary into a worker intact - which
+    is where knobs used to be dropped: five of the six engine construction sites
+    forwarded only `initial_capital`, `commission` and `cost_model`, so there was no
+    way to run walk-forward at `periods_per_year=252` or without a benchmark. It
+    imports only leaf modules of its own layer and never `backtest_engine`, so the
+    engine can import it; `BacktestEngine.from_config` is the one place a config
+    becomes an engine, and `RunConfig.__post_init__` is the one place the ranges are
+    checked (the engine builds one from its own arguments rather than repeating them,
+    and `BaseOptimizer` / both analyzers no longer re-check a subset).
+    `to_metadata()` is the one serialisation, used by the optimizer's saved results,
+    both analyzers' `analysis_parameters` and `compare.py`
   - `backtest_result.py` - Performance metrics and results
 - `niffler/strategies/` - Trading strategy implementations
   - `base_strategy.py` - Abstract base class for strategies
@@ -329,10 +348,20 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
     `--step` defaults to `--test_window` so the folds being counted as evidence do not
     overlap. A pair that fails becomes a row carrying its error and makes the run exit
     non-zero - it never silently shrinks the table
-  - `common.py` - **The** shared OHLCV CSV loader (`load_ohlcv_csv`) *and* the shared
+  - `common.py` - **The** shared OHLCV CSV loader (`load_ohlcv_csv`), the shared
     transaction-cost CLI (`add_cost_model_arguments`, `build_cost_model`,
-    `report_cost_model`), used by `backtest.py`, `analyze.py`, `optimize.py` and
-    `compare.py`. A cost
+    `report_cost_model`) *and* the shared run-configuration CLI
+    (`add_engine_arguments`, `build_run_config`, `report_run_config`), used by
+    `backtest.py`, `analyze.py`, `optimize.py` and `compare.py`.
+    `build_run_config` is **the** place parsed arguments become engine settings, so a
+    field added to `RunConfig` is reachable from every script at once and no script can
+    populate half of it. Every CLI spells its capital flag differently
+    (`--capital` / `--initial_capital` / `--initial-capital`) but they all use
+    `dest='initial_capital'`. `execution_timing` deliberately has **no** flag.
+    `compare.py` passes `benchmark=False`: every row of its table is an excess
+    over buy-and-hold, so `--benchmark none` would empty the table rather than
+    configure it.
+    A cost
     flag belonging to a different `--cost-model` is an error, never silently ignored.Header normalisation, timestamp-column detection
     (`timestamp`/`date`/`datetime`/`time` plus pandas' unnamed index column), datetime
     parsing, required-column and duplicate-timestamp validation, index sorting, optional
