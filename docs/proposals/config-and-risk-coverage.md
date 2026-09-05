@@ -125,6 +125,16 @@ that ignores it fails loudly — mirror `build_cost_model`'s `_COST_MODEL_FLAGS`
 and use `None` defaults so "not supplied" stays distinguishable from "supplied at the
 default".
 
+> **Flag name ≠ constructor kwarg.** `--max-position-size` maps to `FixedRiskManager`'s
+> `position_size_pct`, and `create_risk_manager` rejects unknown kwargs by design. The
+> builder must translate, exactly as `backtest.py:359` does today. Without that, the
+> `[risk]` TOML example below raises `ValueError` on first use.
+
+**No import cycle.** `run_config.py` importing `niffler.risk.contract` is safe: nothing
+under `niffler/risk/` imports `niffler.backtesting` (verified — only docstring references),
+and `risk/__init__.py:9` states that as a rule. A `TYPE_CHECKING` guard is optional
+insurance, since `RunConfig` needs the name only for the annotation.
+
 ### Engine: prefer the config's manager
 
 `BacktestEngine` reaches its manager through `strategy.risk_manager`
@@ -140,12 +150,19 @@ in the engine, five one-line CLI edits.
 
 ## Three things to decide while doing it
 
-**1. `position_size` becomes a dead search dimension.** When a `fixed` manager is active,
-`risk_decision.position_size` overwrites the strategy's. `SimpleMAStrategy.PARAMETER_SPEC`
-(`simple_ma_strategy.py:23`) searches `position_size` over `0.5–1.0 step 0.1` — 6 values
-that produce identical results, **multiplying every grid search by 6×** for nothing. Same
-in the RSI and breakout specs. Drop it from the space when a risk manager is configured,
-or warn.
+**1. `position_size` becomes a half-dead search dimension.** When a manager is active,
+`backtest_engine.py:527` returns `risk_decision.position_size` for **entries**, discarding
+the strategy's value. Exits keep it (`:516-520`, deliberately — an exit is a fraction of the
+open position, not of portfolio value). So the six values in `PARAMETER_SPEC`
+(`simple_ma_strategy.py:23`, and the same in the RSI and breakout specs) still differentiate
+runs, but only through exit sizing — the entry half of the dimension is inert.
+
+That is a much weaker case than "drop it", so **measure before acting**: run one grid with
+and one without a manager and compare how much of the spread in results `position_size`
+still explains. If it collapses, drop it from the space when a manager is configured and
+take the 6× speedup; if exits carry real signal, keep it and document what it now means.
+Either way it should not stay ambiguous, because the parameter's meaning silently changes
+depending on whether `--risk-manager` was passed.
 
 **2. Record the manager in the results JSON.** `base_optimizer.py:427` writes
 `strategy_class` into the metadata. Add the risk configuration, so
