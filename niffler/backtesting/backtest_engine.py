@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import logging
 from typing import Any, Dict, List, Optional
+from niffler.risk.contract import RiskManager
 from niffler.strategies.base_strategy import BaseStrategy
 from .trade import Trade, TradeSide
 from .backtest_result import BacktestResult
@@ -255,11 +256,11 @@ class BacktestEngine:
 
             if not stop_loss_triggered:
                 if signal == 1 and portfolio.cash > 0:
-                    self._process_buy(strategy, portfolio, trades, timestamp, symbol,
+                    self._process_buy(portfolio, trades, timestamp, symbol,
                                       execution_price, position_size, stop_loss_price,
                                       bar_volume=bar_volume)
                 elif signal == -1 and portfolio.position > 0:
-                    self._process_sell(strategy, portfolio, trades, timestamp, symbol,
+                    self._process_sell(portfolio, trades, timestamp, symbol,
                                        execution_price, position_size,
                                        bar_volume=bar_volume)
 
@@ -469,7 +470,10 @@ class BacktestEngine:
         Let the strategy's risk manager veto or resize a pending order.
 
         The risk manager only sees data up to the bar that produced the signal,
-        so it cannot look ahead either.
+        so it cannot look ahead either. It is also handed the portfolio state it
+        needs rather than keeping its own copy, so ``max_positions`` and the
+        exposure cap are evaluated against *this* run - see
+        :mod:`niffler.risk.contract`.
 
         ``RiskDecision.position_size`` is an *entry* sizing target: a fraction of
         portfolio **value** to deploy. Exits are sized as a fraction of the held
@@ -503,7 +507,7 @@ class BacktestEngine:
             current_price=execution_price,
             portfolio_value=portfolio.market_value(execution_price),
             historical_data=historical_data,
-            current_position=portfolio.position_fraction(execution_price)
+            portfolio=portfolio.risk_snapshot(execution_price)
         )
 
         if not risk_decision.allow_trade:
@@ -613,29 +617,21 @@ class BacktestEngine:
                 f"${stop_trade.price:.2f} - {reason}. {portfolio.position:.6f} units "
                 f"remain open with the stop still armed."
             )
-            strategy.risk_manager.update_position_state(
-                symbol=symbol,
-                position_size=portfolio.position_fraction(price),
-                entry_price=portfolio.entry_price,
-                stop_loss_price=portfolio.stop_loss,
-                entry_timestamp=timestamp
-            )
             return True
 
         portfolio.position = 0.0
         portfolio.close_position()
-        strategy.risk_manager.clear_position(symbol)
 
         logging.info(f"STOP LOSS: {stop_trade.quantity:.4f} shares at ${stop_trade.price:.2f} - {reason}")
         return True
 
-    def _process_buy(self, strategy: BaseStrategy, portfolio: Portfolio,
+    def _process_buy(self, portfolio: Portfolio,
                      trades: List[Trade], timestamp: pd.Timestamp, symbol: str,
                      price: float, position_size: float,
                      stop_loss_price: Optional[float],
                      bar_volume: Optional[float] = None) -> None:
         """
-        Execute a buy order and update portfolio and risk-manager state.
+        Execute a buy order and update portfolio state.
 
         A buy into an already open position scales in: the entry price becomes
         the quantity-weighted average of both lots and the existing stop is kept
@@ -643,7 +639,6 @@ class BacktestEngine:
         fresh position and adopts the new order's stop verbatim.
 
         Args:
-            strategy: Strategy being tested
             portfolio: Current portfolio state
             trades: Trade log to append to
             timestamp: Current bar timestamp
@@ -672,30 +667,20 @@ class BacktestEngine:
                                       stop_loss=stop_loss_price)
         portfolio.apply_buy(trade)
 
-        if strategy.risk_manager is not None:
-            strategy.risk_manager.update_position_state(
-                symbol=symbol,
-                position_size=portfolio.position_fraction(price),
-                entry_price=portfolio.entry_price,
-                stop_loss_price=portfolio.stop_loss,
-                entry_timestamp=timestamp
-            )
-
         logging.info(f"BUY: {trade.quantity:.4f} shares at ${trade.price:.2f} "
                      f"(Value: ${trade.value:.2f}, Commission: ${trade.commission:.2f}, "
                      f"Cash: ${portfolio.cash:.2f})")
         if portfolio.stop_loss:
             logging.info(f"Stop loss set at ${portfolio.stop_loss:.2f}")
 
-    def _process_sell(self, strategy: BaseStrategy, portfolio: Portfolio,
+    def _process_sell(self, portfolio: Portfolio,
                       trades: List[Trade], timestamp: pd.Timestamp, symbol: str,
                       price: float, position_size: float,
                       bar_volume: Optional[float] = None) -> None:
         """
-        Execute a sell order and update portfolio and risk-manager state.
+        Execute a sell order and update portfolio state.
 
         Args:
-            strategy: Strategy being tested
             portfolio: Current portfolio state
             trades: Trade log to append to
             timestamp: Current bar timestamp
@@ -716,16 +701,6 @@ class BacktestEngine:
 
         if portfolio.is_flat:
             portfolio.close_position()
-            if strategy.risk_manager is not None:
-                strategy.risk_manager.clear_position(symbol)
-        elif strategy.risk_manager is not None:
-            strategy.risk_manager.update_position_state(
-                symbol=symbol,
-                position_size=portfolio.position_fraction(price),
-                entry_price=portfolio.entry_price,
-                stop_loss_price=portfolio.stop_loss,
-                entry_timestamp=timestamp
-            )
 
         logging.info(f"SELL: {trade.quantity:.4f} shares at ${trade.price:.2f} "
                      f"(Value: ${trade.value:.2f}, Commission: ${trade.commission:.2f}, "
@@ -1145,6 +1120,20 @@ class BacktestEngine:
 
         if not strategy.validate_data(data):
             raise ValueError("Invalid data format for backtesting")
+
+        # The engine reaches its risk manager through strategy.risk_manager, so
+        # a renamed method used to surface at the first signal, mid-run. Check
+        # the contract once, before any bar is processed.
+        risk_manager = strategy.risk_manager
+        if risk_manager is not None and not isinstance(risk_manager, RiskManager):
+            missing = [
+                name for name in ('evaluate_trade', 'should_close_position')
+                if not callable(getattr(risk_manager, name, None))
+            ]
+            raise TypeError(
+                f"{type(risk_manager).__name__} is not a RiskManager: missing "
+                f"{', '.join(missing)}. See niffler.risk.contract.RiskManager."
+            )
 
         # Validate DataFrame
         if data.empty:

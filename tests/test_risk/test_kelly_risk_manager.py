@@ -11,7 +11,8 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from niffler.risk.kelly_risk_manager import KellyRiskManager
-from niffler.risk.base_risk_manager import PositionInfo, RiskDecision
+from niffler.risk.base_risk_manager import RiskDecision
+from niffler.risk.contract import PortfolioSnapshot
 
 
 class TestKellyRiskManager(unittest.TestCase):
@@ -116,39 +117,20 @@ class TestKellyRiskManager(unittest.TestCase):
     def test_get_risk_metrics(self):
         """Test getting risk metrics."""
         metrics = self.risk_manager.get_risk_metrics()
-        
+
         self.assertIn('risk_management_type', metrics)
         self.assertIn('max_kelly_fraction', metrics)
         self.assertIn('max_risk_per_trade', metrics)
         self.assertIn('max_positions', metrics)
-        self.assertIn('current_exposure', metrics)
-        self.assertIn('positions_tracked', metrics)
-        
+
         self.assertEqual(metrics['risk_management_type'], 'Kelly Criterion (Not Implemented)')
         self.assertEqual(metrics['max_kelly_fraction'], 0.25)
         self.assertEqual(metrics['max_risk_per_trade'], 0.05)
         self.assertEqual(metrics['max_positions'], 5)
         self.assertEqual(metrics['max_total_exposure'], 1.25)  # 5 * 0.25
-        self.assertEqual(metrics['current_exposure'], 0.0)  # No positions initially
-        self.assertEqual(metrics['positions_tracked'], 0)  # No positions initially
-        
-    def test_get_risk_metrics_with_positions(self):
-        """Test getting risk metrics with tracked positions."""
-        # Add a position to test metrics with state
-        timestamp = pd.Timestamp('2024-01-01')
-        self.risk_manager.update_position_state(
-            symbol="BTC",
-            position_size=0.15,
-            entry_price=50000.0,
-            stop_loss_price=None,
-            entry_timestamp=timestamp
-        )
-        
-        metrics = self.risk_manager.get_risk_metrics()
-        
-        self.assertEqual(metrics['current_exposure'], 0.15)
-        self.assertEqual(metrics['positions_tracked'], 1)
-        
+        self.assertNotIn('current_exposure', metrics)
+        self.assertNotIn('positions_tracked', metrics)
+
     def test_evaluate_trade_not_implemented_for_signals(self):
         """Test that evaluate_trade raises NotImplementedError for non-zero signals."""
         # Hold signal should work (inherited from base class)
@@ -156,20 +138,22 @@ class TestKellyRiskManager(unittest.TestCase):
             signal=0,
             current_price=100.0,
             portfolio_value=10000.0,
-            historical_data=self.sample_data
+            historical_data=self.sample_data,
+            portfolio=PortfolioSnapshot.flat()
         )
         self.assertFalse(decision.allow_trade)
         self.assertEqual(decision.reason, "No signal")
-        
+
         # Buy signal should raise NotImplementedError
         with self.assertRaises(NotImplementedError):
             self.risk_manager.evaluate_trade(
                 signal=1,
                 current_price=100.0,
                 portfolio_value=10000.0,
-                historical_data=self.sample_data
+                historical_data=self.sample_data,
+                portfolio=PortfolioSnapshot.flat()
             )
-        
+
         # Sell signal should raise NotImplementedError
         with self.assertRaises(NotImplementedError):
             self.risk_manager.evaluate_trade(
@@ -177,9 +161,17 @@ class TestKellyRiskManager(unittest.TestCase):
                 current_price=100.0,
                 portfolio_value=10000.0,
                 historical_data=self.sample_data,
-                current_position=0.1
+                portfolio=PortfolioSnapshot(open_positions=1, total_exposure=0.1,
+                                            current_position=0.1)
             )
-            
+
+    def test_kelly_is_not_registered(self):
+        """A stub must not be selectable: --risk-manager kelly would crash mid-run."""
+        from niffler.risk.registry import RISK_MANAGER_CLASSES, get_available_risk_managers
+
+        self.assertNotIn('kelly', RISK_MANAGER_CLASSES)
+        self.assertNotIn('kelly', get_available_risk_managers())
+
     def test_config_validation_relationships(self):
         """Test configuration relationship validation."""
         # Valid config should not raise
@@ -212,57 +204,16 @@ class TestKellyRiskManager(unittest.TestCase):
         
     def test_inheritance_from_base_risk_manager(self):
         """Test that KellyRiskManager inherits base functionality."""
-        # Should have all base class methods and attributes
         self.assertTrue(hasattr(self.risk_manager, 'config'))
-        self.assertTrue(hasattr(self.risk_manager, '_positions'))
-        self.assertTrue(hasattr(self.risk_manager, 'update_position_state'))
-        self.assertTrue(hasattr(self.risk_manager, 'get_position_info'))
-        self.assertTrue(hasattr(self.risk_manager, 'clear_position'))
-        self.assertTrue(hasattr(self.risk_manager, 'get_total_exposure'))
-        self.assertTrue(hasattr(self.risk_manager, 'get_portfolio_summary'))
         self.assertTrue(hasattr(self.risk_manager, '_portfolio_risk_check'))
-        
-    def test_position_state_management_inheritance(self):
-        """Test that position state management works through inheritance."""
-        timestamp = pd.Timestamp('2024-01-01')
-        
-        # Should be able to update position state
-        self.risk_manager.update_position_state(
-            symbol="ETH",
-            position_size=0.08,
-            entry_price=3000.0,
-            stop_loss_price=2850.0,
-            entry_timestamp=timestamp
-        )
-        
-        # Should be able to get position info
-        position = self.risk_manager.get_position_info("ETH")
-        self.assertIsNotNone(position)
-        self.assertEqual(position.symbol, "ETH")
-        self.assertEqual(position.position_size, 0.08)
-        self.assertEqual(position.entry_price, 3000.0)
-        self.assertEqual(position.stop_loss_price, 2850.0)
-        
-        # Should be able to clear position
-        self.risk_manager.clear_position("ETH")
-        position = self.risk_manager.get_position_info("ETH")
-        self.assertIsNone(position)
-        
-    def test_portfolio_summary_inheritance(self):
-        """Test that portfolio summary works through inheritance."""
-        timestamp = pd.Timestamp('2024-01-01')
-        
-        # Add some positions
-        self.risk_manager.update_position_state("BTC", 0.1, 50000.0, None, timestamp)
-        self.risk_manager.update_position_state("ETH", -0.05, 3000.0, None, timestamp)
-        
-        summary = self.risk_manager.get_portfolio_summary()
-        
-        self.assertEqual(summary['total_positions'], 2)
-        self.assertEqual(summary['long_positions'], 1)
-        self.assertEqual(summary['short_positions'], 1)
-        self.assertAlmostEqual(summary['total_exposure'], 0.15, places=6)  # |0.1| + |-0.05|
-        self.assertEqual(set(summary['symbols']), {'BTC', 'ETH'})
+        self.assertTrue(hasattr(self.risk_manager, 'evaluate_trade'))
+
+    def test_holds_no_position_state(self):
+        """The stub inherits statelessness too, so it is fold-safe by construction."""
+        for attribute in ('_positions', 'update_position_state', 'clear_position',
+                          'get_position_info', 'get_total_exposure',
+                          'get_portfolio_summary'):
+            self.assertFalse(hasattr(self.risk_manager, attribute))
 
 
 if __name__ == '__main__':

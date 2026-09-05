@@ -19,7 +19,7 @@ from niffler.strategies.registry import (
     get_available_strategies,
     get_strategy_parameter_names,
 )
-from niffler.risk import FixedRiskManager
+from niffler.risk import create_risk_manager, get_available_risk_managers
 from niffler.exporters import ExporterManager, get_available_exporters
 from niffler.utils.provenance import collect_provenance
 from niffler.config.logging import setup_logging
@@ -318,7 +318,7 @@ Examples:
                        help='Apply data cleaning pipeline to the CSV file before backtesting')
     
     # Risk Management options
-    parser.add_argument('--risk-manager', choices=['none', 'fixed'],
+    parser.add_argument('--risk-manager', choices=get_available_risk_managers(),
                        default='none',
                        help='Risk manager to use (default: none)')
     parser.add_argument('--max-position-size', type=float, default=0.2,
@@ -352,15 +352,17 @@ Examples:
             symbol = extract_symbol_from_filename(args.data)
             print(f"Symbol extracted from filename: {symbol}")
 
-        # Initialize risk manager
-        risk_manager = None
-        if args.risk_manager == 'fixed':
-            risk_manager = FixedRiskManager(
-                position_size_pct=args.max_position_size,
-                stop_loss_pct=args.stop_loss_pct,
-                max_positions=args.max_positions,
-                max_risk_per_trade=args.max_risk_per_trade
-            )
+        # Initialize risk manager. Construction is generic: a risk manager
+        # registered in niffler.risk.registry is selectable here with no change
+        # to this file. The four flags are FixedRiskManager-shaped; a
+        # --risk-params JSON mirroring --params is the follow-up.
+        risk_manager = create_risk_manager(args.risk_manager, {
+            'position_size_pct': args.max_position_size,
+            'stop_loss_pct': args.stop_loss_pct,
+            'max_positions': args.max_positions,
+            'max_risk_per_trade': args.max_risk_per_trade,
+        })
+        if risk_manager is not None:
             print(f"Risk Manager: {risk_manager.get_risk_metrics()['risk_management_type']}")
         
         # Initialize strategy. Construction is generic: a strategy registered in

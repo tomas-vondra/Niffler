@@ -22,8 +22,10 @@ python scripts/backtest.py --data <data_file> [--strategy <strategy_name>] [--ca
 - `--min-order-value`: Minimum trade value to execute, default: 1.0
 
 **Risk management:**
-- `--risk-manager`: `none` (default) or `fixed`. The Kelly manager is a stub and is
-  deliberately not offered
+- `--risk-manager`: `none` (default) or any name in `niffler/risk/registry.py`, currently
+  `fixed`. The choices derive from the registry, so registering a manager makes it
+  selectable with no change to `backtest.py`. The Kelly manager is a stub and is
+  deliberately not registered
 - `--max-position-size`: Fraction of portfolio per trade, default: 0.2
 - `--stop-loss-pct`: Stop loss distance from entry, default: 0.05
 - `--max-positions`: Maximum concurrent positions, default: 5
@@ -418,10 +420,10 @@ The backtesting engine integrates seamlessly with risk management systems:
   stop cannot be executed because the residual position is below `min_order_value`
 
 #### Portfolio State Tracking
-- Real-time tracking of portfolio value and position sizes
-- Updates risk manager with current position states
-- Clears position tracking when positions are fully closed
-- Maintains position fraction calculations for risk assessment
+- `Portfolio` is the single owner of position state: cash, units, entry price, stop and side
+- The risk manager holds none of it. It is handed a frozen `PortfolioSnapshot` on each
+  `evaluate_trade()` call, built by `Portfolio.risk_snapshot(price)`
+- Position fractions are computed on demand at the current price, so exposure means "now"
 
 ### Strategy Framework
 

@@ -60,6 +60,36 @@ class KellyRiskManager(BaseRiskManager):
     * **A clamp of negative ``f*`` to zero.** A negative Kelly fraction is an
       instruction to take the other side, and the engine is long-only, so the
       only faithful response is to stand aside.
+
+    What blocks it today, precisely
+    -------------------------------
+    Three open questions, each of which changes something outside this class.
+    The risk seam is now genuine - registering this class would take one line in
+    :data:`niffler.risk.registry.RISK_MANAGER_CLASSES` - so what is missing is
+    design, not plumbing. It is deliberately **not** registered: a
+    ``--risk-manager kelly`` that loaded data and then raised at the first signal
+    would be worse than no option at all.
+
+    1. **The contract carries prices, not outcomes.**
+       :meth:`evaluate_trade` receives ``historical_data`` (bars) and a
+       :class:`~niffler.risk.contract.PortfolioSnapshot`. ``p`` and ``b`` are
+       properties of *realised round trips*, and nothing hands those over.
+       Supplying them means a ``TradeOutcome``-shaped type in
+       :mod:`niffler.risk` (it cannot be
+       :class:`niffler.backtesting.round_trip.RoundTrip` without inverting the
+       layering) plus the engine feeding it ``pair_trades`` output. The snapshot
+       is where it would land - one added field, not another signature break.
+    2. **The bootstrap deadlock.** Below the minimum-sample gate the only honest
+       answer is to stand aside, so the manager never trades, so it never
+       accumulates the round trips the gate is waiting for. The only way out that
+       does not fabricate an edge is an explicit, opt-in seed fraction that the
+       console labels as *not* Kelly - and choosing its default is a research
+       decision, not a coding one.
+    3. **The gate value contradicts itself.** ``min_trades_for_kelly`` defaults to
+       10 while :data:`niffler.backtesting.significance.DEFAULT_MIN_TRADES` is 30,
+       and the framework already refuses a verdict below 30. Two different
+       minimum-sample answers in one code base is the disagreement to settle
+       before either is used to size real money.
     """
     
     def __init__(self, lookback_periods: int = 50, max_kelly_fraction: float = 0.25,
@@ -208,11 +238,7 @@ class KellyRiskManager(BaseRiskManager):
         """Get comprehensive Kelly risk manager metrics."""
         metrics = super().get_risk_metrics()
         
-        # Calculate current positions and utilization
-        current_positions = len([pos for pos in self._positions.values() if pos.position_size != 0])
-        position_utilization = current_positions / self.max_positions if self.max_positions > 0 else 0
-        
-        # Calculate effective Kelly fraction being used
+        # Effective Kelly fraction being used.
         effective_max_kelly = self.max_kelly_fraction * self.fractional_kelly
         
         metrics.update({
@@ -225,8 +251,6 @@ class KellyRiskManager(BaseRiskManager):
             'max_positions': self.max_positions,
             'max_risk_per_trade': self.max_risk_per_trade,
             'max_total_exposure': self.max_positions * self.max_kelly_fraction,
-            'current_positions': current_positions,
-            'position_utilization': position_utilization,
             'risk_management_type': 'Kelly Criterion (Not Implemented)'
         })
         return metrics

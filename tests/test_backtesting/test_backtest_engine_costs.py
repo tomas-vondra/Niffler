@@ -58,10 +58,9 @@ class StopRiskManager:
 
     def __init__(self, stop_loss_price):
         self.stop_loss_price = stop_loss_price
-        self.positions = {}
 
     def evaluate_trade(self, signal, current_price, portfolio_value, historical_data,
-                       current_position):
+                       portfolio):
         return RiskDecision(
             position_size=1.0,
             stop_loss_price=self.stop_loss_price,
@@ -75,13 +74,6 @@ class StopRiskManager:
         if stop_loss_price is not None and current_price <= stop_loss_price:
             return True, "stop breached"
         return False, "stop intact"
-
-    def update_position_state(self, symbol, position_size, entry_price, stop_loss_price,
-                              entry_timestamp):
-        self.positions[symbol] = entry_price
-
-    def clear_position(self, symbol):
-        self.positions.pop(symbol, None)
 
 
 def make_data(closes, volume=1_000_000.0, lows=None):
@@ -184,10 +176,9 @@ class TestCostsAreAdverseInTheEngine(unittest.TestCase):
     def test_entry_price_is_the_price_actually_paid(self):
         """The cost basis must be the fill, or every stop distance is wrong."""
         portfolio = Portfolio(10000.0)
-        strategy = ScriptedStrategy([1])
         trades = []
 
-        self.engine._process_buy(strategy, portfolio, trades,
+        self.engine._process_buy(portfolio, trades,
                                  pd.Timestamp('2024-01-02'), "TEST",
                                  100.0, 1.0, None, bar_volume=1e9)
 
@@ -209,7 +200,7 @@ class TestCashCannotGoNegative(unittest.TestCase):
         portfolio = Portfolio(10000.0)
         trades = []
 
-        engine._process_buy(ScriptedStrategy([1]), portfolio, trades,
+        engine._process_buy(portfolio, trades,
                             pd.Timestamp('2024-01-02'), "TEST",
                             100.0, 1.0, None, bar_volume=1e9)
 
@@ -321,8 +312,10 @@ class TestStopLossPaysCosts(unittest.TestCase):
         self.assertAlmostEqual(portfolio.position, 5.0)
         self.assertEqual(portfolio.stop_loss, 95.0)
         self.assertTrue(any('PARTIALLY FILLED' in line for line in logs.output))
-        # The risk manager must still believe a position is open.
-        self.assertIn("TEST", self.risk_manager.positions)
+        # The remainder is still an open position as far as the portfolio - the
+        # only owner of position state - is concerned.
+        self.assertFalse(portfolio.is_flat)
+        self.assertEqual(portfolio.entry_price, 100.0)
 
     def test_an_unfillable_bar_leaves_the_stop_unexecuted_and_says_so(self):
         engine = BacktestEngine(commission=0.0, cost_model=VolumeShareSlippageModel())

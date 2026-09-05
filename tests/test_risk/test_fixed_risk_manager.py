@@ -11,7 +11,8 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from niffler.risk.fixed_risk_manager import FixedRiskManager
-from niffler.risk.base_risk_manager import PositionInfo, RiskDecision
+from niffler.risk.base_risk_manager import RiskDecision
+from niffler.risk.contract import PortfolioSnapshot
 
 
 class TestFixedRiskManager(unittest.TestCase):
@@ -247,36 +248,25 @@ class TestFixedRiskManager(unittest.TestCase):
         
     def test_get_risk_metrics(self):
         """Test getting risk metrics."""
-        # Add a position to test with state
-        timestamp = pd.Timestamp('2024-01-01')
-        self.risk_manager.update_position_state(
-            symbol="BTC",
-            position_size=0.1,
-            entry_price=50000.0,
-            stop_loss_price=47500.0,
-            entry_timestamp=timestamp
-        )
-        
         metrics = self.risk_manager.get_risk_metrics()
-        
+
         self.assertIn('risk_management_type', metrics)
         self.assertIn('position_size_pct', metrics)
         self.assertIn('stop_loss_pct', metrics)
         self.assertIn('max_positions', metrics)
         self.assertIn('max_risk_per_trade', metrics)
         self.assertIn('max_total_exposure', metrics)
-        self.assertIn('current_exposure', metrics)
-        self.assertIn('positions_tracked', metrics)
-        
+
         self.assertEqual(metrics['risk_management_type'], 'Fixed Risk Manager')
         self.assertEqual(metrics['position_size_pct'], 0.1)
         self.assertEqual(metrics['stop_loss_pct'], 0.05)
         self.assertEqual(metrics['max_positions'], 3)
         self.assertEqual(metrics['max_risk_per_trade'], 0.03)
         self.assertAlmostEqual(metrics['max_total_exposure'], 0.3, places=6)  # 3 * 0.1
-        self.assertEqual(metrics['current_exposure'], 0.1)
-        self.assertEqual(metrics['positions_tracked'], 1)
-        
+        # Live utilisation is gone with the position state that produced it.
+        self.assertNotIn('current_exposure', metrics)
+        self.assertNotIn('positions_tracked', metrics)
+
     def test_evaluate_trade_integration_buy_allowed(self):
         """Test full trade evaluation integration for allowed buy trade."""
         decision = self.risk_manager.evaluate_trade(
@@ -284,15 +274,15 @@ class TestFixedRiskManager(unittest.TestCase):
             current_price=100.0,
             portfolio_value=10000.0,
             historical_data=self.sample_data,
-            current_position=0.0
+            portfolio=PortfolioSnapshot.flat()
         )
-        
+
         self.assertTrue(decision.allow_trade)
         self.assertEqual(decision.position_size, 0.1)
         self.assertEqual(decision.stop_loss_price, 95.0)
         self.assertAlmostEqual(decision.max_risk_per_trade, 0.005, places=6)  # (100-95)/100 * 0.1
         self.assertEqual(decision.reason, "Risk evaluation completed")
-        
+
     def test_evaluate_trade_integration_sell_allowed(self):
         """Test full trade evaluation integration for allowed sell trade."""
         decision = self.risk_manager.evaluate_trade(
@@ -300,61 +290,48 @@ class TestFixedRiskManager(unittest.TestCase):
             current_price=100.0,
             portfolio_value=10000.0,
             historical_data=self.sample_data,
-            current_position=0.05
+            portfolio=PortfolioSnapshot(open_positions=1, total_exposure=0.05,
+                                        current_position=0.05)
         )
-        
+
         self.assertTrue(decision.allow_trade)
         self.assertEqual(decision.position_size, 0.05)
         self.assertEqual(decision.stop_loss_price, 105.0)
         self.assertAlmostEqual(decision.max_risk_per_trade, 0.0025, places=6)  # (105-100)/100 * 0.05
         self.assertEqual(decision.reason, "Risk evaluation completed")
-        
+
     def test_evaluate_trade_blocked_by_position_limit(self):
         """Test trade blocked by maximum position limit."""
-        # Add maximum positions
-        timestamp = pd.Timestamp('2024-01-01')
-        for i in range(3):  # max_positions = 3
-            self.risk_manager.update_position_state(
-                symbol=f"COIN{i}",
-                position_size=0.1,
-                entry_price=100.0,
-                stop_loss_price=95.0,
-                entry_timestamp=timestamp
-            )
-        
+        at_limit = PortfolioSnapshot(open_positions=3,  # max_positions = 3
+                                     total_exposure=0.3, current_position=0.0)
+
         decision = self.risk_manager.evaluate_trade(
             signal=1,
             current_price=100.0,
             portfolio_value=10000.0,
             historical_data=self.sample_data,
-            current_position=0.0
+            portfolio=at_limit
         )
-        
+
         self.assertFalse(decision.allow_trade)
         self.assertEqual(decision.position_size, 0.0)
         self.assertIsNone(decision.stop_loss_price)
         self.assertIn("Portfolio risk check failed", decision.reason)
-        
+
     def test_evaluate_trade_blocked_by_exposure_limit(self):
         """Test trade blocked by total exposure limit."""
-        # Add positions near exposure limit
-        timestamp = pd.Timestamp('2024-01-01')
-        self.risk_manager.update_position_state(
-            symbol="BTC",
-            position_size=0.25,  # Near max_total_exposure of 0.3
-            entry_price=50000.0,
-            stop_loss_price=47500.0,
-            entry_timestamp=timestamp
-        )
-        
+        near_limit = PortfolioSnapshot(open_positions=1,
+                                       total_exposure=0.25,  # max_total_exposure is 0.3
+                                       current_position=0.0)
+
         decision = self.risk_manager.evaluate_trade(
             signal=1,
             current_price=100.0,
             portfolio_value=10000.0,
             historical_data=self.sample_data,
-            current_position=0.0
+            portfolio=near_limit
         )
-        
+
         self.assertFalse(decision.allow_trade)
         self.assertEqual(decision.position_size, 0.0)
         self.assertIsNone(decision.stop_loss_price)
