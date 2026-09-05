@@ -9,12 +9,16 @@ python scripts/download_data.py --source <source> --symbol <symbol> --timeframe 
 ```
 
 **Arguments:**
-- `--source`: Data source - `ccxt` or `yahoo`
+- `--source`: Data source - `ccxt` or `yahoo`. The choices come from
+  `niffler/data/downloaders/registry.py`, so a newly registered source is selectable with
+  no change to the script
 - `--symbol`: Trading pair (e.g., `BTC/USDT` for `ccxt`, `BTC-USD` for `yahoo`)
 - `--timeframe`: Time interval (e.g., `1d`, `1h`, `1m`)
 - `--start_date`: Start date in `YYYY-MM-DD` format
 - `--end_date`: (Optional) End date in `YYYY-MM-DD` format, defaults to today
-- `--exchange`: (Required for `ccxt`) Exchange ID, defaults to `binance` if not specified
+- `--exchange`: (`ccxt` only) Exchange ID, defaults to `binance` if not specified. It is
+  an option of the `ccxt` source, not a global flag: passing it with `--source yahoo`
+  exits 1 naming the options yahoo accepts, rather than being silently ignored
 - `--output`: (Optional) Custom output filename, defaults to auto-generated name
 
 ### Exit codes and partial downloads
@@ -45,6 +49,9 @@ When `--output` is not specified, filenames are automatically generated using th
 data/{SYMBOL}_{SOURCE/EXCHANGE}_{TIMEFRAME}_{STARTDATE}_{ENDDATE}.csv
 ```
 
+The middle component is the source's own `file_tag` from its registry entry — the venue for
+`ccxt`, the source name otherwise — so it needs no `if args.source ==` in the script.
+
 Examples:
 - `data/BTCUSDT_binance_1d_20240101_20240105.csv`
 - `data/BTCUSD_yahoo_1d_20240101_20240331.csv`
@@ -65,6 +72,18 @@ python scripts/download_data.py --source ccxt --symbol BTC/USDT --timeframe 1d -
 ```bash
 python scripts/download_data.py --source yahoo --symbol BTC-USD --timeframe 1d --start_date 2024-01-01 --end_date 2024-01-05
 ```
+
+### Adding a Data Source
+
+One class in `niffler/data/downloaders/` subclassing `BaseDownloader`, then one entry in
+`DOWNLOAD_SOURCES` in `niffler/data/downloaders/registry.py`. The entry carries the class
+plus how a source-neutral `DownloadRequest` becomes that downloader's `download()`
+arguments, because the shipped downloaders genuinely disagree about their signatures (CCXT
+takes an exchange id and millisecond epochs, Yahoo Finance a ticker and date strings).
+`--source` choices, the default output filename and the download call all derive from that
+one entry, and `build_download_kwargs` checks what the entry produced against the real
+signature so a typo in it is a message rather than a `TypeError`.
+`tests/test_downloaders/test_registry.py` applies the shared contract automatically.
 
 ## Data Preprocessing
 

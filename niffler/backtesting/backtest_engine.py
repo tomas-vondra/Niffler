@@ -14,14 +14,14 @@ from .round_trip import RoundTrip, QUANTITY_EPSILON, pair_trades
 from . import metrics as equity_metrics
 from .benchmark import (
     BENCHMARK_BUY_AND_HOLD,
-    BENCHMARK_CHOICES,
-    BENCHMARK_NONE,
     BenchmarkError,
     BenchmarkResult,
     compute_benchmark,
     information_ratio,
 )
 from .significance import DEFAULT_MIN_TRADES, assess_significance
+from .run_config import EXECUTION_TIMINGS as _EXECUTION_TIMINGS
+from .run_config import RunConfig
 
 
 class BacktestEngine:
@@ -63,8 +63,8 @@ class BacktestEngine:
     interval is turned on by the callers that actually print it.
     """
 
-    #: Supported execution-timing policies.
-    EXECUTION_TIMINGS = ('next_bar_open', 'same_bar_close')
+    #: Supported execution-timing policies. Defined once in ``run_config``.
+    EXECUTION_TIMINGS = _EXECUTION_TIMINGS
 
     #: Quantities below this are treated as fully matched during trade pairing.
     _QUANTITY_EPSILON = QUANTITY_EPSILON
@@ -118,42 +118,61 @@ class BacktestEngine:
             ValueError: If any parameter is outside its valid range
             TypeError: If cost_model is not a CostModel
         """
-        if initial_capital <= 0:
-            raise ValueError("Initial capital must be positive")
-        if commission < 0:
-            raise ValueError("Commission cannot be negative")
-        if min_order_value < 0:
-            raise ValueError("Minimum order value cannot be negative")
-        if execution_timing not in self.EXECUTION_TIMINGS:
-            raise ValueError(
-                f"Execution timing must be one of {self.EXECUTION_TIMINGS}, got '{execution_timing}'"
-            )
-        if periods_per_year is not None and periods_per_year <= 0:
-            raise ValueError("Periods per year must be positive")
-        if cost_model is not None and not isinstance(cost_model, CostModel):
-            raise TypeError(
-                f"cost_model must be a CostModel, got {type(cost_model).__name__}"
-            )
-        benchmark = benchmark if benchmark is not None else BENCHMARK_NONE
-        if benchmark not in BENCHMARK_CHOICES:
-            raise ValueError(
-                f"Benchmark must be one of {BENCHMARK_CHOICES}, got '{benchmark}'"
-            )
-        if min_trades_for_significance < 0:
-            raise ValueError("Minimum trades for significance cannot be negative")
-        if bootstrap_samples < 0:
-            raise ValueError("Bootstrap samples cannot be negative")
+        # Every range check lives in RunConfig, which is also what the
+        # analyzers, the optimizer and their worker processes carry. Repeating
+        # the checks here is how they drifted apart in the first place.
+        config = RunConfig(
+            initial_capital=initial_capital,
+            commission=commission,
+            min_order_value=min_order_value,
+            execution_timing=execution_timing,
+            periods_per_year=periods_per_year,
+            cost_model=cost_model,
+            benchmark=benchmark,
+            min_trades_for_significance=min_trades_for_significance,
+            bootstrap_samples=bootstrap_samples,
+            bootstrap_seed=bootstrap_seed,
+        )
 
-        self.initial_capital = initial_capital
-        self.commission = commission
-        self.min_order_value = min_order_value
-        self.execution_timing = execution_timing
-        self.periods_per_year = periods_per_year
-        self.cost_model: CostModel = cost_model if cost_model is not None else ZeroCostModel()
-        self.benchmark = benchmark
-        self.min_trades_for_significance = min_trades_for_significance
-        self.bootstrap_samples = bootstrap_samples
-        self.bootstrap_seed = bootstrap_seed
+        self.run_config = config
+        self.initial_capital = config.initial_capital
+        self.commission = config.commission
+        self.min_order_value = config.min_order_value
+        self.execution_timing = config.execution_timing
+        self.periods_per_year = config.periods_per_year
+        self.cost_model: CostModel = (config.cost_model if config.cost_model is not None
+                                      else ZeroCostModel())
+        self.benchmark = config.benchmark
+        self.min_trades_for_significance = config.min_trades_for_significance
+        self.bootstrap_samples = config.bootstrap_samples
+        self.bootstrap_seed = config.bootstrap_seed
+
+    @classmethod
+    def from_config(cls, config: RunConfig) -> 'BacktestEngine':
+        """Build an engine from a run configuration.
+
+        The single place a :class:`RunConfig` becomes an engine. Every knob is
+        forwarded by name, so a field added to the config reaches the engine
+        without touching any of the call sites that thread the config through.
+
+        Args:
+            config: The run configuration.
+
+        Returns:
+            An engine configured exactly as ``config`` describes.
+        """
+        return cls(
+            initial_capital=config.initial_capital,
+            commission=config.commission,
+            min_order_value=config.min_order_value,
+            execution_timing=config.execution_timing,
+            periods_per_year=config.periods_per_year,
+            cost_model=config.cost_model,
+            benchmark=config.benchmark,
+            min_trades_for_significance=config.min_trades_for_significance,
+            bootstrap_samples=config.bootstrap_samples,
+            bootstrap_seed=config.bootstrap_seed,
+        )
 
     @property
     def execution_lag(self) -> int:

@@ -56,10 +56,18 @@ while you believe otherwise.
 - `--bootstrap-seed`: seed for that bootstrap, default 42, so the interval is reproducible
 
 **Export and logging:**
-- `--exporters`: Comma-separated list — `console` (default), `csv`, `elasticsearch`
+- `--exporters`: Comma-separated list — `console` (default), `csv`, `elasticsearch`. The
+  choices come from `niffler/exporters/registry.py`
+- `--exporter-params`: Exporter options as a JSON object, e.g. `'{"output_dir": "results"}'`.
+  The generic path — it reaches any registered exporter's constructor, so a new exporter
+  needs no new flag
 - `--csv-output-dir`: Directory for CSV output, default: current directory
 - `--es-host`, `--es-port`, `--es-index-prefix`: Override the `ELASTICSEARCH_*` environment
   variables (see [Exporters](exporters.md))
+
+An option none of the chosen exporters accepts is an **error naming the accepted ones**,
+the same rule `--params` follows for strategies: `--exporters console --csv-output-dir
+results/` exits 1 rather than quietly writing nothing.
 - `--log-level`: `DEBUG` / `INFO` (default) / `WARNING` / `ERROR`
 
 There is deliberately **no `--execution-timing` or `--periods-per-year` flag**. The safe

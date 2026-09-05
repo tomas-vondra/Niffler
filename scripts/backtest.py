@@ -14,22 +14,22 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from niffler.backtesting import BacktestEngine
-from niffler.backtesting.benchmark import BENCHMARK_BUY_AND_HOLD, BENCHMARK_CHOICES
-from niffler.backtesting.significance import (
-    DEFAULT_BOOTSTRAP_SAMPLES,
-    DEFAULT_BOOTSTRAP_SEED,
-    DEFAULT_MIN_TRADES,
-)
 from niffler.strategies.registry import (
     create_strategy,
     get_available_strategies,
     get_strategy_parameter_names,
 )
 from niffler.risk import create_risk_manager, get_available_risk_managers
-from niffler.exporters import ExporterManager
+from niffler.exporters import ExporterManager, get_available_exporters
 from niffler.utils.provenance import collect_provenance
 from niffler.config.logging import setup_logging
-from scripts.common import add_cost_model_arguments, build_cost_model, load_ohlcv_csv, report_cost_model
+from scripts.common import (
+    add_cost_model_arguments,
+    add_engine_arguments,
+    build_run_config,
+    load_ohlcv_csv,
+    report_cost_model,
+)
 
 
 def extract_symbol_from_filename(file_path: str) -> str:
@@ -168,6 +168,61 @@ def build_strategy_parameters(args) -> Dict[str, Any]:
     return parameters
 
 
+# Convenience flags that map onto exporter constructor options: option name ->
+# argparse attribute. Each flag defaults to None so an explicitly passed one can be
+# told apart from an unset one, and only the ones actually passed are forwarded - an
+# option nobody asked for must not be broadcast to exporters that would reject it.
+#
+# Unlike STRATEGY_PARAMETER_FLAGS this carries no flag spellings: the rejection
+# happens in ExporterManager, which serves callers that have no CLI, so its message
+# names the option (output_dir) rather than the flag (--csv-output-dir).
+EXPORTER_OPTION_FLAGS = {
+    'output_dir': 'csv_output_dir',
+    'host': 'es_host',
+    'port': 'es_port',
+    'index_prefix': 'es_index_prefix',
+}
+
+
+def build_exporter_options(args) -> Dict[str, Any]:
+    """Collect exporter options from --exporter-params and the convenience flags.
+
+    An explicitly passed flag overrides the same key in ``--exporter-params``. The
+    options are validated against the chosen exporters by
+    ``ExporterManager.create_exporters_from_list``, which raises when none of them
+    accepts an option, so ``--exporters console --csv-output-dir results/`` fails
+    loudly instead of writing nothing anywhere.
+
+    Args:
+        args: Parsed command line arguments.
+
+    Returns:
+        Keyword arguments for the exporter constructors.
+
+    Raises:
+        ValueError: If --exporter-params is not a JSON object.
+    """
+    options: Dict[str, Any] = {}
+
+    if args.exporter_params:
+        try:
+            parsed = json.loads(args.exporter_params)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in --exporter-params: {e}") from e
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                f"--exporter-params must be a JSON object, got {type(parsed).__name__}"
+            )
+        options.update(parsed)
+
+    for option, attribute in EXPORTER_OPTION_FLAGS.items():
+        value = getattr(args, attribute, None)
+        if value is not None:
+            options[option] = value
+
+    return options
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description='Backtest trading strategies on historical data with optional risk management',
@@ -215,8 +270,9 @@ Examples:
     parser.add_argument('--position-size', type=float, default=None,
                        help='Position size as fraction of portfolio (default: 1.0)')
     
-    # Backtest parameters
-    parser.add_argument('--capital', type=float, default=10000.0,
+    # Backtest parameters. --capital keeps its established spelling; the dest
+    # is what build_run_config reads, and every script spells it the same way.
+    parser.add_argument('--capital', dest='initial_capital', type=float, default=10000.0,
                        help='Initial capital amount (default: 10000)')
     parser.add_argument('--commission', type=float, default=0.001,
                        help='Commission rate per trade (default: 0.001)')
@@ -224,43 +280,31 @@ Examples:
     # Transaction costs (slippage, spread, liquidity)
     add_cost_model_arguments(parser)
 
-    # Benchmark and statistical significance
-    benchmark_group = parser.add_argument_group('benchmark and significance')
-    benchmark_group.add_argument(
-        '--benchmark', choices=list(BENCHMARK_CHOICES), default=BENCHMARK_BUY_AND_HOLD,
-        help=("Passive alternative the strategy is measured against: "
-              "'buy_and_hold' (default) buys at the first executable bar and holds "
-              "to the end, paying the same commission and the same cost model; "
-              "'none' reports the strategy's numbers with nothing to compare them to")
-    )
-    benchmark_group.add_argument(
-        '--min-trades-for-significance', type=int, default=DEFAULT_MIN_TRADES,
-        help=(f"Round trips below which no significance verdict is rendered "
-              f"(default: {DEFAULT_MIN_TRADES}). Below this the metrics are still "
-              f"reported, labelled as not meaningful")
-    )
-    benchmark_group.add_argument(
-        '--bootstrap-samples', type=int, default=DEFAULT_BOOTSTRAP_SAMPLES,
-        help=(f"Resamples for the bootstrap Sharpe confidence interval "
-              f"(default: {DEFAULT_BOOTSTRAP_SAMPLES}); 0 skips it")
-    )
-    benchmark_group.add_argument(
-        '--bootstrap-seed', type=int, default=DEFAULT_BOOTSTRAP_SEED,
-        help=(f"Seed for that bootstrap, so the interval is reproducible "
-              f"(default: {DEFAULT_BOOTSTRAP_SEED})")
-    )
+    # Benchmark, annualisation, order floor and statistical significance. This
+    # script is the only one that prints the bootstrap Sharpe interval, so it
+    # is the only one that gets the flags for it.
+    add_engine_arguments(parser, bootstrap=True)
 
 
     # Output options
-    # Get available exporters dynamically
-    available_exporters = ','.join(ExporterManager.get_available_exporter_names())
+    #
+    # The exporter choices come from niffler.exporters.registry, and --exporter-params
+    # is the generic path that reaches any registered exporter's constructor. The named
+    # flags below are conveniences for the options the shipped exporters happen to have;
+    # each defaults to None so only explicitly passed ones are forwarded. An option no
+    # chosen exporter accepts is an error, never silently ignored.
+    available_exporters = ','.join(get_available_exporters())
     parser.add_argument('--exporters', type=str, default='console',
                        help=f'Comma-separated list of exporters to use: {available_exporters} (default: console)')
-    parser.add_argument('--csv-output-dir', default='.',
+    parser.add_argument('--exporter-params',
+                       help='Exporter options as a JSON object, e.g. \'{"output_dir": "results"}\'. '
+                            'Works for any registered exporter; an option none of the chosen '
+                            'exporters accepts is reported with the accepted ones.')
+    parser.add_argument('--csv-output-dir', default=None,
                        help='Directory for CSV output files (default: current directory)')
     parser.add_argument('--symbol', default=None,
                        help='Symbol identifier for the data (default: extracted from filename)')
-    
+
     # Elasticsearch options (optional overrides for .env file configuration)
     parser.add_argument('--es-host',
                        help='Elasticsearch host (overrides ELASTICSEARCH_HOST env var)')
@@ -290,9 +334,7 @@ Examples:
     parser.add_argument('--log-level', default='INFO',
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                        help='Set logging level (default: INFO)')
-    parser.add_argument('--min-order-value', type=float, default=1.0,
-                       help='Minimum order value to execute trades (default: 1.0)')
-    
+
     args = parser.parse_args()
     
     # Configure logging
@@ -344,24 +386,14 @@ Examples:
         else:
             print("Risk Management: None")
         
-        # Transaction costs. Built before the engine so an unusable combination
-        # of flags fails before any work is done.
-        cost_model = build_cost_model(args)
-        report_cost_model(cost_model)
+        # Engine settings, built once. Constructed before the engine so an
+        # unusable combination of flags fails before any work is done.
+        run_config = build_run_config(args)
+        report_cost_model(run_config.cost_model)
 
-        # Initialize backtest engine
-        engine = BacktestEngine(
-            initial_capital=args.capital,
-            commission=args.commission,
-            min_order_value=args.min_order_value,
-            cost_model=cost_model,
-            benchmark=args.benchmark,
-            min_trades_for_significance=args.min_trades_for_significance,
-            bootstrap_samples=args.bootstrap_samples,
-            bootstrap_seed=args.bootstrap_seed
-        )
+        engine = BacktestEngine.from_config(run_config)
 
-        print(f"Benchmark: {args.benchmark}")
+        print(f"Benchmark: {run_config.benchmark}")
 
         print("Running backtest...")
 
@@ -374,13 +406,11 @@ Examples:
         # Parse exporters parameter
         exporter_names = [name.strip().lower() for name in args.exporters.split(',')]
 
-        # Create exporters - pass all options, each exporter will use what it needs
+        # Create exporters. Construction is generic: an exporter registered in
+        # niffler.exporters.registry is usable here with no change to this file, and
+        # each one is handed the options its constructor declares.
         exporter_manager.create_exporters_from_list(
-            exporter_names,
-            output_dir=args.csv_output_dir,
-            host=args.es_host,
-            port=args.es_port,
-            index_prefix=args.es_index_prefix
+            exporter_names, **build_exporter_options(args)
         )
 
         if exporter_manager.get_exporter_count() == 0:
@@ -399,10 +429,10 @@ Examples:
             result=result,
             strategy_params=strategy_params,
             symbol=symbol,
-            initial_capital=args.capital,
-            commission=args.commission,
+            initial_capital=run_config.initial_capital,
+            commission=run_config.commission,
             provenance=provenance,
-            cost_model=cost_model.description
+            cost_model=engine.cost_model.description
         )
 
         return report_export_outcome(export_result, exporter_manager.get_exporter_names())

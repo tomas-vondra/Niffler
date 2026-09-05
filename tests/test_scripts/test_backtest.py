@@ -205,7 +205,7 @@ class TestBacktestScript(unittest.TestCase):
             num_losing_trades=0
         )
         mock_engine.run_backtest.return_value = mock_result
-        mock_engine_class.return_value = mock_engine
+        mock_engine_class.from_config.return_value = mock_engine
         
         # Run main
         main()
@@ -214,7 +214,7 @@ class TestBacktestScript(unittest.TestCase):
         mock_setup_logging.assert_called_once()
         mock_load_data.assert_called_once()
         mock_strategy_class.assert_called_once()
-        mock_engine_class.assert_called_once()
+        mock_engine_class.from_config.assert_called_once()
         mock_engine.run_backtest.assert_called_once()
         
     @patch('scripts.backtest.setup_logging')
@@ -286,7 +286,7 @@ class TestBacktestScript(unittest.TestCase):
                 with patch('pandas.DataFrame.to_csv') as mock_to_csv:
                     mock_engine = MagicMock()
                     mock_engine.run_backtest.return_value = mock_result
-                    mock_engine_class.return_value = mock_engine
+                    mock_engine_class.from_config.return_value = mock_engine
                     
                     mock_strategy = MagicMock()
                     mock_strategy.get_description.return_value = "Test Strategy"
@@ -338,7 +338,7 @@ class TestBacktestScript(unittest.TestCase):
                             num_losing_trades=0
                         )
                         mock_engine.run_backtest.return_value = mock_result
-                        mock_engine_class.return_value = mock_engine
+                        mock_engine_class.from_config.return_value = mock_engine
                         
                         mock_strategy = MagicMock()
                         mock_strategy.get_description.return_value = "Test Strategy"
@@ -472,7 +472,7 @@ class TestBacktestExportReporting(unittest.TestCase):
 
         mock_engine = MagicMock()
         mock_engine.run_backtest.return_value = self._make_result()
-        mock_engine_class.return_value = mock_engine
+        mock_engine_class.from_config.return_value = mock_engine
 
         mock_manager = MagicMock()
         mock_manager.get_exporter_count.return_value = 1
@@ -512,7 +512,7 @@ class TestBacktestExportReporting(unittest.TestCase):
 
         mock_engine = MagicMock()
         mock_engine.run_backtest.return_value = self._make_result()
-        mock_engine_class.return_value = mock_engine
+        mock_engine_class.from_config.return_value = mock_engine
 
         mock_manager = MagicMock()
         mock_manager.get_exporter_count.return_value = 1
@@ -550,7 +550,7 @@ class TestBacktestExportReporting(unittest.TestCase):
 
         mock_engine = MagicMock()
         mock_engine.run_backtest.return_value = self._make_result()
-        mock_engine_class.return_value = mock_engine
+        mock_engine_class.from_config.return_value = mock_engine
 
         mock_manager = MagicMock()
         mock_manager.get_exporter_count.return_value = 0
@@ -589,7 +589,7 @@ class TestBacktestExportReporting(unittest.TestCase):
 
         mock_engine = MagicMock()
         mock_engine.run_backtest.return_value = self._make_result()
-        mock_engine_class.return_value = mock_engine
+        mock_engine_class.from_config.return_value = mock_engine
 
         provenance = {'code': {'git_sha': 'a' * 40}}
         mock_collect_provenance.return_value = provenance
@@ -645,7 +645,7 @@ class TestBenchmarkCommandLine(unittest.TestCase):
             strategy_class.return_value = MagicMock()
             engine = MagicMock()
             engine.run_backtest.return_value = result
-            engine_class.return_value = engine
+            engine_class.from_config.return_value = engine
 
             manager = MagicMock()
             manager.get_exporter_count.return_value = 1
@@ -657,34 +657,45 @@ class TestBenchmarkCommandLine(unittest.TestCase):
             with patch('builtins.print'):
                 exit_code = main()
 
-        return exit_code, engine_class.call_args.kwargs
+        # The CLI no longer hands the engine ten loose arguments: it builds one
+        # RunConfig and the engine is constructed from it.
+        return exit_code, engine_class.from_config.call_args.args[0]
 
     def test_defaults_are_buy_and_hold_and_thirty_trades(self):
-        exit_code, kwargs = self._run(['backtest.py', '--data', 'test.csv'])
+        exit_code, config = self._run(['backtest.py', '--data', 'test.csv'])
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(kwargs['benchmark'], 'buy_and_hold')
-        self.assertEqual(kwargs['min_trades_for_significance'], 30)
+        self.assertEqual(config.benchmark, 'buy_and_hold')
+        self.assertEqual(config.min_trades_for_significance, 30)
 
     def test_benchmark_can_be_switched_off(self):
-        _, kwargs = self._run(['backtest.py', '--data', 'test.csv',
+        _, config = self._run(['backtest.py', '--data', 'test.csv',
                                '--benchmark', 'none'])
 
-        self.assertEqual(kwargs['benchmark'], 'none')
+        self.assertEqual(config.benchmark, 'none')
 
     def test_significance_gate_is_configurable(self):
-        _, kwargs = self._run(['backtest.py', '--data', 'test.csv',
+        _, config = self._run(['backtest.py', '--data', 'test.csv',
                                '--min-trades-for-significance', '50'])
 
-        self.assertEqual(kwargs['min_trades_for_significance'], 50)
+        self.assertEqual(config.min_trades_for_significance, 50)
 
     def test_bootstrap_flags_reach_the_engine(self):
-        _, kwargs = self._run(['backtest.py', '--data', 'test.csv',
+        _, config = self._run(['backtest.py', '--data', 'test.csv',
                                '--bootstrap-samples', '250',
                                '--bootstrap-seed', '7'])
 
-        self.assertEqual(kwargs['bootstrap_samples'], 250)
-        self.assertEqual(kwargs['bootstrap_seed'], 7)
+        self.assertEqual(config.bootstrap_samples, 250)
+        self.assertEqual(config.bootstrap_seed, 7)
+
+    def test_annualisation_and_the_order_floor_reach_the_engine(self):
+        """Two knobs the engine has always had and no CLI could reach."""
+        _, config = self._run(['backtest.py', '--data', 'test.csv',
+                               '--periods-per-year', '252',
+                               '--min-order-value', '25'])
+
+        self.assertEqual(config.periods_per_year, 252.0)
+        self.assertEqual(config.min_order_value, 25.0)
 
     def test_an_unknown_benchmark_is_rejected_by_argparse(self):
         with patch('sys.argv', ['backtest.py', '--data', 'test.csv',

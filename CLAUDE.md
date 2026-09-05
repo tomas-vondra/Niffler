@@ -36,7 +36,12 @@ The short version, because these are easy to "helpfully" undo:
 | Whole-grid statistics come from a **complete** result set; a score-truncated one reports nothing | Print quartiles or a beat-the-baseline fraction computed from the survivors of `_manage_memory_efficient_results` |
 | There is **one** strategy registry (`niffler/strategies/registry.py`) and every CLI's `--strategy` choices derive from it | Hardcode a `choices=[...]` list, or define a second name→class map in a script (that exact shadowing bug made `analyze.py` reject strategies `optimize.py` accepted) |
 | `niffler/strategies/` imports **nothing** from `niffler/optimization/`; a strategy declares `PARAMETER_SPEC` as a plain dict | Import `ParameterSpace` into a strategy module - `niffler/optimization/__init__` imports `optimizer_factory`, which imports the registry, so it is a circular import |
+| Engine settings travel as **one** `RunConfig`, built once by `scripts/common.build_run_config` | Add an eleventh knob to `BacktestEngine.__init__` without a field on `RunConfig`, hand an analyzer or a worker a loose `initial_capital`/`commission`/`cost_model` triple, or re-check a range that `RunConfig.__post_init__` already checks |
+| A screening gate with **no** measurable value stops the run | Treat a `None` retention / efficiency / BEAT% as a pass, or as a 0.0 |
+| A cross-asset comparison pairs each fold with buy-and-hold over the **same bars** | Compare a fold return against a benchmark computed over the whole file, or against a fixed number - the window length would drive the verdict |
 | A strategy parameter the chosen strategy does not accept is an **error** | Silently drop an unknown `--params` key or a foreign flag, which runs the strategy with defaults while the user thinks it was configured |
+| There is **one** registry per extension point - strategies, exporters (`niffler/exporters/registry.py`), data sources (`niffler/data/downloaders/registry.py`) - and what each accepts is derived with `inspect.signature` | Hand-write a per-name kwargs filter or an `--source`/`--exporters` `choices=[...]` list; a forgotten branch builds the exporter on **defaults**, reports success and exits 0 |
+| The exported metadata document has **one** builder, `ExporterManager.create_metadata` | Add a `create_metadata` back to `BaseExporter` - the deleted one silently omitted `profit_factor`, the six trade statistics and every benchmark and significance field |
 | Every strategy parameter has a **default** and every strategy accepts `position_size` / `risk_manager` | Add a required constructor argument - the library builds strategies as `strategy_class(**parameters)` |
 | There is **one** risk registry (`niffler/risk/registry.py`); `--risk-manager` choices derive from it, and `niffler/risk/` imports nothing from `niffler/backtesting/` or `niffler/strategies/` | Hardcode `choices=['none', 'fixed']`, or import the engine into a risk module - the engine imports the `RiskManager` protocol, so it closes an import cycle |
 | A risk manager holds **no position state**; it receives a `PortfolioSnapshot` per call, and `evaluate_trade` has **no default** for it | Put `self._positions` back, or default the snapshot to flat - which silently disables `max_positions` and re-breaks parallel walk-forward folds |
@@ -124,7 +129,14 @@ python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv 
 
 # Run backtest with risk management
 python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv --strategy simple_ma --risk-manager fixed --max-position-size 0.1 --stop-loss-pct 0.05
+
+# Any registered exporter is configured through --exporter-params (mirrors --params)
+python scripts/backtest.py --data data/BTCUSDT_binance_1d_20240101_20240105.csv --strategy simple_ma \
+  --exporters csv --exporter-params '{"output_dir": "results/"}'
 ```
+
+Note: an option none of the chosen exporters accepts is an error. `--exporters console
+--csv-output-dir results/` exits 1 rather than writing nothing and reporting success.
 
 ### Strategy Optimization
 Parameter optimization for trading strategies via `scripts/optimize.py`:
@@ -178,11 +190,44 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
 python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_carlo --strategy simple_ma --params_file optimization_results.json --n_jobs 8
 ```
 
+Note: `--benchmark`, `--periods-per-year`, `--min-order-value` and
+`--min-trades-for-significance` now reach the engine inside every fold and every
+simulated path, because the analyzers carry a `RunConfig` rather than three loose
+numbers. `--execution-timing` deliberately does not exist on any CLI.
+
+### Screening
+Run the whole pipeline as a funnel via `scripts/screen.py`, stopping at the first gate
+that fails:
+
+```bash
+# backtest -> optimize -> walk-forward -> cross-asset compare
+python scripts/screen.py --data data/SPY_research.csv --strategy breakout \
+  --compare-data data/QQQ_research.csv data/GLD_research.csv data/BTCUSDT_research.csv
+
+# Argue with a threshold; the chosen value is printed whether or not it fires
+python scripts/screen.py --data data/SPY_research.csv --strategy simple_ma \
+  --min-efficiency 0.5 --min-beat-pct 60 --cost-model fixed --slippage-bps 5
+
+# Report every stage even after one fails (still exits 3)
+python scripts/screen.py --data data/SPY_research.csv --strategy rsi --force
+```
+
+Exit codes: `0` every gate passed, `3` a gate stopped the run, `1` the run failed.
+
 ## Architecture
 
 ### Core Components
 - `niffler/data/downloaders/` - Data acquisition from exchanges and APIs
   - `base_downloader.py` - Abstract base class for data downloaders
+  - `registry.py` - **The** data-source registry (`DOWNLOAD_SOURCES`, `DownloadSource`,
+    `DownloadRequest`, `get_available_sources`, `get_source`, `get_source_option_names`,
+    `create_downloader`, `build_request`, `build_download_kwargs`). `--source` choices,
+    the default output filename (`DownloadSource.file_tag`) and the `download()` call all
+    derive from it, so adding a source is one entry. The two downloaders genuinely
+    disagree about `download()` (CCXT: exchange id + millisecond epochs; Yahoo: ticker +
+    date strings), so each entry carries its own `build_download_kwargs`; the result is
+    checked against the real signature. Which options a source accepts is read off
+    `download()`, which is why `--exchange` belongs to ccxt and is an error on yahoo
   - `ccxt_downloader.py` - Cryptocurrency exchange data via CCXT
   - `yahoo_finance_downloader.py` - Traditional financial data via yfinance
 - `niffler/data/preprocessors/` - Data cleaning and validation pipeline
@@ -225,6 +270,19 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
     Student-t survival function (`student_t_two_sided_p`,
     `regularized_incomplete_beta`) - scipy is **not** a dependency and a normal
     approximation is not acceptable at n=30
+  - `run_config.py` - `RunConfig`, the **single** carrier of the engine's ten
+    settings, plus `resolve_run_config` and the `EXECUTION_TIMINGS` tuple. A frozen,
+    picklable dataclass, so it crosses the spawn boundary into a worker intact - which
+    is where knobs used to be dropped: five of the six engine construction sites
+    forwarded only `initial_capital`, `commission` and `cost_model`, so there was no
+    way to run walk-forward at `periods_per_year=252` or without a benchmark. It
+    imports only leaf modules of its own layer and never `backtest_engine`, so the
+    engine can import it; `BacktestEngine.from_config` is the one place a config
+    becomes an engine, and `RunConfig.__post_init__` is the one place the ranges are
+    checked (the engine builds one from its own arguments rather than repeating them,
+    and `BaseOptimizer` / both analyzers no longer re-check a subset).
+    `to_metadata()` is the one serialisation, used by the optimizer's saved results,
+    both analyzers' `analysis_parameters`, `compare.py` and `screen.py`
   - `backtest_result.py` - Performance metrics and results
 - `niffler/strategies/` - Trading strategy implementations
   - `base_strategy.py` - Abstract base class for strategies
@@ -301,11 +359,21 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
     `--risk-manager kelly` is rejected by argparse rather than crashing mid-run.
     `FixedRiskManager` is the only usable one
 - `niffler/exporters/` - Modular result export system
-  - `base_exporter.py` - Abstract base class for result exporters
+  - `base_exporter.py` - Abstract base class for result exporters. It deliberately has
+    **no** `create_metadata`: the document is built once by the manager
+  - `registry.py` - **The** exporter registry (`EXPORTER_CLASSES`, `get_exporter_class`,
+    `get_available_exporters`, `get_exporter_option_names`, `create_exporter`). Options
+    come from each exporter's `__init__` via `inspect.signature`, so registering the class
+    is the whole edit; an option the exporter does not accept raises naming what it does
   - `console_exporter.py` - Human-readable console output
   - `csv_exporter.py` - CSV file export for analysis tools
   - `elasticsearch_exporter.py` - Elasticsearch integration for visualization
-  - `exporter_manager.py` - Multi-exporter coordination, registry and `ExportSummary`
+  - `exporter_manager.py` - Multi-exporter coordination, `create_metadata` and
+    `ExportSummary`. It holds **no** name→class map of its own.
+    `create_exporters_from_list` broadcasts one option pool over several exporters and
+    hands each the subset its signature declares; an option **none** of them accepts
+    raises, which is kept distinct from a constructor rejecting its own config (that stays
+    a recorded creation failure)
   - `json_utils.py` - Compatibility re-export of `niffler/utils/json_utils.py`
 - `niffler/utils/` - Layer-neutral helpers. **Nothing here may import from the
   backtesting / optimization / exporters layers**, so importing a helper never drags an
@@ -331,9 +399,38 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
 - `config/elasticsearch/mappings/` - Elasticsearch schema definitions
   (`backtests`, `portfolio`, `trades`, `positions`)
 - `scripts/` - Command-line interfaces for core functionality
-  - `common.py` - **The** shared OHLCV CSV loader (`load_ohlcv_csv`) *and* the shared
+  - `compare.py` - Cross-dataset comparison. Runs the same walk-forward over several
+    datasets and reports them side by side. Two conventions make the table mean
+    something: every fold is measured against buy-and-hold over the **same bars** with
+    the same costs (an absolute return is not comparable across assets, and a six-month
+    fold judged against a multi-year benchmark is not comparable to anything), and
+    `--step` defaults to `--test_window` so the folds being counted as evidence do not
+    overlap. A pair that fails becomes a row carrying its error and makes the run exit
+    non-zero - it never silently shrinks the table
+  - `screen.py` - The pipeline as a funnel: backtest → optimize → walk-forward →
+    cross-asset compare, stopping at the first gate that fails with a line that names
+    the stage, the measurement, the threshold and the flag that set it. It computes
+    nothing itself - every gated number comes from the library or from
+    `compare.evaluate`, which it calls once for the primary asset and reads twice
+    (stages 3 and 4). `Gate` is a pure dataclass, so every threshold decision is
+    testable without market data. A gate whose value is `None` **stops**: `retention`,
+    `fraction_beating_baseline` and `median_efficiency_ratio` are all legitimately
+    `None`, and that is an absence of evidence rather than a zero. Exit codes: `0`
+    every gate passed, `3` a gate stopped the run (a normal outcome - `1` is a real
+    failure and argparse owns `2`), and `--force` runs every stage but still exits `3`
+  - `common.py` - **The** shared OHLCV CSV loader (`load_ohlcv_csv`), the shared
     transaction-cost CLI (`add_cost_model_arguments`, `build_cost_model`,
-    `report_cost_model`), used by `backtest.py`, `analyze.py` and `optimize.py`. A cost
+    `report_cost_model`) *and* the shared run-configuration CLI
+    (`add_engine_arguments`, `build_run_config`, `report_run_config`), used by
+    `backtest.py`, `analyze.py`, `optimize.py`, `compare.py` and `screen.py`.
+    `build_run_config` is **the** place parsed arguments become engine settings, so a
+    field added to `RunConfig` is reachable from every script at once and no script can
+    populate half of it. Every CLI spells its capital flag differently
+    (`--capital` / `--initial_capital` / `--initial-capital`) but they all use
+    `dest='initial_capital'`. `execution_timing` deliberately has **no** flag.
+    `compare.py` and `screen.py` pass `benchmark=False`: both gate on beating
+    buy-and-hold, so `--benchmark none` would empty the table rather than configure it.
+    A cost
     flag belonging to a different `--cost-model` is an error, never silently ignored.Header normalisation, timestamp-column detection
     (`timestamp`/`date`/`datetime`/`time` plus pandas' unnamed index column), datetime
     parsing, required-column and duplicate-timestamp validation, index sorting, optional
@@ -422,6 +519,9 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
   boundary that reports a message and exits; library code catches specific types
 - `ExporterManager.export_backtest_result` returns an `ExportSummary`; exporters raise
   `ExportError` rather than logging "skipping" and returning normally
+- An exporter option no chosen exporter accepts, and a `--source` option the chosen source
+  does not accept, both **raise** rather than being filtered away - the failure they used
+  to produce was invisible (defaults used, success reported, exit 0)
 - Analyzers count failed folds/simulations and warn about survivorship bias above 5%
 
 ### Analysis Framework Architecture
@@ -512,6 +612,13 @@ The modular export system enables flexible output of backtest results to multipl
 - **CSV Exporter**: Structured file export for external analysis tools (Excel, Python, R)
 - **Elasticsearch Exporter**: Database integration for advanced visualization and dashboards
 
+#### Adding an Exporter
+One class in `niffler/exporters/` plus one line in `EXPORTER_CLASSES`. No kwargs branch, no
+CLI flag: `--exporters` choices and `--exporter-params` (a JSON object, mirroring
+`--params`) both derive from the registry. Every constructor parameter needs a default and
+no exporter may take `**kwargs` - `tests/test_exporters/test_registry.py` enforces both,
+because `**kwargs` makes the derived option set "everything".
+
 #### Export Features
 - **Multi-Export Support**: Results can be exported to multiple destinations simultaneously
 - **Unique Identification**: Each backtest receives a UUID for tracking and correlation
@@ -524,8 +631,8 @@ The modular export system enables flexible output of backtest results to multipl
   flag, data-file SHA-256, Python and library versions). Collected **once** by the caller
   that owns the run (`scripts/backtest.py`) and passed into
   `ExporterManager.export_backtest_result(..., provenance=...)`; collecting it per exporter
-  would re-hash the input file for every destination. `BaseExporter.create_metadata` and
-  `ExporterManager._create_metadata` add the key only when a record is supplied. The
+  would re-hash the input file for every destination. `ExporterManager.create_metadata` -
+  the **only** metadata builder - adds the key only when a record is supplied. The
   console exporter prints a one-line summary with a `DIRTY` marker, the CSV exporter writes
   a `{base}_provenance.json` sidecar (named with the shared `sanitize_path_component`), and
   `config/elasticsearch/mappings/backtests.json` maps the block explicitly - SHAs, versions
@@ -546,7 +653,10 @@ The modular export system enables flexible output of backtest results to multipl
   - `ELASTICSEARCH_USERNAME` / `ELASTICSEARCH_PASSWORD` - basic auth (both required)
   - `ELASTICSEARCH_TIMEOUT` - Request timeout in seconds (default 30)
   - `ELASTICSEARCH_VERIFY_CERTS` - TLS certificate verification for https (default true)
-- **Command-line Overrides**: Runtime configuration via `--es-host`, `--es-port`, `--es-index-prefix`
+- **Command-line Overrides**: Runtime configuration via `--es-host`, `--es-port`,
+  `--es-index-prefix`, `--csv-output-dir` and the generic `--exporter-params`. Each flag
+  defaults to `None` so an explicitly passed one can be told apart from an unset one, and
+  only what was passed is forwarded
 - **Mapping Files**: Elasticsearch schema definitions in `config/elasticsearch/mappings/`
 - **Failure Reporting**: `ExporterManager.export_backtest_result` returns an `ExportSummary`
   (`successes`, `failures`, `backtest_id`, `ok`). Exporters raise rather than skipping
@@ -559,6 +669,9 @@ The modular export system enables flexible output of backtest results to multipl
 - Test packages mirror the source layout: `tests/test_backtesting`, `test_analysis`,
   `test_downloaders`, `test_preprocessors`, `test_optimization`, `test_risk`,
   `test_exporters`, `test_scripts`, `test_strategies`, `test_utils`
+- `tests/test_exporters/test_registry.py` and `tests/test_downloaders/test_registry.py`
+  do the same for exporters and data sources: they iterate their registry, so a newly
+  registered exporter or source is covered automatically
 - `tests/test_strategies/test_registry.py` holds the **shared strategy contract**: it
   iterates the registry, so a newly registered strategy is covered automatically. Its
   look-ahead check recomputes each bar's signal from data truncated at that bar. That

@@ -11,13 +11,33 @@ import argparse
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, project_root)
 
+from dataclasses import replace
+
 from scripts import download_data as dd
-from niffler.data import CCXTDownloader, YahooFinanceDownloader
+from niffler.data.downloaders import registry as downloader_registry
 from niffler.data.exceptions import (
     DownloadError,
     InvalidTimeframeError,
     NoDataAvailableError,
 )
+
+
+def patch_source(name, downloader_class):
+    """Swap one registered source's downloader class for a test double.
+
+    The script no longer imports the downloader classes - it looks them up in the
+    registry - so a test double is installed by patching the registration, which
+    is also the check that the registry really is the only construction path.
+
+    The double is lent the real ``download`` attribute because the registry reads a
+    source's accepted options off that signature; a bare Mock advertises none.
+    """
+    spec = downloader_registry.DOWNLOAD_SOURCES[name]
+    downloader_class.download = spec.downloader_class.download
+    return patch.dict(
+        downloader_registry.DOWNLOAD_SOURCES,
+        {name: replace(spec, downloader_class=downloader_class)}
+    )
 
 
 class TestDownloadDataMain(unittest.TestCase):
@@ -36,13 +56,13 @@ class TestDownloadDataMain(unittest.TestCase):
         self.patcher_getcwd.stop()
         shutil.rmtree(self.temp_dir)
 
-    @patch('scripts.download_data.CCXTDownloader')
     @patch('scripts.download_data.os.getcwd')
     @patch('scripts.download_data.os.makedirs')
     @patch('sys.argv', ['script.py', '--source', 'ccxt', '--symbol', 'BTC/USDT', '--start_date', '2022-01-01', '--end_date', '2022-01-02'])
-    def test_main_ccxt_success(self, mock_makedirs, mock_getcwd, mock_ccxt_downloader):
+    def test_main_ccxt_success(self, mock_makedirs, mock_getcwd):
         """Test main function with successful ccxt data download."""
         mock_getcwd.return_value = self.temp_dir
+        mock_ccxt_downloader = Mock()
 
         # Create mock DataFrame
         mock_df = pd.DataFrame({
@@ -60,7 +80,8 @@ class TestDownloadDataMain(unittest.TestCase):
         mock_ccxt_downloader.return_value = mock_downloader_instance
 
         # Mock DataFrame.to_csv
-        with patch.object(pd.DataFrame, 'to_csv') as mock_to_csv:
+        with patch_source('ccxt', mock_ccxt_downloader), \
+                patch.object(pd.DataFrame, 'to_csv') as mock_to_csv:
             dd.main()
 
             # Verify that downloader was created and used
@@ -74,13 +95,13 @@ class TestDownloadDataMain(unittest.TestCase):
             # Verify directory creation
             mock_makedirs.assert_called_once()
 
-    @patch('scripts.download_data.YahooFinanceDownloader')
     @patch('scripts.download_data.os.getcwd')
     @patch('scripts.download_data.os.makedirs')
     @patch('sys.argv', ['script.py', '--source', 'yahoo', '--symbol', 'BTC-USD', '--start_date', '2022-01-01', '--end_date', '2022-01-02'])
-    def test_main_yahoo_success(self, mock_makedirs, mock_getcwd, mock_yahoo_downloader):
+    def test_main_yahoo_success(self, mock_makedirs, mock_getcwd):
         """Test main function with successful yahoo data download."""
         mock_getcwd.return_value = self.temp_dir
+        mock_yahoo_downloader = Mock()
 
         # Create mock DataFrame
         mock_df = pd.DataFrame({
@@ -98,7 +119,8 @@ class TestDownloadDataMain(unittest.TestCase):
         mock_downloader_instance.download.return_value = mock_df
         mock_yahoo_downloader.return_value = mock_downloader_instance
 
-        with patch.object(pd.DataFrame, 'to_csv') as mock_to_csv:
+        with patch_source('yahoo', mock_yahoo_downloader), \
+                patch.object(pd.DataFrame, 'to_csv') as mock_to_csv:
             dd.main()
 
             # Verify that downloader was created and used
@@ -143,13 +165,13 @@ class TestDownloadDataMain(unittest.TestCase):
             dd.main()
             mock_log_error.assert_called_with("--exchange is required for ccxt source.")
 
-    @patch('scripts.download_data.CCXTDownloader')
     @patch('scripts.download_data.os.getcwd')
     @patch('scripts.download_data.os.makedirs')
     @patch('sys.argv', ['script.py', '--source', 'ccxt', '--symbol', 'BTC/USDT', '--start_date', '2022-01-01'])
-    def test_main_default_end_date(self, mock_makedirs, mock_getcwd, mock_ccxt_downloader):
+    def test_main_default_end_date(self, mock_makedirs, mock_getcwd):
         """Test main function with default end date (today)."""
         mock_getcwd.return_value = self.temp_dir
+        mock_ccxt_downloader = Mock()
         
         # Mock downloader instance and methods
         mock_downloader_instance = Mock()
@@ -157,7 +179,8 @@ class TestDownloadDataMain(unittest.TestCase):
         mock_downloader_instance.download.return_value = None  # No data returned
         mock_ccxt_downloader.return_value = mock_downloader_instance
 
-        with patch('scripts.download_data.pd.Timestamp.now') as mock_now:
+        with patch_source('ccxt', mock_ccxt_downloader), \
+                patch('scripts.download_data.pd.Timestamp.now') as mock_now:
             mock_now.return_value.strftime.return_value = '2022-01-03'
             dd.main()
 
@@ -165,34 +188,33 @@ class TestDownloadDataMain(unittest.TestCase):
             mock_ccxt_downloader.assert_called_once()
             mock_downloader_instance.download.assert_called_once()
 
-    @patch('scripts.download_data.CCXTDownloader')
     @patch('scripts.download_data.os.getcwd')
     @patch('scripts.download_data.os.makedirs')
     @patch('sys.argv', ['script.py', '--source', 'ccxt', '--symbol', 'BTC/USDT', '--start_date', '2022-01-01', '--end_date', '2022-01-02'])
-    def test_main_returns_non_zero_when_downloader_returns_none(self, mock_makedirs, mock_getcwd,
-                                                                mock_ccxt_downloader):
+    def test_main_returns_non_zero_when_downloader_returns_none(self, mock_makedirs, mock_getcwd):
         """A downloader that returns None must not look like a success."""
         mock_getcwd.return_value = self.temp_dir
+        mock_ccxt_downloader = Mock()
 
         mock_downloader_instance = Mock()
         mock_downloader_instance.validate_timeframe.return_value = True
         mock_downloader_instance.download.return_value = None
         mock_ccxt_downloader.return_value = mock_downloader_instance
 
-        with patch('scripts.download_data.logging.error') as mock_log_error:
+        with patch_source('ccxt', mock_ccxt_downloader), \
+                patch('scripts.download_data.logging.error') as mock_log_error:
             exit_code = dd.main()
 
         self.assertEqual(exit_code, 1)
         mock_log_error.assert_called_once()
 
-    @patch('scripts.download_data.CCXTDownloader')
     @patch('scripts.download_data.os.getcwd')
     @patch('scripts.download_data.os.makedirs')
     @patch('sys.argv', ['script.py', '--source', 'ccxt', '--symbol', 'BTC/USDT', '--start_date', '2022-01-01', '--end_date', '2022-01-02'])
-    def test_main_returns_non_zero_when_downloader_raises(self, mock_makedirs, mock_getcwd,
-                                                          mock_ccxt_downloader):
+    def test_main_returns_non_zero_when_downloader_raises(self, mock_makedirs, mock_getcwd):
         """A downloader raising a typed error is reported, not propagated."""
         mock_getcwd.return_value = self.temp_dir
+        mock_ccxt_downloader = Mock()
 
         class DownloadError(Exception):
             """Stand-in for the downloaders' typed exceptions."""
@@ -202,19 +224,20 @@ class TestDownloadDataMain(unittest.TestCase):
         mock_downloader_instance.download.side_effect = DownloadError("exchange unreachable")
         mock_ccxt_downloader.return_value = mock_downloader_instance
 
-        with patch('scripts.download_data.logging.error') as mock_log_error:
+        with patch_source('ccxt', mock_ccxt_downloader), \
+                patch('scripts.download_data.logging.error') as mock_log_error:
             exit_code = dd.main()
 
         self.assertEqual(exit_code, 1)
         self.assertIn("exchange unreachable", str(mock_log_error.call_args_list))
 
-    @patch('scripts.download_data.CCXTDownloader')
     @patch('scripts.download_data.os.getcwd')
     @patch('scripts.download_data.os.makedirs')
     @patch('sys.argv', ['script.py', '--source', 'ccxt', '--symbol', 'BTC/USDT', '--start_date', '2022-01-01', '--end_date', '2022-01-02'])
-    def test_main_returns_zero_on_success(self, mock_makedirs, mock_getcwd, mock_ccxt_downloader):
+    def test_main_returns_zero_on_success(self, mock_makedirs, mock_getcwd):
         """A successful download returns exit code 0."""
         mock_getcwd.return_value = self.temp_dir
+        mock_ccxt_downloader = Mock()
 
         mock_downloader_instance = Mock()
         mock_downloader_instance.validate_timeframe.return_value = True
@@ -223,7 +246,8 @@ class TestDownloadDataMain(unittest.TestCase):
         })
         mock_ccxt_downloader.return_value = mock_downloader_instance
 
-        with patch.object(pd.DataFrame, 'to_csv'):
+        with patch_source('ccxt', mock_ccxt_downloader), \
+                patch.object(pd.DataFrame, 'to_csv'):
             exit_code = dd.main()
 
         self.assertEqual(exit_code, 0)
@@ -276,7 +300,7 @@ class TestTypedDownloaderExceptions(unittest.TestCase):
                 '--start_date', '2022-01-01', '--end_date', '2022-01-02']
 
         with patch('sys.argv', argv):
-            with patch('scripts.download_data.CCXTDownloader', return_value=downloader):
+            with patch_source('ccxt', Mock(return_value=downloader)):
                 with patch('scripts.download_data.os.makedirs'):
                     with patch('scripts.download_data.logging.error') as mock_error:
                         exit_code = dd.main()
@@ -327,7 +351,8 @@ class TestArgumentParser(unittest.TestCase):
     def test_required_arguments(self):
         """Test that required arguments are enforced."""
         parser = argparse.ArgumentParser(description='Download historical market data.')
-        parser.add_argument('--source', type=str, required=True, choices=['ccxt', 'yahoo'])
+        parser.add_argument('--source', type=str, required=True,
+                            choices=downloader_registry.get_available_sources())
         parser.add_argument('--symbol', type=str, required=True)
         parser.add_argument('--start_date', type=str, required=True)
 
@@ -338,13 +363,118 @@ class TestArgumentParser(unittest.TestCase):
     def test_valid_source_choices(self):
         """Test that only valid source choices are accepted."""
         parser = argparse.ArgumentParser(description='Download historical market data.')
-        parser.add_argument('--source', type=str, required=True, choices=['ccxt', 'yahoo'])
+        parser.add_argument('--source', type=str, required=True,
+                            choices=downloader_registry.get_available_sources())
         parser.add_argument('--symbol', type=str, required=True)
         parser.add_argument('--start_date', type=str, required=True)
 
         # Should raise SystemExit for invalid source
         with self.assertRaises(SystemExit):
             parser.parse_args(['--source', 'invalid', '--symbol', 'BTC/USDT', '--start_date', '2022-01-01'])
+
+
+class TestSourceOptions(unittest.TestCase):
+    """A flag the chosen source does not accept is an error, not a no-op."""
+
+    def _run(self, argv):
+        with patch('sys.argv', argv), \
+                patch('scripts.download_data.os.makedirs'), \
+                patch('scripts.download_data.setup_logging'), \
+                patch('scripts.download_data.logging.error') as mock_error:
+            exit_code = dd.main()
+
+        return exit_code, " | ".join(str(call.args[0]) for call in mock_error.call_args_list)
+
+    def test_exchange_on_yahoo_is_rejected_not_ignored(self):
+        exit_code, messages = self._run([
+            'script.py', '--source', 'yahoo', '--symbol', 'SPY',
+            '--start_date', '2024-01-01', '--end_date', '2024-01-05',
+            '--exchange', 'binance',
+        ])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Source 'yahoo' does not accept --exchange", messages)
+        self.assertIn('no source-specific options', messages)
+
+    def test_an_empty_exchange_on_ccxt_is_still_required(self):
+        exit_code, messages = self._run([
+            'script.py', '--source', 'ccxt', '--symbol', 'BTC/USDT',
+            '--start_date', '2024-01-01', '--end_date', '2024-01-05',
+            '--exchange', '',
+        ])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn('--exchange is required for ccxt source.', messages)
+
+    def test_an_unset_exchange_still_defaults_to_binance(self):
+        """The default moved from argparse into the ccxt registration."""
+        args = argparse.Namespace(source='ccxt', exchange=None)
+
+        self.assertEqual({}, dd.build_source_options(args))
+        request = downloader_registry.build_request(
+            'ccxt', symbol='BTC/USDT', timeframe='1d',
+            start_date='2024-01-01', end_date='2024-01-05',
+            start=pd.Timestamp('2024-01-01'), end=pd.Timestamp('2024-01-05'),
+            options={}
+        )
+        self.assertEqual('binance', request.options['exchange_id'])
+
+
+class TestANewSourceNeedsOneEdit(unittest.TestCase):
+    """One registry entry makes a source reachable from the CLI."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.temp_dir)
+
+        self.downloader = Mock()
+        self.downloader.validate_timeframe.return_value = True
+        self.downloader.download.return_value = pd.DataFrame({
+            'open': [1.0], 'high': [2.0], 'low': [0.5], 'close': [1.5], 'volume': [10.0]
+        })
+        downloader_class = Mock(return_value=self.downloader)
+        downloader_class.download = downloader_registry.DOWNLOAD_SOURCES[
+            'ccxt'].downloader_class.download
+
+        probe = downloader_registry.DownloadSource(
+            downloader_class=downloader_class,
+            build_download_kwargs=lambda request: {
+                'exchange_id': request.options['exchange_id'],
+                'symbol': request.symbol,
+                'timeframe': request.timeframe,
+                'start_ms': 0,
+                'end_ms': 1,
+            },
+            option_defaults={'exchange_id': 'probe-venue'},
+            file_tag=lambda request: 'probe-tag',
+        )
+        patcher = patch.dict(
+            downloader_registry.DOWNLOAD_SOURCES, {'probe': probe}
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_the_new_source_is_selectable_and_names_its_own_file(self):
+        written = {}
+
+        def fake_to_csv(self_df, path, *args, **kwargs):
+            written['path'] = path
+
+        argv = ['script.py', '--source', 'probe', '--symbol', 'BTC/USDT',
+                '--start_date', '2024-01-01', '--end_date', '2024-01-05']
+        with patch('sys.argv', argv), \
+                patch('scripts.download_data.os.getcwd', return_value=self.temp_dir), \
+                patch('scripts.download_data.setup_logging'), \
+                patch.object(pd.DataFrame, 'to_csv', fake_to_csv):
+            exit_code = dd.main()
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(written['path'].endswith('BTCUSDT_probe-tag_1d_20240101_20240105.csv'),
+                        written['path'])
+        self.downloader.download.assert_called_once_with(
+            exchange_id='probe-venue', symbol='BTC/USDT', timeframe='1d',
+            start_ms=0, end_ms=1
+        )
 
 
 class TestPartialDownloadHandling(unittest.TestCase):
@@ -380,7 +510,7 @@ class TestPartialDownloadHandling(unittest.TestCase):
                 '--start_date', '2022-01-01', '--end_date', '2022-01-02']
         with patch('sys.argv', argv), \
                 patch('scripts.download_data.os.getcwd', return_value=self.temp_dir), \
-                patch('scripts.download_data.CCXTDownloader', return_value=downloader), \
+                patch_source('ccxt', Mock(return_value=downloader)), \
                 patch.object(pd.DataFrame, 'to_csv', fake_to_csv), \
                 patch('scripts.download_data.logging.error') as mock_error:
             exit_code = dd.main()
@@ -414,12 +544,12 @@ class TestPartialDownloadHandling(unittest.TestCase):
 class TestDownloadDataLogLevel(unittest.TestCase):
     """--log-level must reach setup_logging, and default to INFO."""
 
-    @patch('scripts.download_data.CCXTDownloader')
     @patch('scripts.download_data.os.getcwd')
     @patch('scripts.download_data.os.makedirs')
-    def _run_main(self, argv, mock_makedirs, mock_getcwd, mock_ccxt):
+    def _run_main(self, argv, mock_makedirs, mock_getcwd):
         """Run main() with a stubbed download and report the level requested."""
         mock_getcwd.return_value = tempfile.mkdtemp()
+        mock_ccxt = Mock()
 
         mock_downloader = Mock()
         mock_downloader.validate_timeframe.return_value = True
@@ -429,7 +559,7 @@ class TestDownloadDataLogLevel(unittest.TestCase):
         })
         mock_ccxt.return_value = mock_downloader
 
-        with patch('sys.argv', argv):
+        with patch_source('ccxt', mock_ccxt), patch('sys.argv', argv):
             with patch('scripts.download_data.setup_logging') as mock_setup:
                 with patch.object(pd.DataFrame, 'to_csv'):
                     dd.main()

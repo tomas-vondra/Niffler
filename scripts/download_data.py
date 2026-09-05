@@ -5,7 +5,7 @@ import os
 import logging
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 # Running "python scripts/download_data.py" puts scripts/ on sys.path but not
 # the repository root, so the root has to be added for "import niffler" to work.
@@ -13,13 +13,67 @@ from typing import Optional
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from niffler.data import CCXTDownloader, YahooFinanceDownloader
+from niffler.data.downloaders.registry import (
+    build_download_kwargs,
+    build_request,
+    create_downloader,
+    get_available_sources,
+    get_source,
+    get_source_option_names,
+)
 from niffler.data.exceptions import (
     DownloadError,
     InvalidTimeframeError,
     NoDataAvailableError,
 )
 from niffler.config.logging import setup_logging
+
+
+# Flags that carry a source-specific option: option name -> (attribute, flag).
+# Each defaults to None so an explicitly passed flag can be told apart from an
+# unset one; the option names are matched against the source's download()
+# signature, so a flag the chosen source does not accept is an error.
+SOURCE_OPTION_FLAGS = {
+    'exchange_id': ('exchange', '--exchange'),
+}
+
+
+def build_source_options(args) -> Optional[Dict[str, Any]]:
+    """Collect the source-specific options the user actually passed.
+
+    Args:
+        args: Parsed command line arguments.
+
+    Returns:
+        Options for the chosen source, or None when a flag was rejected (the
+        reason has already been logged).
+    """
+    accepted = get_source_option_names(args.source)
+    options = {}
+
+    for option, (attribute, flag) in SOURCE_OPTION_FLAGS.items():
+        value = getattr(args, attribute, None)
+        if value is None:
+            continue
+
+        if option not in accepted:
+            usable = sorted(
+                other_flag for other_option, (_attribute, other_flag)
+                in SOURCE_OPTION_FLAGS.items() if other_option in accepted
+            )
+            logging.error(
+                f"Source '{args.source}' does not accept {flag}. It accepts: "
+                f"{', '.join(usable) if usable else 'no source-specific options'}."
+            )
+            return None
+
+        if not value:
+            logging.error(f"{flag} is required for {args.source} source.")
+            return None
+
+        options[option] = value
+
+    return options
 
 
 def _download(description: str, download_callable, *args, **kwargs) -> Optional[pd.DataFrame]:
@@ -69,7 +123,9 @@ def main() -> int:
         Process exit code: 0 on success, 1 on failure or partial download.
     """
     parser = argparse.ArgumentParser(description='Download historical market data.')
-    parser.add_argument('--source', type=str, required=True, choices=['ccxt', 'yahoo'],
+    # The choices come from niffler.data.downloaders.registry, so a newly
+    # registered source is selectable here with no change to this file.
+    parser.add_argument('--source', type=str, required=True, choices=get_available_sources(),
                         help='Data source: "ccxt" for crypto exchanges or "yahoo" for Yahoo Finance.')
     parser.add_argument('--symbol', type=str, required=True,
                         help='Trading pair (e.g., BTC/USDT for ccxt, BTC-USD for yahoo).')
@@ -79,7 +135,7 @@ def main() -> int:
                         help='Start date for data download (YYYY-MM-DD). Required for ccxt and yahoo.')
     parser.add_argument('--end_date', type=str,
                         help='End date for data download (YYYY-MM-DD). Optional. Defaults to todays date if not provided.')
-    parser.add_argument('--exchange', type=str, default='binance',
+    parser.add_argument('--exchange', type=str, default=None,
                         help='Exchange ID (e.g., binance, bybit). Default is "binance". Only required for ccxt source.')
     parser.add_argument('--output', type=str, default='',
                         help='Output CSV file name. Will be saved in the data/ directory. Default is generated based on symbol, source, timeframe, and dates.')
@@ -100,18 +156,6 @@ def main() -> int:
 
     output_dir = os.path.join(os.getcwd(), 'data')
     os.makedirs(output_dir, exist_ok=True)
-    if not args.output:
-        # Generate default output filename
-        symbol_clean = args.symbol.replace('/', '').replace('-', '')
-        if args.source == 'ccxt':
-            filename = f"{symbol_clean}_{args.exchange}_{args.timeframe}_{args.start_date.replace('-', '')}_{args.end_date.replace('-', '')}.csv"
-        else: # yahoo
-            filename = f"{symbol_clean}_{args.source}_{args.timeframe}_{args.start_date.replace('-', '')}_{args.end_date.replace('-', '')}.csv"
-        output_path = os.path.join(output_dir, filename)
-    else:
-        output_path = os.path.join(output_dir, args.output)
-
-    df = None
 
     try:
         start_date_ts = pd.Timestamp(args.start_date)
@@ -123,43 +167,46 @@ def main() -> int:
         logging.error("Invalid start_date or end_date format. Use YYYY-MM-DD.")
         return 1
 
-    # Initialize downloader and validate timeframe
-    if args.source == 'ccxt':
-        if not args.exchange:
-            logging.error("--exchange is required for ccxt source.")
-            return 1
+    options = build_source_options(args)
+    if options is None:
+        return 1
 
-        downloader = CCXTDownloader()
-        if not downloader.validate_timeframe(args.timeframe):
-            supported = downloader.get_supported_timeframes()
-            logging.error(f"Invalid timeframe '{args.timeframe}' for ccxt. Supported timeframes are: {', '.join(supported)}")
-            return 1
+    source = get_source(args.source)
+    request = build_request(
+        args.source, symbol=args.symbol, timeframe=args.timeframe,
+        start_date=args.start_date, end_date=args.end_date,
+        start=start_date_ts, end=end_date_ts, options=options
+    )
 
-        start_ms = int(start_date_ts.timestamp() * 1000)
-        end_ms = int(end_date_ts.timestamp() * 1000)
+    if not args.output:
+        # Default filename. The {SOURCE} component is the source's own file tag -
+        # the venue for ccxt, the source name otherwise - so a new source needs no
+        # branch here.
+        symbol_clean = args.symbol.replace('/', '').replace('-', '')
+        filename = (f"{symbol_clean}_{source.file_tag(request)}_{args.timeframe}_"
+                    f"{args.start_date.replace('-', '')}_{args.end_date.replace('-', '')}.csv")
+        output_path = os.path.join(output_dir, filename)
+    else:
+        output_path = os.path.join(output_dir, args.output)
 
-        df = _download(
-            f"{args.symbol} from {args.exchange}",
-            downloader.download,
-            args.exchange, args.symbol, args.timeframe, start_ms, end_ms
-        )
+    # Construction and invocation are generic: a source registered in
+    # niffler.data.downloaders.registry works here with no change to this file.
+    downloader = create_downloader(args.source)
+    if not downloader.validate_timeframe(args.timeframe):
+        supported = downloader.get_supported_timeframes()
+        logging.error(f"Invalid timeframe '{args.timeframe}' for {args.source}. "
+                      f"Supported timeframes are: {', '.join(supported)}")
+        return 1
 
-    elif args.source == 'yahoo':
-        downloader = YahooFinanceDownloader()
-        if not downloader.validate_timeframe(args.timeframe):
-            supported = downloader.get_supported_timeframes()
-            logging.error(f"Invalid timeframe '{args.timeframe}' for yahoo. Supported timeframes are: {', '.join(supported)}")
-            return 1
-
-        df = _download(
-            f"{args.symbol} from Yahoo Finance",
-            downloader.download,
-            args.symbol, args.start_date, args.end_date, args.timeframe
-        )
-        # No post-processing here: YahooFinanceDownloader already names the index
-        # 'Date', flattens any MultiIndex columns (correctly handling multi-ticker
-        # responses, which the old duplicate block here did not) and returns the
-        # Open/High/Low/Close/Volume columns in order.
+    # No post-processing per source: each downloader returns a normalised frame.
+    # YahooFinanceDownloader already names the index 'Date', flattens any MultiIndex
+    # columns (correctly handling multi-ticker responses, which the old duplicate
+    # block here did not) and returns the OHLCV columns in order.
+    df = _download(
+        source.describe(request),
+        downloader.download,
+        **build_download_kwargs(args.source, request)
+    )
 
     if df is None or df.empty:
         logging.error(f"No data returned for {args.symbol} ({args.source}); nothing was saved.")

@@ -19,6 +19,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from niffler.backtesting.cost_model import FixedSlippageModel, ZeroCostModel
+from niffler.backtesting.run_config import RunConfig
 from niffler.optimization.optimizer_factory import create_optimizer
 from niffler.optimization.parameter_space import ParameterSpace
 from niffler.strategies.simple_ma_strategy import SimpleMAStrategy
@@ -56,7 +57,7 @@ class TestOptimizerCarriesTheCostModel(unittest.TestCase):
             parameter_space=PARAMETER_SPACE,
             data=self.data,
             n_jobs=n_jobs,
-            cost_model=cost_model,
+            run_config=RunConfig(cost_model=cost_model),
         )
 
     def test_the_reusable_engine_gets_it(self):
@@ -83,7 +84,7 @@ class TestOptimizerCarriesTheCostModel(unittest.TestCase):
                 optimizer._evaluate_parallel([{'short_window': 5, 'long_window': 20}])
 
         self.assertEqual(executor.submit.call_count, 1)
-        self.assertIs(executor.submit.call_args[0][-1], self.cost_model)
+        self.assertIs(executor.submit.call_args[0][-1].cost_model, self.cost_model)
 
     def test_the_static_worker_applies_it(self):
         free = optimizer_result(None)
@@ -108,9 +109,7 @@ def optimizer_result(cost_model):
         {'short_window': 5, 'long_window': 20},
         SimpleMAStrategy,
         make_data(),
-        10000.0,
-        0.001,
-        cost_model,
+        RunConfig(cost_model=cost_model),
     )
 
 

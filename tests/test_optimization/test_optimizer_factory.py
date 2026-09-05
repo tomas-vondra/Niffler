@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import Mock, patch
 import pandas as pd
 
+from niffler.backtesting.run_config import RunConfig
 from niffler.optimization.optimizer_factory import create_optimizer
 from niffler.optimization.grid_search_optimizer import GridSearchOptimizer
 from niffler.optimization.random_search_optimizer import RandomSearchOptimizer
@@ -64,16 +65,15 @@ class TestOptimizerFactory(unittest.TestCase):
             strategy_class=MockStrategy,
             parameter_space=self.test_parameter_space,
             data=self.test_data,
-            initial_capital=10000,
-            commission=0.001,
+            run_config=RunConfig(initial_capital=10000, commission=0.001),
             sort_by='total_return',
             n_jobs=1
         )
         
         self.assertIsInstance(optimizer, GridSearchOptimizer)
         self.assertEqual(optimizer.strategy_class, MockStrategy)
-        self.assertEqual(optimizer.initial_capital, 10000)
-        self.assertEqual(optimizer.commission, 0.001)
+        self.assertEqual(optimizer.run_config.initial_capital, 10000)
+        self.assertEqual(optimizer.run_config.commission, 0.001)
         self.assertEqual(optimizer.sort_by, 'total_return')
         self.assertEqual(optimizer.n_jobs, 1)
     
@@ -84,16 +84,15 @@ class TestOptimizerFactory(unittest.TestCase):
             strategy_class=MockStrategy,
             parameter_space=self.test_parameter_space,
             data=self.test_data,
-            initial_capital=5000,
-            commission=0.002,
+            run_config=RunConfig(initial_capital=5000, commission=0.002),
             sort_by='sharpe_ratio',
             n_jobs=2
         )
         
         self.assertIsInstance(optimizer, RandomSearchOptimizer)
         self.assertEqual(optimizer.strategy_class, MockStrategy)
-        self.assertEqual(optimizer.initial_capital, 5000)
-        self.assertEqual(optimizer.commission, 0.002)
+        self.assertEqual(optimizer.run_config.initial_capital, 5000)
+        self.assertEqual(optimizer.run_config.commission, 0.002)
         self.assertEqual(optimizer.sort_by, 'sharpe_ratio')
         self.assertEqual(optimizer.n_jobs, 2)
     
@@ -107,8 +106,8 @@ class TestOptimizerFactory(unittest.TestCase):
         )
         
         self.assertIsInstance(optimizer, GridSearchOptimizer)
-        self.assertEqual(optimizer.initial_capital, 10000.0)  # Default
-        self.assertEqual(optimizer.commission, 0.001)  # Default
+        self.assertEqual(optimizer.run_config.initial_capital, 10000.0)  # Default
+        self.assertEqual(optimizer.run_config.commission, 0.001)  # Default
         self.assertEqual(optimizer.sort_by, 'total_return')  # Default
         # n_jobs gets auto-detected to system CPU count, so just check it's positive
         self.assertIsInstance(optimizer.n_jobs, int)
@@ -199,8 +198,7 @@ class TestOptimizerFactory(unittest.TestCase):
             'strategy_class': MockStrategy,
             'parameter_space': self.test_parameter_space,
             'data': self.test_data,
-            'initial_capital': 25000,
-            'commission': 0.005,
+            'run_config': RunConfig(initial_capital=25000, commission=0.005),
             'sort_by': 'max_drawdown',
             'n_jobs': 4
         }
@@ -208,8 +206,8 @@ class TestOptimizerFactory(unittest.TestCase):
         optimizer = create_optimizer(**test_params)
         
         self.assertIsInstance(optimizer, RandomSearchOptimizer)
-        self.assertEqual(optimizer.initial_capital, 25000)
-        self.assertEqual(optimizer.commission, 0.005)
+        self.assertEqual(optimizer.run_config.initial_capital, 25000)
+        self.assertEqual(optimizer.run_config.commission, 0.005)
         self.assertEqual(optimizer.sort_by, 'max_drawdown')
         self.assertEqual(optimizer.n_jobs, 4)
     
@@ -275,30 +273,18 @@ class TestOptimizerFactory(unittest.TestCase):
         self.assertIn("sort_by must be one of", str(context.exception))
     
     def test_invalid_capital_validation(self):
-        """Test validation of initial capital through factory."""
+        """Capital is validated once, when the RunConfig is built."""
         with self.assertRaises(ValueError) as context:
-            create_optimizer(
-                method='grid',
-                strategy_class=MockStrategy,
-                parameter_space=self.test_parameter_space,
-                data=self.test_data,
-                initial_capital=-1000
-            )
+            RunConfig(initial_capital=-1000)
         
-        self.assertIn("initial_capital must be positive", str(context.exception))
-    
+        self.assertIn("Initial capital must be positive", str(context.exception))
+
     def test_invalid_commission_validation(self):
-        """Test validation of commission through factory."""
+        """Commission is validated once, when the RunConfig is built."""
         with self.assertRaises(ValueError) as context:
-            create_optimizer(
-                method='grid',
-                strategy_class=MockStrategy,
-                parameter_space=self.test_parameter_space,
-                data=self.test_data,
-                commission=-0.1
-            )
-        
-        self.assertIn("commission cannot be negative", str(context.exception))
+            RunConfig(commission=-0.1)
+
+        self.assertIn("Commission cannot be negative", str(context.exception))
     
     def test_factory_preserves_data_reference(self):
         """Test that factory preserves the original data reference."""
@@ -319,7 +305,7 @@ class TestOptimizerFactory(unittest.TestCase):
             strategy_class=MockStrategy,
             parameter_space=self.test_parameter_space,
             data=self.test_data,
-            initial_capital=10000
+            run_config=RunConfig(initial_capital=10000)
         )
         
         optimizer2 = create_optimizer(
@@ -327,14 +313,14 @@ class TestOptimizerFactory(unittest.TestCase):
             strategy_class=MockStrategy,
             parameter_space=self.test_parameter_space,
             data=self.test_data,
-            initial_capital=20000
+            run_config=RunConfig(initial_capital=20000)
         )
         
         # Should be different instances with different configurations
         self.assertIsInstance(optimizer1, GridSearchOptimizer)
         self.assertIsInstance(optimizer2, RandomSearchOptimizer)
-        self.assertEqual(optimizer1.initial_capital, 10000)
-        self.assertEqual(optimizer2.initial_capital, 20000)
+        self.assertEqual(optimizer1.run_config.initial_capital, 10000)
+        self.assertEqual(optimizer2.run_config.initial_capital, 20000)
         self.assertIsNot(optimizer1, optimizer2)
 
 

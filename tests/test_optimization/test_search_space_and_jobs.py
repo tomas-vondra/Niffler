@@ -370,8 +370,6 @@ class TestWalkForwardStillSerial(unittest.TestCase):
                 parameter_space=space,
                 optimization_method='grid',
                 optimization_metric='total_return',
-                initial_capital=10000.0,
-                commission=0.001,
             )
 
         self.assertTrue(create.called)
