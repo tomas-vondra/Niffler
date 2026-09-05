@@ -135,7 +135,34 @@ folds do not overlap by default (`--step` defaults to `--test_window`), so the r
 independent evidence. The headline column is `BEAT%`: the share of folds where the
 strategy actually beat holding the asset.
 
-### 7. Results Export
+### 7. Screening — the whole pipeline as a funnel
+
+The six steps above are meant to be run in order, and each is only worth taking if the
+previous one cleared a bar. Nothing enforced that, so `scripts/screen.py` does:
+
+```bash
+python scripts/screen.py --data data/SPY_research.csv --strategy breakout \
+  --compare-data data/QQQ_research.csv data/GLD_research.csv data/BTCUSDT_research.csv
+```
+
+It runs backtest → optimize → walk-forward → cross-asset compare and **stops at the
+first gate that fails, saying exactly why**:
+
+```
+--- backtest ---
+  return 26.43%  vs buy-and-hold 96.85%  fills 8  round trips 4
+  STOPPED at backtest: round trips 4 < 30 (--min-trades-for-significance)
+```
+
+Every threshold is a flag and is printed whether or not it fires. Three of the four
+defaults are judgment calls and say so in `--help`; the fourth reuses the framework's own
+`DEFAULT_MIN_TRADES`. A stop exits **3** — it is a normal outcome, not an error (1 is a
+real failure, and argparse owns 2). `--force` runs every stage anyway and still exits 3.
+
+The script implements no analysis of its own: every number it gates on is computed by the
+library or by `compare.py`.
+
+### 8. Results Export
 **Export** backtest results to multiple formats for analysis and monitoring:
 - **Console**: Immediate human-readable feedback
 - **CSV Files**: Structured data for external analysis tools
@@ -637,7 +664,7 @@ The suite is the source of truth for its own size. Run it:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-At the time of writing this reports **1152 tests, 0 failures, 0 errors**. Treat that as a
+At the time of writing this reports **1188 tests, 0 failures, 0 errors**. Treat that as a
 sanity check, not a spec — if the command disagrees with this paragraph, believe the
 command. It is the only place in the documentation that quotes a count.
 
