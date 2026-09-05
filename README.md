@@ -451,9 +451,10 @@ Being explicit, so nobody discovers these the expensive way:
   all three blockers.
 - **Single-asset backtests.** The engine runs one symbol at a time, so `max_positions` only
   bites at 1 and total exposure is a single position's own weight.
-- **No risk manager in validation.** Risk managers are now stateless and therefore safe to
-  share across parallel folds, but nothing threads one into `optimize.py`, `analyze.py` or
-  `compare.py` yet — those have no `--risk-manager` flag.
+- **`analyze.py` does not inherit the risk configuration from a `--params_file`.** An
+  optimisation result records the risk manager it ran under, but `--params_file` reads only
+  the parameters, so the flags have to be repeated on the validation run — exactly as they
+  do for `--cost-model`.
 - **Walk-forward folds still overlap by default** (`test_window=6`, `step=3`). Repeated
   out-of-sample bars are counted once for the combined Sharpe and the overlap is reported
   and warned about, but per-fold counters still treat each fold as one sample.
@@ -656,9 +657,9 @@ builds its own document.
 ## Adding a risk manager
 
 Same shape, same promise: **one class plus one registry line** in
-[`niffler/risk/registry.py`](niffler/risk/registry.py). `backtest.py`'s `--risk-manager`
-choices derive from it and construction goes through `create_risk_manager()`, so a
-registered manager is selectable with no edit to any script.
+[`niffler/risk/registry.py`](niffler/risk/registry.py). The shared `--risk-manager` choices
+derive from it and construction goes through `create_risk_manager()`, so a registered
+manager is selectable with no edit to any script.
 
 1. Write the class in `niffler/risk/`, subclassing `BaseRiskManager` and implementing
    `calculate_position_size`, `calculate_stop_loss`, `should_close_position` and

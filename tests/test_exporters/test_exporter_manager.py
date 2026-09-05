@@ -418,6 +418,7 @@ class TestExporterManager(unittest.TestCase):
         
         expected_metadata = {
             'cost_model': None,
+            'risk_manager': None,
             'total_commission': 30.0,
             'total_slippage': 12.0,
             'strategy_name': 'Simple MA Strategy',

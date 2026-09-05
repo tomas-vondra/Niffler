@@ -46,6 +46,7 @@ from niffler.strategies.registry import get_available_strategies, get_strategy_c
 from scripts.common import (
     add_cost_model_arguments,
     add_engine_arguments,
+    add_risk_manager_arguments,
     build_run_config,
     load_ohlcv_csv,
     report_run_config,
@@ -204,6 +205,10 @@ def main() -> int:
     # benchmark in particular is what makes --sort-by excess_return_pct mean
     # anything, so it has to be settable here.
     add_engine_arguments(parser)
+
+    # Position sizing, stops and exposure caps. Optimising without them tunes a
+    # system that is not the one the flag would trade.
+    add_risk_manager_arguments(parser)
 
     # Data processing
     parser.add_argument('--clean', action='store_true',

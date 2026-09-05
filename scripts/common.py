@@ -498,15 +498,16 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
     thousand-resample bootstrap inside every grid cell of every fold.
 
     Args:
-        args: Parsed arguments. Cost-model flags are read through
-            :func:`build_cost_model`, so an unusable combination fails here.
+        args: Parsed arguments. Cost-model and risk-manager flags are read
+            through :func:`build_cost_model` and :func:`build_risk_manager`, so
+            an unusable combination fails here.
 
     Returns:
         The configuration every backtest of this run will use.
 
     Raises:
-        ValueError: If a setting is out of range or the cost-model flags are
-            inconsistent.
+        ValueError: If a setting is out of range, or the cost-model or
+            risk-manager flags are inconsistent.
         TypeError: If the cost model is not a CostModel.
     """
     return RunConfig(
@@ -515,6 +516,7 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
         min_order_value=getattr(args, 'min_order_value', DEFAULT_MIN_ORDER_VALUE),
         periods_per_year=getattr(args, 'periods_per_year', None),
         cost_model=build_cost_model(args),
+        risk_manager=build_risk_manager(args),
         benchmark=getattr(args, 'benchmark', BENCHMARK_BUY_AND_HOLD),
         min_trades_for_significance=getattr(
             args, 'min_trades_for_significance', DEFAULT_MIN_TRADES),
@@ -540,7 +542,179 @@ def report_run_config(run_config: RunConfig, stream=None) -> bool:
                      else f"{run_config.periods_per_year:g} periods/year")
     print(f"Annualisation: {annualisation}   "
           f"Significance gate: {run_config.min_trades_for_significance} round trips")
+    print(f"Risk management: {describe_risk_configuration(run_config.risk_manager)}")
     return report_cost_model(
         run_config.cost_model if run_config.cost_model is not None else ZeroCostModel(),
         stream=stream,
     )
+
+
+# ---------------------------------------------------------------------------
+# Risk management CLI
+#
+# --risk-manager existed only in backtest.py, and it configured the *strategy*
+# object. The optimizer and both analyzers construct their own strategies, so
+# optimisation, walk-forward and Monte Carlo ran with risk management off
+# unconditionally - the pipeline tuned and validated a system nobody would
+# trade. The manager is now a RunConfig field, which every one of those already
+# carries into its worker processes, so building it here reaches all of them.
+# ---------------------------------------------------------------------------
+
+# Imported here rather than at the top of the module to keep this addition to
+# one contiguous block.
+from typing import Set  # noqa: E402
+
+from niffler.risk import (  # noqa: E402
+    NO_RISK_MANAGER,
+    create_risk_manager,
+    describe_risk_manager,
+    get_available_risk_managers,
+    get_risk_manager_parameter_names,
+)
+
+#: Flag destination -> constructor keyword. The two differ: --max-position-size
+#: configures FixedRiskManager's ``position_size_pct``, and create_risk_manager
+#: rejects a keyword its manager does not declare, so the translation is
+#: required rather than cosmetic.
+_RISK_FLAG_TO_PARAMETER: Dict[str, str] = {
+    'max_position_size': 'position_size_pct',
+    'stop_loss_pct': 'stop_loss_pct',
+    'max_positions': 'max_positions',
+    'max_risk_per_trade': 'max_risk_per_trade',
+}
+
+#: Values used when a manager is selected but a flag it reads was not given.
+#: These are backtest.py's historical defaults, kept so moving that script onto
+#: this section leaves its numbers unchanged - FixedRiskManager's own
+#: position_size_pct default is 0.1, not 0.2.
+_RISK_MANAGER_DEFAULTS: Dict[str, float] = {
+    'max_position_size': 0.2,
+    'stop_loss_pct': 0.05,
+    'max_positions': 5,
+    'max_risk_per_trade': 0.02,
+}
+
+
+def add_risk_manager_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add the shared ``--risk-manager`` flags to a script's parser.
+
+    The tuning flags default to None so "not supplied" stays distinguishable
+    from "supplied at the default": a flag the selected manager does not read is
+    an error, and that can only be detected when the two differ.
+
+    Args:
+        parser: Parser to extend.
+    """
+    group = parser.add_argument_group('risk management')
+    group.add_argument(
+        '--risk-manager', choices=get_available_risk_managers(),
+        default=NO_RISK_MANAGER,
+        help=(f"Risk manager applied to every backtest of this run: "
+              f"'{NO_RISK_MANAGER}' (default) runs with no position sizing, no "
+              f"stops and no exposure cap; 'fixed' sizes every entry at a "
+              f"constant fraction of the portfolio behind a percentage stop")
+    )
+    group.add_argument(
+        '--max-position-size', type=float, default=None,
+        help=f"Largest position as a fraction of the portfolio "
+             f"(default: {_RISK_MANAGER_DEFAULTS['max_position_size']:g})"
+    )
+    group.add_argument(
+        '--stop-loss-pct', type=float, default=None,
+        help=f"Stop loss as a fraction of the entry price "
+             f"(default: {_RISK_MANAGER_DEFAULTS['stop_loss_pct']:g})"
+    )
+    group.add_argument(
+        '--max-positions', type=int, default=None,
+        help=f"Largest number of concurrent positions "
+             f"(default: {_RISK_MANAGER_DEFAULTS['max_positions']:g})"
+    )
+    group.add_argument(
+        '--max-risk-per-trade', type=float, default=None,
+        help=f"Largest risk per trade as a fraction of the portfolio "
+             f"(default: {_RISK_MANAGER_DEFAULTS['max_risk_per_trade']:g})"
+    )
+
+
+def build_risk_manager(args: argparse.Namespace):
+    """Build the risk manager a parsed command line asks for.
+
+    Flags the selected manager does not read are rejected rather than ignored,
+    for the same reason ``build_cost_model`` rejects them: a silently dropped
+    ``--stop-loss-pct`` means the user believes stops are armed while the run
+    trades without any.
+
+    Args:
+        args: Parsed arguments carrying the flags added by
+            :func:`add_risk_manager_arguments`. A script that declared none gets
+            no risk management, which is what it had before.
+
+    Returns:
+        The configured manager, or None for ``'none'``.
+
+    Raises:
+        ValueError: If the manager name is unknown, or a flag was supplied that
+            the selected manager does not accept.
+    """
+    choice = getattr(args, 'risk_manager', NO_RISK_MANAGER) or NO_RISK_MANAGER
+    if choice == NO_RISK_MANAGER:
+        _reject_unused_risk_flags(args, choice, set())
+        return None
+
+    accepted = get_risk_manager_parameter_names(choice)
+    _reject_unused_risk_flags(args, choice, accepted)
+
+    parameters = {}
+    for dest, parameter in _RISK_FLAG_TO_PARAMETER.items():
+        if parameter not in accepted:
+            continue
+        supplied = getattr(args, dest, None)
+        parameters[parameter] = (supplied if supplied is not None
+                                 else _RISK_MANAGER_DEFAULTS[dest])
+
+    return create_risk_manager(choice, parameters)
+
+
+def _reject_unused_risk_flags(args: argparse.Namespace, choice: str,
+                              accepted: Set[str]) -> None:
+    """Raise when a supplied tuning flag is not read by the chosen manager."""
+    ignored = sorted(
+        f"--{dest.replace('_', '-')}"
+        for dest, parameter in _RISK_FLAG_TO_PARAMETER.items()
+        if getattr(args, dest, None) is not None and parameter not in accepted
+    )
+    if not ignored:
+        return
+
+    if choice == NO_RISK_MANAGER:
+        raise ValueError(
+            f"--risk-manager {NO_RISK_MANAGER} does not use "
+            f"{', '.join(ignored)}. Remove the flag(s), or select a risk "
+            f"manager that reads them."
+        )
+    raise ValueError(
+        f"--risk-manager {choice} does not use {', '.join(ignored)}. "
+        f"Remove the flag(s). Accepted: {', '.join(sorted(accepted))}."
+    )
+
+
+def describe_risk_configuration(risk_manager) -> str:
+    """Render the risk manager in force as one console line.
+
+    Args:
+        risk_manager: The manager the run will use, or None.
+
+    Returns:
+        ``'none'``, or the registry name followed by its parameters.
+    """
+    if risk_manager is None:
+        return NO_RISK_MANAGER
+
+    description = describe_risk_manager(risk_manager)
+    name = description['name'] or description['class']
+    parameters = description['parameters']
+    if not parameters:
+        return str(name)
+
+    rendered = ', '.join(f"{key}={value:g}" for key, value in parameters.items())
+    return f"{name} ({rendered})"

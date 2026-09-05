@@ -33,6 +33,13 @@
       "num_losing_trades": {"type": "integer"},
       "commission": {"type": "double"},
       "cost_model": {"type": "keyword"},
+      "risk_manager": {
+        "properties": {
+          "name": {"type": "keyword"},
+          "class": {"type": "keyword"},
+          "parameters": {"type": "object"}
+        }
+      },
       "total_commission": {"type": "double"},
       "total_slippage": {"type": "double"},
       "benchmark_name": {"type": "keyword"},

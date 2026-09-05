@@ -19,8 +19,10 @@ from .registry import (
     NO_RISK_MANAGER,
     RISK_MANAGER_CLASSES,
     create_risk_manager,
+    describe_risk_manager,
     get_available_risk_managers,
     get_risk_manager_class,
+    get_risk_manager_name,
     get_risk_manager_parameter_names,
 )
 
@@ -34,7 +36,9 @@ __all__ = [
     'RiskDecision',
     'RiskManager',
     'create_risk_manager',
+    'describe_risk_manager',
     'get_available_risk_managers',
     'get_risk_manager_class',
+    'get_risk_manager_name',
     'get_risk_manager_parameter_names',
 ]

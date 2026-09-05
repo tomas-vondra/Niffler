@@ -79,6 +79,7 @@ from niffler.utils.provenance import collect_provenance
 from scripts.common import (
     add_cost_model_arguments,
     add_engine_arguments,
+    add_risk_manager_arguments,
     build_run_config,
     load_ohlcv_csv,
     report_run_config,
@@ -584,6 +585,9 @@ outcome), 1 = the run failed.
     # No --benchmark: stages 2 and 4 both gate on beating buy-and-hold, so
     # 'none' would leave two of the four gates with nothing to measure.
     add_engine_arguments(parser, benchmark=False)
+    # All four stages run under one risk configuration, so a funnel cannot pass
+    # a strategy on numbers the configured risk layer would never have produced.
+    add_risk_manager_arguments(parser)
 
     parser.add_argument('--log-level', default='WARNING',
                         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
