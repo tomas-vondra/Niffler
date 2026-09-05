@@ -26,7 +26,7 @@ from niffler.strategies.registry import (
     get_strategy_parameter_names,
 )
 from niffler.risk import FixedRiskManager
-from niffler.exporters import ExporterManager
+from niffler.exporters import ExporterManager, get_available_exporters
 from niffler.utils.provenance import collect_provenance
 from niffler.config.logging import setup_logging
 from scripts.common import add_cost_model_arguments, build_cost_model, load_ohlcv_csv, report_cost_model
@@ -168,6 +168,58 @@ def build_strategy_parameters(args) -> Dict[str, Any]:
     return parameters
 
 
+# Convenience flags that map onto exporter constructor options, in the same shape
+# as STRATEGY_PARAMETER_FLAGS: option name -> (argparse attribute, flag spelling).
+# Each flag defaults to None so an explicitly passed one can be told apart from an
+# unset one, and only the ones actually passed are forwarded - an option nobody
+# asked for must not be broadcast to exporters that would reject it.
+EXPORTER_OPTION_FLAGS = {
+    'output_dir': ('csv_output_dir', '--csv-output-dir'),
+    'host': ('es_host', '--es-host'),
+    'port': ('es_port', '--es-port'),
+    'index_prefix': ('es_index_prefix', '--es-index-prefix'),
+}
+
+
+def build_exporter_options(args) -> Dict[str, Any]:
+    """Collect exporter options from --exporter-params and the convenience flags.
+
+    An explicitly passed flag overrides the same key in ``--exporter-params``. The
+    options are validated against the chosen exporters by
+    ``ExporterManager.create_exporters_from_list``, which raises when none of them
+    accepts an option, so ``--exporters console --csv-output-dir results/`` fails
+    loudly instead of writing nothing anywhere.
+
+    Args:
+        args: Parsed command line arguments.
+
+    Returns:
+        Keyword arguments for the exporter constructors.
+
+    Raises:
+        ValueError: If --exporter-params is not a JSON object.
+    """
+    options: Dict[str, Any] = {}
+
+    if args.exporter_params:
+        try:
+            parsed = json.loads(args.exporter_params)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in --exporter-params: {e}") from e
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                f"--exporter-params must be a JSON object, got {type(parsed).__name__}"
+            )
+        options.update(parsed)
+
+    for option, (attribute, _flag) in EXPORTER_OPTION_FLAGS.items():
+        value = getattr(args, attribute, None)
+        if value is not None:
+            options[option] = value
+
+    return options
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description='Backtest trading strategies on historical data with optional risk management',
@@ -252,15 +304,24 @@ Examples:
 
 
     # Output options
-    # Get available exporters dynamically
-    available_exporters = ','.join(ExporterManager.get_available_exporter_names())
+    #
+    # The exporter choices come from niffler.exporters.registry, and --exporter-params
+    # is the generic path that reaches any registered exporter's constructor. The named
+    # flags below are conveniences for the options the shipped exporters happen to have;
+    # each defaults to None so only explicitly passed ones are forwarded. An option no
+    # chosen exporter accepts is an error, never silently ignored.
+    available_exporters = ','.join(get_available_exporters())
     parser.add_argument('--exporters', type=str, default='console',
                        help=f'Comma-separated list of exporters to use: {available_exporters} (default: console)')
-    parser.add_argument('--csv-output-dir', default='.',
+    parser.add_argument('--exporter-params',
+                       help='Exporter options as a JSON object, e.g. \'{"output_dir": "results"}\'. '
+                            'Works for any registered exporter; an option none of the chosen '
+                            'exporters accepts is reported with the accepted ones.')
+    parser.add_argument('--csv-output-dir', default=None,
                        help='Directory for CSV output files (default: current directory)')
     parser.add_argument('--symbol', default=None,
                        help='Symbol identifier for the data (default: extracted from filename)')
-    
+
     # Elasticsearch options (optional overrides for .env file configuration)
     parser.add_argument('--es-host',
                        help='Elasticsearch host (overrides ELASTICSEARCH_HOST env var)')
@@ -372,13 +433,11 @@ Examples:
         # Parse exporters parameter
         exporter_names = [name.strip().lower() for name in args.exporters.split(',')]
 
-        # Create exporters - pass all options, each exporter will use what it needs
+        # Create exporters. Construction is generic: an exporter registered in
+        # niffler.exporters.registry is usable here with no change to this file, and
+        # each one is handed the options its constructor declares.
         exporter_manager.create_exporters_from_list(
-            exporter_names,
-            output_dir=args.csv_output_dir,
-            host=args.es_host,
-            port=args.es_port,
-            index_prefix=args.es_index_prefix
+            exporter_names, **build_exporter_options(args)
         )
 
         if exporter_manager.get_exporter_count() == 0:

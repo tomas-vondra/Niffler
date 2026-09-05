@@ -7,11 +7,14 @@ Coordinates multiple exporters for backtesting results with unique identificatio
 import logging
 import uuid
 from dataclasses import dataclass
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Set, Tuple
 from .base_exporter import BaseExporter
-from .console_exporter import ConsoleExporter
-from .csv_exporter import CSVExporter
-from .elasticsearch_exporter import ElasticsearchExporter
+from .registry import (
+    create_exporter,
+    get_available_exporters,
+    get_exporter_class,
+    get_exporter_option_names,
+)
 from ..backtesting.backtest_result import BacktestResult
 
 logger = logging.getLogger(__name__)
@@ -39,15 +42,13 @@ class ExportSummary:
 
 
 class ExporterManager:
-    """Manages multiple exporters for backtesting results."""
-    
-    # Simple dictionary mapping exporter names to their classes
-    EXPORTER_TYPES = {
-        'console': ConsoleExporter,
-        'csv': CSVExporter,
-        'elasticsearch': ElasticsearchExporter
-    }
-    
+    """Manages multiple exporters for backtesting results.
+
+    The name→class map lives in :mod:`niffler.exporters.registry`, not here: a
+    second map in the manager is exactly the shadowing that made ``analyze.py``
+    reject strategies ``optimize.py`` accepted.
+    """
+
     def __init__(self):
         """Initialize the exporter manager."""
         self.exporters: List[BaseExporter] = []
@@ -59,8 +60,8 @@ class ExporterManager:
     @classmethod
     def get_available_exporter_names(cls) -> List[str]:
         """Get the names of all available exporter types."""
-        return list(cls.EXPORTER_TYPES.keys())
-    
+        return get_available_exporters()
+
     def add_exporter(self, exporter: BaseExporter) -> None:
         """
         Add an exporter to the manager.
@@ -71,39 +72,38 @@ class ExporterManager:
         self.exporters.append(exporter)
     
     def create_exporter_by_name(self, name: str, **kwargs) -> BaseExporter:
-        """Create and add an exporter by name."""
-        name = name.strip().lower()
-        
-        if name not in self.EXPORTER_TYPES:
-            available = ', '.join(self.get_available_exporter_names())
-            raise ValueError(f"Unknown exporter type: {name}. Available types: {available}")
-        
-        exporter_class = self.EXPORTER_TYPES[name]
-        
-        # Filter kwargs based on exporter type to avoid passing invalid parameters
-        filtered_kwargs = {}
-        if name == 'csv':
-            if 'output_dir' in kwargs:
-                filtered_kwargs['output_dir'] = kwargs['output_dir']
-        elif name == 'elasticsearch':
-            for key in ['host', 'port', 'index_prefix', 'scheme', 'api_key',
-                        'username', 'password', 'timeout', 'verify_certs']:
-                if key in kwargs:
-                    filtered_kwargs[key] = kwargs[key]
-        # console exporter doesn't take specific parameters beyond config
-        
-        # Always allow config parameter for all exporters
-        if 'config' in kwargs:
-            filtered_kwargs['config'] = kwargs['config']
-        
-        exporter = exporter_class(**filtered_kwargs)
+        """Create and add a single exporter by name.
+
+        Options are matched against the exporter's constructor signature by
+        :func:`niffler.exporters.registry.create_exporter`, so an option this
+        exporter does not accept raises instead of being dropped.
+
+        Args:
+            name: Registered exporter name
+            **kwargs: Constructor options for that exporter
+
+        Returns:
+            The constructed exporter, already added to this manager
+
+        Raises:
+            ValueError: If the name is not registered, or an option is not
+                accepted by the exporter
+        """
+        exporter = create_exporter(name, kwargs)
         self.add_exporter(exporter)
         return exporter
-    
+
     def create_exporters_from_list(self, exporter_names: List[str],
                                    **kwargs) -> List[Tuple[str, str]]:
         """
-        Create multiple exporters from a list of names.
+        Create multiple exporters from a list of names, broadcasting the options.
+
+        The options are a single pool shared by every requested exporter, and each
+        exporter is handed the subset its constructor declares. The subset is read
+        off the signature, so registering an exporter is the only edit its options
+        need. An option **no** requested exporter accepts is a caller error and
+        raises: silently dropping it is how ``--csv-output-dir`` used to be ignored
+        while the run still reported success.
 
         An exporter whose constructor rejects its configuration (an unknown name, an
         invalid Elasticsearch scheme, an unparsable port) is recorded rather than
@@ -113,22 +113,64 @@ class ExporterManager:
 
         Args:
             exporter_names: Names of the exporter types to create
-            **kwargs: Configuration forwarded to each exporter constructor
+            **kwargs: Configuration pool broadcast to the exporter constructors
 
         Returns:
             List of (requested name, error message) pairs for the exporters that
             could not be created; empty when every requested exporter was built
+
+        Raises:
+            ValueError: If an option is accepted by none of the requested exporters
         """
-        failures: List[Tuple[str, str]] = []
+        accepted_by: Dict[str, Set[str]] = {}
         for name in exporter_names:
             try:
-                self.create_exporter_by_name(name, **kwargs)
+                get_exporter_class(name)
+            except ValueError:
+                continue  # Unknown names are reported per-exporter below.
+            accepted_by[name] = get_exporter_option_names(name)
+
+        if kwargs and accepted_by:
+            self._reject_orphan_options(set(kwargs), accepted_by)
+
+        failures: List[Tuple[str, str]] = []
+        for name in exporter_names:
+            accepted = accepted_by.get(name)
+            options = kwargs if accepted is None else {
+                key: value for key, value in kwargs.items() if key in accepted
+            }
+            try:
+                self.create_exporter_by_name(name, **options)
             except Exception as e:
                 logger.error(f"Could not create exporter '{name}': {e}")
                 failures.append((name, str(e)))
 
         self.creation_failures.extend(failures)
         return failures
+
+    @staticmethod
+    def _reject_orphan_options(supplied: Set[str], accepted_by: Dict[str, Set[str]]) -> None:
+        """Raise when an option is accepted by none of the requested exporters.
+
+        Args:
+            supplied: Option names the caller passed
+            accepted_by: Requested exporter name to the options it accepts
+
+        Raises:
+            ValueError: Naming the orphaned options and what each exporter accepts
+        """
+        union = set().union(*accepted_by.values())
+        orphans = sorted(supplied - union)
+        if not orphans:
+            return
+
+        rendered = '; '.join(
+            f"{name} accepts {', '.join(sorted(options))}"
+            for name, options in accepted_by.items()
+        )
+        raise ValueError(
+            f"No requested exporter accepts: {', '.join(orphans)}. {rendered}"
+        )
 
 
     def export_backtest_result(self, result: BacktestResult, strategy_params: Dict[str, Any],
@@ -169,7 +211,7 @@ class ExporterManager:
             backtest_id = self._generate_backtest_id()
 
         # Create metadata
-        metadata = self._create_metadata(
+        metadata = self.create_metadata(
             result, strategy_params, symbol, initial_capital, commission, provenance,
             cost_model
 
@@ -210,7 +252,7 @@ class ExporterManager:
         """Generate a unique backtest ID."""
         return str(uuid.uuid4())
     
-    def _create_metadata(self, result: BacktestResult, strategy_params: Dict[str, Any],
+    def create_metadata(self, result: BacktestResult, strategy_params: Dict[str, Any],
                         symbol: str, initial_capital: float, commission: float,
                         provenance: Optional[Dict[str, Any]] = None,
                         cost_model: str = None) -> Dict[str, Any]:

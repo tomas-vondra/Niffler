@@ -77,56 +77,10 @@ class BaseExporter(ABC):
         """Generate a unique backtest ID."""
         return str(uuid.uuid4())
     
-    def create_metadata(self, result: BacktestResult, strategy_params: Dict[str, Any],
-                       symbol: str, initial_capital: float, commission: float,
-                       provenance: Optional[Dict[str, Any]] = None,
-                       cost_model: str = None) -> Dict[str, Any]:
-        """
-        Create standardized metadata for a backtest.
-
-        Args:
-            result: BacktestResult object
-            strategy_params: Strategy parameters used in the backtest
-            symbol: Trading symbol
-            initial_capital: Initial capital amount
-            commission: Commission rate
-            provenance: Optional run provenance record (see
-                :func:`niffler.utils.provenance.collect_provenance`). Collect it once at
-                the call site that owns the run and pass it in - collecting it per
-                exporter would re-hash the input data file for every destination.
-            cost_model: Description of the transaction cost model in force, when
-                the caller knows it
-
-        Returns:
-            Dictionary containing standardized metadata, carrying a ``provenance`` key
-            when a record was supplied
-        """
-        metadata = {
-            'cost_model': cost_model,
-            'total_commission': getattr(result, 'total_commission', 0.0),
-            'total_slippage': getattr(result, 'total_slippage', 0.0),
-            'strategy_name': result.strategy_name,
-            'strategy_params': strategy_params,
-            'symbol': symbol,
-            'start_date': result.start_date.isoformat(),
-            'end_date': result.end_date.isoformat(),
-            'initial_capital': initial_capital,
-            'final_capital': result.final_capital,
-            'commission': commission,
-            'total_return': result.total_return,
-            'total_return_pct': result.total_return_pct,
-            'max_drawdown': result.max_drawdown,
-            'sharpe_ratio': result.sharpe_ratio,
-            'win_rate': result.win_rate,
-            'total_trades': result.total_trades
-        }
-
-        # Only present when a record was collected, so a caller that opts out does not
-        # get a null field indexed into Elasticsearch for every run.
-        if provenance is not None:
-            metadata['provenance'] = provenance
-
-        return metadata
+    # No create_metadata here on purpose. The document is built once, by
+    # ExporterManager.create_metadata, and handed to every exporter: a second
+    # builder on the base class silently produced a document missing the trade
+    # statistics, benchmark and significance fields.
 
     def validate_result(self, result: BacktestResult) -> bool:
         """
