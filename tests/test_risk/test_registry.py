@@ -25,8 +25,10 @@ from niffler.risk.registry import (
     NO_RISK_MANAGER,
     RISK_MANAGER_CLASSES,
     create_risk_manager,
+    describe_risk_manager,
     get_available_risk_managers,
     get_risk_manager_class,
+    get_risk_manager_name,
     get_risk_manager_parameter_names,
 )
 
@@ -200,6 +202,40 @@ class TestLayering(unittest.TestCase):
             "niffler.risk must not import from niffler.backtesting or "
             f"niffler.strategies; it pulled in {result.stdout.strip()}"
         )
+
+
+class TestDescribeRiskManager(unittest.TestCase):
+    """A recorded run must say how to rebuild the risk manager, not just name it."""
+
+    def test_none_describes_as_the_reserved_name(self):
+        self.assertEqual(describe_risk_manager(None),
+                         {'name': NO_RISK_MANAGER, 'class': None, 'parameters': {}})
+
+    def test_a_registered_manager_names_its_registry_key(self):
+        self.assertEqual(describe_risk_manager(FixedRiskManager())['name'], 'fixed')
+
+    def test_the_description_round_trips_through_create(self):
+        original = FixedRiskManager(position_size_pct=0.3, stop_loss_pct=0.07,
+                                    max_positions=2, max_risk_per_trade=0.04)
+
+        description = describe_risk_manager(original)
+        rebuilt = create_risk_manager(description['name'], description['parameters'])
+
+        self.assertEqual(describe_risk_manager(rebuilt), description)
+
+    def test_an_unregistered_class_has_no_name_and_no_parameters(self):
+        class Unregistered(FixedRiskManager):
+            pass
+
+        description = describe_risk_manager(Unregistered())
+
+        self.assertIsNone(description['name'])
+        self.assertEqual(description['class'], 'Unregistered')
+        self.assertEqual(description['parameters'], {})
+
+    def test_get_risk_manager_name_matches(self):
+        self.assertEqual(get_risk_manager_name(FixedRiskManager()), 'fixed')
+        self.assertEqual(get_risk_manager_name(None), NO_RISK_MANAGER)
 
 
 if __name__ == '__main__':

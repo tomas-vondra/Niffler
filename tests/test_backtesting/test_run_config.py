@@ -310,6 +310,19 @@ class TestConfigMetadata(unittest.TestCase):
     def test_an_unconfigured_cost_model_stays_none_rather_than_naming_a_default(self):
         self.assertIsNone(RunConfig().to_metadata()['cost_model'])
 
+    def test_the_risk_manager_is_reduced_to_a_reconstructable_record(self):
+        from niffler.risk import FixedRiskManager
+
+        metadata = RunConfig(
+            risk_manager=FixedRiskManager(position_size_pct=0.3)).to_metadata()
+
+        self.assertEqual(metadata['risk_manager']['name'], 'fixed')
+        self.assertEqual(metadata['risk_manager']['parameters']['position_size_pct'],
+                         0.3)
+
+    def test_no_risk_management_is_recorded_as_such(self):
+        self.assertEqual(RunConfig().to_metadata()['risk_manager']['name'], 'none')
+
     def test_the_analyzers_record_the_whole_configuration(self):
         analyzer = WalkForwardAnalyzer(
             strategy_class=SimpleMAStrategy,

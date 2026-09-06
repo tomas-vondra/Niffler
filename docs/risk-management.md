@@ -49,10 +49,20 @@ is the regression suite.
 - `evaluate_trade(signal, current_price, portfolio_value, historical_data, portfolio)`
 - `should_close_position(current_price, entry_price, stop_loss_price, signal, unrealized_pnl)`
 
-`BacktestEngine.run_backtest()` checks `strategy.risk_manager` against it before the first
-bar and raises `TypeError` naming the missing methods. The check is `isinstance` on a
-Protocol, so it verifies that the attributes exist, not that their signatures match — a
-renamed method now fails at the start of the run rather than at the first signal.
+`BacktestEngine.run_backtest()` checks the manager in force against it before the first bar
+and raises `TypeError` naming the missing methods. The check is `isinstance` on a Protocol,
+so it verifies that the attributes exist, not that their signatures match — a renamed
+method now fails at the start of the run rather than at the first signal.
+
+### Where the manager comes from
+
+The engine owns one (`RunConfig.risk_manager`, set by `BacktestEngine.from_config`) and
+falls back to `strategy.risk_manager` when it has none. The fallback is the original route
+and still works; the engine-owned one is what lets `optimize.py`, `analyze.py`,
+`compare.py` and `screen.py` run the risk layer at all, because those build their strategy
+objects themselves and a manager attached to a strategy could never reach them. Configuring
+both is a `ValueError` unless they are the same object — a silent preference would drop one
+configuration from a run that still names it.
 
 The dependency runs one way: `niffler/backtesting` imports `niffler/risk`, never the
 reverse. That is why `PortfolioSnapshot` lives in `niffler/risk` and why the engine is
@@ -62,7 +72,7 @@ handed a snapshot rather than the `Portfolio` object itself.
 
 `niffler/risk/registry.py` is the single name→class map, the counterpart of
 `niffler/strategies/registry.py`. Adding a risk manager is **one entry in
-`RISK_MANAGER_CLASSES`**: `backtest.py`'s `--risk-manager` choices derive from
+`RISK_MANAGER_CLASSES`**: the shared `--risk-manager` choices derive from
 `get_available_risk_managers()`, and construction goes through `create_risk_manager()`, so
 no script needs an `if` branch.
 
@@ -246,23 +256,29 @@ manager — the default — are unchanged.
 - **Stop Loss Enforcement**: Automatically closes positions hitting stop losses
 - **Trade Blocking**: Can prevent trades that violate risk parameters
 
-### Strategy Integration
+### Library integration
 
-Risk managers attach to strategies for seamless integration:
+Put the manager on the `RunConfig`. It then reaches every engine the run builds, including
+the ones inside optimisation and analysis worker processes:
 
 ```python
-from niffler.strategies.simple_ma_strategy import SimpleMAStrategy
+from niffler.backtesting.backtest_engine import BacktestEngine
+from niffler.backtesting.run_config import RunConfig
 from niffler.risk.fixed_risk_manager import FixedRiskManager
+from niffler.strategies.simple_ma_strategy import SimpleMAStrategy
 
-# Create strategy with risk management
-strategy = SimpleMAStrategy(short_window=10, long_window=30)
-risk_manager = FixedRiskManager(
+run_config = RunConfig(risk_manager=FixedRiskManager(
     position_size_pct=0.1,
     stop_loss_pct=0.05,
     max_positions=5
-)
-strategy.risk_manager = risk_manager
+))
+engine = BacktestEngine.from_config(run_config)
+result = engine.run_backtest(SimpleMAStrategy(short_window=10, long_window=30), data)
 ```
+
+Attaching one to a strategy (`strategy.risk_manager = ...`, or
+`create_strategy(name, params, risk_manager=...)`) still works and is what the engine falls
+back to, but it only affects backtests run through that strategy object.
 
 ## Risk Metrics and Reporting
 

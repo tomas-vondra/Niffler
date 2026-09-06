@@ -177,7 +177,8 @@ class ExporterManager:
                               symbol: str, initial_capital: float, commission: float,
                               backtest_id: str = None,
                               provenance: Optional[Dict[str, Any]] = None,
-                              cost_model: str = None) -> ExportSummary:
+                              cost_model: str = None,
+                              risk_manager: Optional[Dict[str, Any]] = None) -> ExportSummary:
         """
         Export backtest results using all configured exporters.
 
@@ -201,6 +202,11 @@ class ExporterManager:
                 each destination
             cost_model: Description of the transaction cost model in force, so the
                 export says which market assumption produced these numbers
+            risk_manager: The run's risk configuration as
+                :func:`niffler.risk.registry.describe_risk_manager` renders it, so
+                the export says which position sizing and stops produced these
+                numbers rather than leaving "no risk management" indistinguishable
+                from "risk management not recorded"
 
         Returns:
             ExportSummary describing which exporters succeeded, which failed and the
@@ -213,8 +219,7 @@ class ExporterManager:
         # Create metadata
         metadata = self.create_metadata(
             result, strategy_params, symbol, initial_capital, commission, provenance,
-            cost_model
-
+            cost_model, risk_manager
         )
 
         successes: List[str] = []
@@ -255,7 +260,8 @@ class ExporterManager:
     def create_metadata(self, result: BacktestResult, strategy_params: Dict[str, Any],
                         symbol: str, initial_capital: float, commission: float,
                         provenance: Optional[Dict[str, Any]] = None,
-                        cost_model: str = None) -> Dict[str, Any]:
+                        cost_model: str = None,
+                        risk_manager: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Create standardized metadata for a backtest.
 
@@ -268,12 +274,15 @@ class ExporterManager:
             provenance: Optional run provenance record, included under a
                 ``provenance`` key when supplied
             cost_model: Description of the transaction cost model in force
+            risk_manager: The run's risk configuration, as
+                :func:`niffler.risk.registry.describe_risk_manager` renders it
 
         Returns:
             Dictionary containing standardized metadata
         """
         metadata = {
             'cost_model': cost_model,
+            'risk_manager': risk_manager,
             'total_commission': getattr(result, 'total_commission', 0.0),
             'total_slippage': getattr(result, 'total_slippage', 0.0),
             'strategy_name': result.strategy_name,
