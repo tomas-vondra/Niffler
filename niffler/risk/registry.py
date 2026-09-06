@@ -126,3 +126,54 @@ def create_risk_manager(
         )
 
     return manager_class(**kwargs)
+
+
+def get_risk_manager_name(manager: Any) -> Optional[str]:
+    """Return the registered name a manager instance was built under.
+
+    Args:
+        manager: A risk manager instance, or None.
+
+    Returns:
+        The registry key, ``'none'`` for None, or None when the class is not
+        registered.
+    """
+    if manager is None:
+        return NO_RISK_MANAGER
+
+    for name, manager_class in RISK_MANAGER_CLASSES.items():
+        if type(manager) is manager_class:
+            return name
+    return None
+
+
+def describe_risk_manager(manager: Any) -> Dict[str, Any]:
+    """Render a manager as the data needed to rebuild it.
+
+    A class name alone cannot be fed back to :func:`create_risk_manager`, so a
+    saved result recording only ``FixedRiskManager`` says what ran without
+    saying how to run it again. The name here is a registry key and the
+    parameters are the constructor's own, so the pair round-trips.
+
+    Args:
+        manager: A risk manager instance, or None.
+
+    Returns:
+        ``{'name', 'class', 'parameters'}``. ``name`` is None for an
+        unregistered class and ``parameters`` is then empty: such a manager
+        cannot be reconstructed by name, and saying so beats recording a guess.
+    """
+    if manager is None:
+        return {'name': NO_RISK_MANAGER, 'class': None, 'parameters': {}}
+
+    name = get_risk_manager_name(manager)
+    config = getattr(manager, 'config', None) or {}
+    parameters: Dict[str, Any] = {}
+    if name is not None and name != NO_RISK_MANAGER:
+        parameters = {
+            key: config[key]
+            for key in sorted(get_risk_manager_parameter_names(name))
+            if key in config
+        }
+
+    return {'name': name, 'class': type(manager).__name__, 'parameters': parameters}

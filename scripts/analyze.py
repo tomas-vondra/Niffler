@@ -37,6 +37,7 @@ from niffler.utils.provenance import collect_provenance
 from scripts.common import (
     add_cost_model_arguments,
     add_engine_arguments,
+    add_risk_manager_arguments,
     build_run_config,
     load_ohlcv_csv,
     report_run_config,
@@ -129,6 +130,9 @@ Examples:
     # analyzers carry a RunConfig rather than three loose numbers.
     add_engine_arguments(parser)
 
+    # Position sizing, stops and exposure caps. A Monte Carlo distribution is a
+    # risk measurement; taking it with the risk layer off measures nothing.
+    add_risk_manager_arguments(parser)
 
     # Walk-forward specific arguments
     parser.add_argument(

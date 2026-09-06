@@ -19,13 +19,13 @@ from niffler.strategies.registry import (
     get_available_strategies,
     get_strategy_parameter_names,
 )
-from niffler.risk import create_risk_manager, get_available_risk_managers
 from niffler.exporters import ExporterManager, get_available_exporters
 from niffler.utils.provenance import collect_provenance
 from niffler.config.logging import setup_logging
 from scripts.common import (
     add_cost_model_arguments,
     add_engine_arguments,
+    add_risk_manager_arguments,
     build_run_config,
     load_ohlcv_csv,
     report_cost_model,
@@ -319,19 +319,11 @@ Examples:
     parser.add_argument('--clean', action='store_true',
                        help='Apply data cleaning pipeline to the CSV file before backtesting')
     
-    # Risk Management options
-    parser.add_argument('--risk-manager', choices=get_available_risk_managers(),
-                       default='none',
-                       help='Risk manager to use (default: none)')
-    parser.add_argument('--max-position-size', type=float, default=0.2,
-                       help='Maximum position size as fraction of portfolio (default: 0.2)')
-    parser.add_argument('--stop-loss-pct', type=float, default=0.05,
-                       help='Stop loss percentage (default: 0.05)')
-    parser.add_argument('--max-positions', type=int, default=5,
-                       help='Maximum number of concurrent positions (default: 5)')
-    parser.add_argument('--max-risk-per-trade', type=float, default=0.02,
-                       help='Maximum risk per trade as fraction of portfolio (default: 0.02)')
-    
+    # Risk management options, shared with optimize/analyze/compare/screen so a
+    # strategy is sized and stopped the same way wherever it is measured.
+    add_risk_manager_arguments(parser)
+
+
     # Logging options
     parser.add_argument('--log-level', default='INFO',
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
@@ -360,16 +352,13 @@ Examples:
             symbol = extract_symbol_from_filename(args.data)
             print(f"Symbol extracted from filename: {symbol}")
 
-        # Initialize risk manager. Construction is generic: a risk manager
-        # registered in niffler.risk.registry is selectable here with no change
-        # to this file. The four flags are FixedRiskManager-shaped; a
-        # --risk-params JSON mirroring --params is the follow-up.
-        risk_manager = create_risk_manager(args.risk_manager, {
-            'position_size_pct': args.max_position_size,
-            'stop_loss_pct': args.stop_loss_pct,
-            'max_positions': args.max_positions,
-            'max_risk_per_trade': args.max_risk_per_trade,
-        })
+        # Engine settings, built once and before anything else, so an unusable
+        # combination of flags fails before any work is done. The risk manager
+        # is one of those settings now, so it is taken from here rather than
+        # constructed a second time - the engine rejects two managers.
+        run_config = build_run_config(args)
+
+        risk_manager = run_config.risk_manager
         if risk_manager is not None:
             print(f"Risk Manager: {risk_manager.get_risk_metrics()['risk_management_type']}")
         
@@ -394,9 +383,6 @@ Examples:
         else:
             print("Risk Management: None")
         
-        # Engine settings, built once. Constructed before the engine so an
-        # unusable combination of flags fails before any work is done.
-        run_config = build_run_config(args)
         report_cost_model(run_config.cost_model)
 
         engine = BacktestEngine.from_config(run_config)
@@ -440,7 +426,8 @@ Examples:
             initial_capital=run_config.initial_capital,
             commission=run_config.commission,
             provenance=provenance,
-            cost_model=engine.cost_model.description
+            cost_model=engine.cost_model.description,
+            risk_manager=run_config.to_metadata()['risk_manager']
         )
 
         return report_export_outcome(export_result, exporter_manager.get_exporter_names())

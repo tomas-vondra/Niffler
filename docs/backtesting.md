@@ -22,9 +22,13 @@ python scripts/backtest.py --data <data_file> [--strategy <strategy_name>] [--ca
 - `--min-order-value`: Minimum trade value to execute, default: 1.0
 
 **Risk management:**
+These flags are shared with `optimize.py`, `analyze.py`, `compare.py` and `screen.py`, so a
+strategy is sized and stopped the same way wherever it is measured. A tuning flag the
+chosen manager does not read is an error naming the accepted ones, never a silent drop.
+
 - `--risk-manager`: `none` (default) or any name in `niffler/risk/registry.py`, currently
   `fixed`. The choices derive from the registry, so registering a manager makes it
-  selectable with no change to `backtest.py`. The Kelly manager is a stub and is
+  selectable with no change to any script. The Kelly manager is a stub and is
   deliberately not registered
 - `--max-position-size`: Fraction of portfolio per trade, default: 0.2
 - `--stop-loss-pct`: Stop loss distance from entry, default: 0.05

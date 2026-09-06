@@ -48,6 +48,15 @@ class BacktestEngine:
     bar's volume one order takes; the order is then truncated to a partial fill
     and logged, never silently dropped.
 
+    Risk management
+    ---------------
+    The engine owns its risk manager (``risk_manager``, normally set from a
+    ``RunConfig``) and falls back to ``strategy.risk_manager`` when it has none.
+    The fallback is what ``backtest.py`` has always used; the engine-owned route
+    is what lets the optimizer and the analyzers - which build their strategies
+    themselves - run the risk layer at all. Configuring both is an error rather
+    than a silent preference.
+
     Benchmark and significance
     --------------------------
     Every run is measured against a passive alternative over the *same bars*
@@ -79,7 +88,8 @@ class BacktestEngine:
                  benchmark: Optional[str] = BENCHMARK_BUY_AND_HOLD,
                  min_trades_for_significance: int = DEFAULT_MIN_TRADES,
                  bootstrap_samples: int = 0,
-                 bootstrap_seed: int = 42):
+                 bootstrap_seed: int = 42,
+                 risk_manager: Optional[RiskManager] = None):
         """
         Initialize the backtest engine.
 
@@ -113,10 +123,15 @@ class BacktestEngine:
                 read it. The backtest CLI turns it on.
             bootstrap_seed: Seed for that bootstrap, passed explicitly so the
                 interval is reproducible and workers never draw fresh entropy.
+            risk_manager: Risk manager applied to every backtest this engine
+                runs. When None (the default) the engine falls back to the
+                strategy's own ``risk_manager``, which is how it has always
+                reached one.
 
         Raises:
             ValueError: If any parameter is outside its valid range
-            TypeError: If cost_model is not a CostModel
+            TypeError: If cost_model is not a CostModel, or risk_manager does
+                not satisfy the RiskManager protocol
         """
         # Every range check lives in RunConfig, which is also what the
         # analyzers, the optimizer and their worker processes carry. Repeating
@@ -132,6 +147,7 @@ class BacktestEngine:
             min_trades_for_significance=min_trades_for_significance,
             bootstrap_samples=bootstrap_samples,
             bootstrap_seed=bootstrap_seed,
+            risk_manager=risk_manager,
         )
 
         self.run_config = config
@@ -146,6 +162,7 @@ class BacktestEngine:
         self.min_trades_for_significance = config.min_trades_for_significance
         self.bootstrap_samples = config.bootstrap_samples
         self.bootstrap_seed = config.bootstrap_seed
+        self.risk_manager: Optional[RiskManager] = config.risk_manager
 
     @classmethod
     def from_config(cls, config: RunConfig) -> 'BacktestEngine':
@@ -172,7 +189,27 @@ class BacktestEngine:
             min_trades_for_significance=config.min_trades_for_significance,
             bootstrap_samples=config.bootstrap_samples,
             bootstrap_seed=config.bootstrap_seed,
+            risk_manager=config.risk_manager,
         )
+
+    def _effective_risk_manager(self, strategy: BaseStrategy) -> Optional[RiskManager]:
+        """Return the manager this run uses: the engine's, else the strategy's.
+
+        The engine used to reach a manager only through ``strategy.risk_manager``,
+        which is why the optimizer and the analyzers - which build their own
+        strategies - could not be given one. The engine now owns it, and the
+        strategy-attached route stays live so ``create_strategy(..., risk_manager=)``
+        keeps working.
+
+        Args:
+            strategy: Strategy being tested.
+
+        Returns:
+            The risk manager in force, or None when there is none.
+        """
+        if self.risk_manager is not None:
+            return self.risk_manager
+        return strategy.risk_manager
 
     @property
     def execution_lag(self) -> int:
@@ -497,12 +534,13 @@ class BacktestEngine:
         Raises:
             ValueError: If the risk manager returns a position size outside [0, 1]
         """
-        if signal == 0 or strategy.risk_manager is None:
+        risk_manager = self._effective_risk_manager(strategy)
+        if signal == 0 or risk_manager is None:
             return signal, position_size, None
 
         historical_data = data.iloc[:max(signal_index, 0) + 1]
 
-        risk_decision = strategy.risk_manager.evaluate_trade(
+        risk_decision = risk_manager.evaluate_trade(
             signal=signal,
             current_price=execution_price,
             portfolio_value=portfolio.market_value(execution_price),
@@ -569,7 +607,10 @@ class BacktestEngine:
         """
         if portfolio.position == 0 or portfolio.stop_loss is None:
             return False
-        if strategy.risk_manager is None:
+        if portfolio.entry_price is None:
+            return False
+        risk_manager = self._effective_risk_manager(strategy)
+        if risk_manager is None:
             return False
 
         is_long = portfolio.side >= 0
@@ -577,7 +618,7 @@ class BacktestEngine:
         if worst_price is None:
             worst_price = price
 
-        should_close, reason = strategy.risk_manager.should_close_position(
+        should_close, reason = risk_manager.should_close_position(
             current_price=worst_price,
             entry_price=portfolio.entry_price,
             stop_loss_price=portfolio.stop_loss,
@@ -1121,10 +1162,21 @@ class BacktestEngine:
         if not strategy.validate_data(data):
             raise ValueError("Invalid data format for backtesting")
 
-        # The engine reaches its risk manager through strategy.risk_manager, so
-        # a renamed method used to surface at the first signal, mid-run. Check
-        # the contract once, before any bar is processed.
-        risk_manager = strategy.risk_manager
+        # Two managers that are not the same object are two different runs; the
+        # engine's would win silently and the strategy's configuration would
+        # vanish from a result that still names it.
+        if (self.risk_manager is not None and strategy.risk_manager is not None
+                and strategy.risk_manager is not self.risk_manager):
+            raise ValueError(
+                "Two different risk managers were configured: "
+                f"{type(self.risk_manager).__name__} on the engine and "
+                f"{type(strategy.risk_manager).__name__} on the strategy. "
+                "Configure it in one place."
+            )
+
+        # A renamed contract method used to surface at the first signal,
+        # mid-run. Check it once, before any bar is processed.
+        risk_manager = self._effective_risk_manager(strategy)
         if risk_manager is not None and not isinstance(risk_manager, RiskManager):
             missing = [
                 name for name in ('evaluate_trade', 'should_close_position')

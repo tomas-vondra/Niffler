@@ -33,6 +33,21 @@ builds one from its own arguments rather than repeating the checks. An invalid
 setting is therefore rejected at the same place with the same message whether it
 came from a CLI flag, a library caller or a worker process.
 
+Risk management is one of those knobs
+-------------------------------------
+``--risk-manager`` used to exist only in ``backtest.py``, attached to the
+strategy object. The optimizer and both analyzers build their strategies
+themselves, so optimisation, walk-forward and Monte Carlo all ran with risk
+management off - a Monte Carlo distribution whose entire point is a risk
+measurement, taken with the risk layer disabled. ``risk_manager`` is a field
+here because this is the value that already crosses into worker processes;
+carrying it makes the validated system the same one that was optimised.
+
+Holding a manager here is only safe because managers are stateless: they own
+their configuration and receive portfolio state per call (see
+:mod:`niffler.risk.contract`). One instance is therefore shareable across folds
+and picklable across the spawn boundary.
+
 Defaults are the engine's defaults, unchanged. ``bootstrap_samples`` in
 particular defaults to 0: the bootstrap Sharpe interval is the only expensive
 part of the assessment and nothing inside an optimisation or Monte Carlo loop
@@ -41,6 +56,9 @@ reads it, so only ``backtest.py`` turns it on.
 
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
+
+from niffler.risk.contract import RiskManager
+from niffler.risk.registry import describe_risk_manager
 
 from .benchmark import BENCHMARK_BUY_AND_HOLD, BENCHMARK_CHOICES, BENCHMARK_NONE
 from .cost_model import CostModel
@@ -86,6 +104,9 @@ class RunConfig:
         cost_model: Transaction cost model. ``None`` means the engine's
             frictionless ``ZeroCostModel``; it is kept as ``None`` rather than
             normalised so "no model was configured" stays visible in metadata.
+        risk_manager: Risk manager every backtest of this run uses. ``None``
+            means no risk management at all - not a permissive manager, because
+            the engine branches on ``is None`` to skip stop processing.
         benchmark: ``buy_and_hold`` (default) or ``none``. ``None`` is accepted
             and normalised to ``none``, as the engine has always done.
         min_trades_for_significance: Round trips below which no significance
@@ -101,6 +122,7 @@ class RunConfig:
     execution_timing: str = DEFAULT_EXECUTION_TIMING
     periods_per_year: Optional[float] = None
     cost_model: Optional[CostModel] = None
+    risk_manager: Optional[RiskManager] = None
     benchmark: Optional[str] = BENCHMARK_BUY_AND_HOLD
     min_trades_for_significance: int = DEFAULT_MIN_TRADES
     bootstrap_samples: int = BOOTSTRAP_DISABLED
@@ -111,7 +133,8 @@ class RunConfig:
 
         Raises:
             ValueError: If any setting is outside its valid range.
-            TypeError: If ``cost_model`` is not a ``CostModel``.
+            TypeError: If ``cost_model`` is not a ``CostModel``, or
+                ``risk_manager`` does not satisfy the ``RiskManager`` protocol.
         """
         if self.initial_capital <= 0:
             raise ValueError("Initial capital must be positive")
@@ -130,6 +153,17 @@ class RunConfig:
             raise TypeError(
                 f"cost_model must be a CostModel, got {type(self.cost_model).__name__}"
             )
+        # Checked here rather than at the first signal: a manager missing a
+        # contract method used to surface mid-run, inside a worker.
+        if self.risk_manager is not None and not isinstance(self.risk_manager, RiskManager):
+            missing = [
+                name for name in ('evaluate_trade', 'should_close_position')
+                if not callable(getattr(self.risk_manager, name, None))
+            ]
+            raise TypeError(
+                f"{type(self.risk_manager).__name__} is not a RiskManager: missing "
+                f"{', '.join(missing)}. See niffler.risk.contract.RiskManager."
+            )
         # An explicit None has always meant "no benchmark"; it is normalised
         # rather than rejected so the engine's old contract still holds.
         if self.benchmark is None:
@@ -147,7 +181,9 @@ class RunConfig:
         """Render the config for JSON output and console reporting.
 
         The cost model is reduced to its description, which is the only part of
-        it that is serialisable and the only part a reader needs.
+        it that is serialisable and the only part a reader needs. The risk
+        manager is reduced to its registry name and constructor parameters, so
+        the record says how to reproduce the run rather than only what ran.
 
         Returns:
             A JSON-safe dict of every setting.
@@ -160,6 +196,7 @@ class RunConfig:
             'periods_per_year': self.periods_per_year,
             'cost_model': (self.cost_model.description
                            if self.cost_model is not None else None),
+            'risk_manager': describe_risk_manager(self.risk_manager),
             'benchmark': self.benchmark,
             'min_trades_for_significance': self.min_trades_for_significance,
             'bootstrap_samples': self.bootstrap_samples,

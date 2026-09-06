@@ -45,6 +45,7 @@ from niffler.utils.provenance import collect_provenance
 from scripts.common import (
     add_cost_model_arguments,
     add_engine_arguments,
+    add_risk_manager_arguments,
     build_run_config,
     load_ohlcv_csv,
     report_run_config,
@@ -310,8 +311,12 @@ Examples:
     # buy-and-hold on the same bars, so 'none' would empty the table rather
     # than configure it.
     add_engine_arguments(parser, benchmark=False)
+    # Every asset in the table is measured under the same risk configuration,
+    # which is the only way the column is a comparison.
+    add_risk_manager_arguments(parser)
 
-    # Persisted defaults, folded in before parsing so a flag still wins.
+    # Persisted defaults, folded in before parsing so a flag still wins. Last,
+    # so [risk] keys resolve against dests the parser has already declared.
     add_config_arguments(parser)
     config = apply_config(parser, 'compare')
 
