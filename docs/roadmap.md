@@ -23,8 +23,8 @@ Kept struck through rather than deleted, so the list stays honest about what mov
 - ~~Create the logger once at start~~ — done. `niffler/config/logging.py` holds the only
   `logging.basicConfig` call; every other module just calls `logging.getLogger(__name__)`,
   and all five CLI scripts configure it inside `main()`, so importing a script has no
-  logging side effect. (`analyze.py` still derives its level from `--verbose` rather than
-  `--log-level`; converging that flag is a separate, purely cosmetic change.)
+  logging side effect. `analyze.py` now declares `--log-level` like the others and keeps
+  `--verbose` as a shorthand for `DEBUG`, so the two spellings cannot disagree.
 - ~~Unify the `__init__.py` files~~ — done. Every package `__init__.py` now declares
   `__all__` with explicit re-exports.
 - ~~Work out why `__pycache__` is everywhere~~ — resolved. `__pycache__/` and `*.py[cod]`
@@ -41,6 +41,18 @@ Kept struck through rather than deleted, so the list stays honest about what mov
   from it and `scripts/backtest.py` constructs generically, so adding a strategy is one
   class plus one registry line. This also killed a real bug: `analyze.py` defined its own
   shadowing `get_strategy_class`, so a strategy `optimize.py` accepted was rejected there.
+- ~~Let the user supply the parameter space~~ — shipped. `[optimize.parameter_space.<strategy>]`
+  in `niffler.toml` replaces the entry for each parameter it names and leaves the rest of the
+  strategy's `PARAMETER_SPEC` alone, so a plateau that has run into the edge of the searched
+  range can be widened for one project without editing the strategy. The override is validated
+  against the strategy's own constructor signature and against `ParameterSpace`, so a parameter
+  the strategy does not accept is an error rather than a silently ignored line.
+- ~~Stop retyping every parameter on every run~~ — shipped. `scripts/config_file.py` folds a
+  `niffler.toml` into each CLI's argparse defaults: shared `[common]`, `[costs]`, `[engine]`
+  and `[risk]` sections, a per-script section, and named `[profile.NAME]` overlays, with the
+  command line always winning. It exists for the cost model above all: a friction assumption
+  typed into one script and forgotten in another compares two different markets, and sharing
+  the flag *definitions* in `common.py` could never prevent that on its own.
 
 ## Framework and usability
 
@@ -49,12 +61,6 @@ Kept struck through rather than deleted, so the list stays honest about what mov
   functions (`niffler/optimization/optimizer_factory.py`) and a class attribute plus
   instance methods (`niffler/exporters/exporter_manager.py`). The risk manager in
   `backtest.py` is still built inline. Pick one and converge.
-- **Let the user supply the parameter space.** #9 moved the search space onto the strategy
-  as a `PARAMETER_SPEC` class attribute, which removed the second definition that could
-  drift — but it is still a code constant. `scripts/optimize.py` has no way to override or
-  widen it for a single run, which the plateau analysis asks for by name whenever a plateau
-  runs into the edge of the searched range. A JSON parameter-space file would close that
-  loop.
 - **Progress reporting during optimization.** A grid search currently prints nothing until
   it finishes. There is no per-combination feedback and no ETA.
 

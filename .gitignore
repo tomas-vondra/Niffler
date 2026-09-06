@@ -68,6 +68,9 @@ coverage.xml
 .env.*.local
 !.env.example
 
+# Local run configuration (the committed template niffler.toml.example stays tracked)
+niffler.toml
+
 # Optimization results
 optimization_results*.json
 

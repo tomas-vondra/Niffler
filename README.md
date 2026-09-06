@@ -72,6 +72,62 @@ Every script returns a **non-zero exit code on failure**, so they compose safely
 pipelines and CI. In particular `backtest.py` exits 1 if any exporter fails, and
 `download_data.py` exits 1 if a download returned nothing or came back truncated.
 
+## Configuration file
+
+The commands above retype the same seven flags on every run, and a cost-model flag typed
+into `optimize.py` but forgotten in `backtest.py` silently compares two different markets -
+the failure `scripts/common.py` exists to prevent, one layer up. A `niffler.toml` in the
+working directory supplies those values instead:
+
+```toml
+[common]
+data            = "data/BTCUSDT_binance_1d_20240101_20241231_cleaned.csv"
+initial_capital = 10000.0
+commission      = 0.001
+
+[costs]
+cost_model      = "fixed"
+slippage_bps    = 5.0
+half_spread_bps = 1.0
+
+[backtest]
+strategy  = "simple_ma"
+exporters = "console,csv"
+
+[profile.quick]
+simulations = 100
+```
+
+so step 3 above becomes:
+
+```bash
+python scripts/backtest.py
+```
+
+Precedence runs from argparse defaults, through `[common]`/`[costs]`/`[engine]`/`[risk]`,
+then the per-script section, then `[profile.NAME]` (`--profile quick`), and finally **the
+command line, which always wins**. Every invocation that worked before the file existed
+behaves identically after it.
+
+Copy `niffler.toml.example` to start (`niffler.toml` itself is gitignored, since it holds
+local paths). `--config PATH` or the `NIFFLER_CONFIG` environment variable selects a
+different file; a missing `niffler.toml` is not an error, a malformed one is. Keys are
+argparse dests - the long flag with dashes turned into underscores - and an unknown key in
+a per-script section is an error naming the valid ones. Shared sections are lenient about
+keys the running script does not declare, because `[common]` is read by all seven CLIs.
+
+`[optimize.parameter_space.STRATEGY]` overrides the search space a strategy declares as its
+`PARAMETER_SPEC`, one parameter at a time - which is what a plateau that runs into the edge
+of the searched range is asking for:
+
+```toml
+[optimize.parameter_space.simple_ma.long_window]
+type = "int"
+min  = 20
+max  = 200
+step = 5
+```
+
 ## Framework Workflow
 
 Niffler follows a systematic approach to quantitative trading strategy development:

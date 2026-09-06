@@ -316,7 +316,7 @@ class TestAnalyzeScript(unittest.TestCase):
         args.initial_capital = 10000
         args.commission = 0.001
         args.n_jobs = 1
-        args.random_seed = 42
+        args.seed = 42
         args.symbol = 'TEST'
         
         # Capture stdout
