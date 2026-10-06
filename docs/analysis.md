@@ -12,7 +12,7 @@ python scripts/analyze.py --data <data_file> --analysis <analysis_type> --strate
 - `--strategy`: Strategy to analyze (currently supports `simple_ma`)
 
 **Parameter Arguments** (`--params-file` and/or `--params`; they combine, `--params` winning):
-- `--params-file` (also `--params_file`): Path to a JSON file containing parameters. An
+- `--params-file` (also `--params-file`): Path to a JSON file containing parameters. An
   optimization results file works directly, and the run that wrote it is recorded as this
   run's **parent**; an unset experiment is inherited from it (see
   [Run identity](../README.md#run-identity-which-runs-belong-together))
@@ -24,11 +24,11 @@ for walk-forward analysis: it re-optimises the parameters on every training wind
 fixed parameter set would be meaningless there (any value passed is ignored with a warning).
 
 **Optional Arguments:**
-- `--initial_capital`: Starting capital, default: 10000 (note: `backtest.py` spells this
+- `--initial-capital`: Starting capital, default: 10000 (note: `backtest.py` spells this
   `--capital` and `optimize.py` spells it `--initial-capital`)
 - `--commission`: Commission rate per trade, default: 0.001
 - `--symbol`: Symbol identifier, default: "UNKNOWN"
-- `--n_jobs`: Number of parallel jobs, default: auto-detect (max 4)
+- `--jobs`: Number of parallel jobs, default: auto-detect (max 4)
 - `--output`: Save detailed results to JSON file
 - `--verbose`, `-v`: Enable debug logging
 
@@ -38,18 +38,18 @@ prints "Analysis completed successfully!" after failing to save.
 
 **Walk-Forward Specific Options:**
 - `--mode`: `walk_forward` (default, genuinely out-of-sample) or `segmented_in_sample`
-- `--train_window`: Training window size in months, default: 12
-- `--test_window`: Test window size in months, default: 6
+- `--train-window`: Training window size in months, default: 12
+- `--test-window`: Test window size in months, default: 6
 - `--step`: Step size in months between windows, default: 3
 - `--anchored`: Anchor every training window to the first bar instead of rolling it
-- `--optimization_method`: Optimizer used per training window (`grid` or `random`), default: `grid`
-- `--optimization_metric`: Metric the per-fold optimizer selects by, default: `total_return`
+- `--optimization-method`: Optimizer used per training window (`grid` or `random`), default: `grid`
+- `--optimization-metric`: Metric the per-fold optimizer selects by, default: `total_return`
 
 **Monte Carlo Specific Options:**
 - `--simulations`: Number of simulations, default: 1000
-- `--bootstrap_pct`: Percentage of data to sample, default: 0.8 (80%)
-- `--block_size`: Block size in days for bootstrap sampling, default: 30
-- `--random_seed`: Random seed for reproducible results
+- `--bootstrap-pct`: Percentage of data to sample, default: 0.8 (80%)
+- `--block-size`: Block size in days for bootstrap sampling, default: 30
+- `--seed`: Random seed for reproducible results
 
 ## Examples
 
@@ -65,7 +65,7 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_for
 
 **Load parameters from optimization results (Monte Carlo):**
 ```bash
-python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_carlo --strategy simple_ma --params_file optimization_results.json
+python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_carlo --strategy simple_ma --params-file optimization_results.json
 ```
 
 **Monte Carlo analysis with 1000 simulations:**
@@ -75,12 +75,12 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
 
 **Parallel execution with custom settings:**
 ```bash
-python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_carlo --strategy simple_ma --params_file optimization_results.json --n_jobs 8 --bootstrap_pct 0.75 --output analysis_results.json
+python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_carlo --strategy simple_ma --params-file optimization_results.json --jobs 8 --bootstrap-pct 0.75 --output analysis_results.json
 ```
 
 **Walk-forward with custom time windows:**
 ```bash
-python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma --train_window 12 --test_window 6 --step 3
+python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma --train-window 12 --test-window 6 --step 3
 ```
 
 ## Analysis Framework
@@ -316,7 +316,7 @@ When `--output` is specified, results are saved in structured JSON containing:
 ### Optimization Integration
 - Compatible with optimization result files as parameter input
 - Seamless workflow: optimize → analyze → validate
-- JSON parameter files work directly as `--params_file` input
+- JSON parameter files work directly as `--params-file` input
 
 ### Backtesting Integration
 - Uses same `BacktestEngine` for consistent performance measurement
@@ -359,7 +359,7 @@ Stated plainly, so results are not over-read:
   counted once when computing `combined_sharpe_ratio`, and `oos_overlap_pct` plus a warning
   report the overlap — but the per-fold counters (`positive_return_pct`,
   `profitable_periods_pct`, `return_consistency`) still treat each fold as one independent
-  sample, which they are not. Set `--step` >= `--test_window` for folds that tile cleanly.
+  sample, which they are not. Set `--step` >= `--test-window` for folds that tile cleanly.
   The default was left alone deliberately, because changing it would silently alter every
   existing schedule
 - **Walk-forward parallelism uses a fixed 600s per-fold timeout.** A large parameter space

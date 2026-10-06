@@ -395,7 +395,7 @@ def main() -> int:
                        help='Apply data preprocessing before optimization')
     
     # Performance options
-    parser.add_argument('--jobs', '--n_jobs', dest='n_jobs', type=int, default=None,
+    parser.add_argument('--jobs', '--n-jobs', '--n_jobs', dest='n_jobs', type=int, default=None,
                        help='Number of parallel jobs (default: auto-detect)')
     parser.add_argument('--seed', type=int, default=None,
                        help='Random seed for reproducible results')

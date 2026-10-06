@@ -53,6 +53,7 @@ The short version, because these are easy to "helpfully" undo:
 | A truncated optimization exports **flagged**, with `grid_median` / `fraction_beating_baseline` / `plateau_retention` **null** | Export a grid statistic computed from the survivors of the memory cap, which were selected by score |
 | A run over several datasets has **no** run-level `data_sha256`; each detail row names its own | Stamp the first file's hash on a `compare` or `screen` summary |
 | Exported document ids are deterministic (`run_id`, `run_id:type:index`) | Let Elasticsearch generate ids, which turns a re-export into duplicates; the trial index relies on `_evaluate_parallel` retaining submission order |
+| Every flag has a **hyphen** spelling, listed first; an underscore spelling (`--train_window`) survives only as an alias of its hyphen twin, and the **dest never changes** | Add a flag spelled only with underscores, drop an old spelling, or rename a dest - `niffler.toml` keys are dests, so a rename orphans a user's file (`tests/test_scripts/test_flag_spelling.py` checks every script's real parser) |
 | A run id has **one** mint site (`niffler/utils/run_identity.mint_run_id`), and the identity is built **once per run at the CLI** by `scripts/common.build_run_identity` | Mint a uuid in an exporter or a manager, or put the identity on `RunConfig` - it is not an engine knob and would make two equal configs unequal |
 | The **experiment is never minted**; unnamed is `None`, shown `(none)` | Generate an experiment id for an unlabelled run - a forgotten flag would then look like a deliberate one-run experiment |
 | A run fed by `--params-file` **inherits** an unset experiment, and a *different* one is an **error** unless `--experiment` was typed (`typed_on_command_line`) | Let the file silently win, let a profile value override the error, or compare values to decide "typed" - the user may type the name the file already holds |
@@ -132,10 +133,10 @@ Main functionality via `scripts/download_data.py`:
 
 ```bash
 # Cryptocurrency data from Binance
-python scripts/download_data.py --source ccxt --symbol BTC/USDT --timeframe 1d --start_date 2024-01-01 --end_date 2024-01-05 --exchange binance
+python scripts/download_data.py --source ccxt --symbol BTC/USDT --timeframe 1d --start-date 2024-01-01 --end-date 2024-01-05 --exchange binance
 
 # Traditional financial data from Yahoo Finance
-python scripts/download_data.py --source yahoo --symbol BTC-USD --timeframe 1d --start_date 2024-01-01 --end_date 2024-01-05
+python scripts/download_data.py --source yahoo --symbol BTC-USD --timeframe 1d --start-date 2024-01-01 --end-date 2024-01-05
 ```
 
 ### Data Preprocessing
@@ -215,8 +216,8 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_for
 
 # Walk-forward with custom windows and a random per-fold optimizer selecting on Sharpe
 python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma \
-  --train_window 12 --test_window 6 --step 6 --anchored \
-  --optimization_method random --optimization_metric sharpe_ratio
+  --train-window 12 --test-window 6 --step 6 --anchored \
+  --optimization-method random --optimization-metric sharpe_ratio
 
 # The old fixed-parameter behaviour - NOT a validation, requires --params, warns loudly
 python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma \
@@ -226,7 +227,7 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_for
 python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_carlo --strategy simple_ma --params '{"short_window": 10, "long_window": 30}' --simulations 1000
 
 # Parallel execution for faster analysis
-python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_carlo --strategy simple_ma --params_file optimization_results.json --n_jobs 8
+python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_carlo --strategy simple_ma --params-file optimization_results.json --jobs 8
 ```
 
 Note: `--benchmark`, `--periods-per-year`, `--min-order-value` and
@@ -452,7 +453,7 @@ Exit codes: `0` every gate passed, `3` a gate stopped the run, `1` the run faile
     something: every fold is measured against buy-and-hold over the **same bars** with
     the same costs (an absolute return is not comparable across assets, and a six-month
     fold judged against a multi-year benchmark is not comparable to anything), and
-    `--step` defaults to `--test_window` so the folds being counted as evidence do not
+    `--step` defaults to `--test-window` so the folds being counted as evidence do not
     overlap. A pair that fails becomes a row carrying its error and makes the run exit
     non-zero - it never silently shrinks the table
   - `screen.py` - The pipeline as a funnel: backtest → optimize → walk-forward →
@@ -474,7 +475,8 @@ Exit codes: `0` every gate passed, `3` a gate stopped the run, `1` the run faile
     `build_run_config` is **the** place parsed arguments become engine settings, so a
     field added to `RunConfig` is reachable from every script at once and no script can
     populate half of it. Every CLI spells its capital flag differently
-    (`--capital` / `--initial_capital` / `--initial-capital`) but they all use
+    (`--capital` / `--initial-capital`, and `analyze.py` also keeps `--initial_capital`)
+    but they all use
     `dest='initial_capital'`. `execution_timing` deliberately has **no** flag.
     `compare.py` and `screen.py` pass `benchmark=False`: both gate on beating
     buy-and-hold, so `--benchmark none` would empty the table rather than configure it.

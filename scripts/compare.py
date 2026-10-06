@@ -15,7 +15,7 @@ out-of-sample span and charged the *same* commission and cost model.
 
 **Non-overlapping folds by default.** ``analyze.py`` defaults to ``step_months=3`` with
 ``test_window_months=6``, so consecutive out-of-sample windows share half their bars and
-N folds are not N independent observations. Here ``--step`` defaults to ``--test_window``,
+N folds are not N independent observations. Here ``--step`` defaults to ``--test-window``,
 because the whole point of this script is counting independent evidence.
 """
 
@@ -329,21 +329,21 @@ Examples:
     parser.add_argument('--commission', type=float, default=0.001,
                         help='Commission rate (default: 0.001)')
 
-    parser.add_argument('--train_window', type=int, default=12,
+    parser.add_argument('--train-window', '--train_window', type=int, default=12,
                         help='Training window in months (default: 12)')
-    parser.add_argument('--test_window', type=int, default=6,
+    parser.add_argument('--test-window', '--test_window', type=int, default=6,
                         help='Test window in months (default: 6)')
     parser.add_argument('--step', type=int, default=None,
-                        help='Months between folds (default: --test_window, '
+                        help='Months between folds (default: --test-window, '
                              'which keeps out-of-sample windows non-overlapping)')
     parser.add_argument('--anchored', action='store_true',
                         help='Anchor the training window at the start of the data')
-    parser.add_argument('--optimization_method', default='grid',
+    parser.add_argument('--optimization-method', '--optimization_method', default='grid',
                         choices=get_available_optimizers(),
                         help='Per-fold optimizer (default: grid)')
-    parser.add_argument('--optimization_metric', default='total_return',
+    parser.add_argument('--optimization-metric', '--optimization_metric', default='total_return',
                         help='Per-fold selection metric (default: total_return)')
-    parser.add_argument('--n_jobs', '--jobs', dest='n_jobs', type=int, default=None,
+    parser.add_argument('--jobs', '--n-jobs', '--n_jobs', dest='n_jobs', type=int, default=None,
                         help='Parallel jobs for folds (default: auto)')
     parser.add_argument('--log-level', default='INFO',
                         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'])

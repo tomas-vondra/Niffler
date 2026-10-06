@@ -16,8 +16,8 @@ python scripts/backtest.py --data <data_file> [--strategy <strategy_name>] [--ca
 - `--clean`: Apply the default data-cleaning pipeline before backtesting
 
 **Backtest parameters:**
-- `--capital`: Starting capital, default: 10000. (The flag is `--capital`, **not**
-  `--initial_capital` — `analyze.py` and `optimize.py` use different spellings of their own.)
+- `--capital`: Starting capital, default: 10000. `--initial-capital` is the same flag, and
+  both spellings work in every script.
 - `--commission`: Commission rate per trade, default: 0.001 (0.1%)
 - `--min-order-value`: Minimum trade value to execute, default: 1.0
 

@@ -441,7 +441,7 @@ def add_engine_arguments(parser: argparse.ArgumentParser,
                          benchmark: bool = True) -> None:
     """Add the shared engine-setting flags to a script's parser.
 
-    ``--capital``/``--initial_capital`` and ``--commission`` are *not* added
+    ``--capital``/``--initial-capital`` and ``--commission`` are *not* added
     here: every script already declares them under its own established
     spelling. What they must all share is ``dest='initial_capital'`` so
     :func:`build_run_config` reads one attribute name.

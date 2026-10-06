@@ -5,7 +5,7 @@
 ### Download Script Usage
 
 ```bash
-python scripts/download_data.py --source <source> --symbol <symbol> --timeframe <timeframe> --start_date <YYYY-MM-DD> [--end_date <YYYY-MM-DD>] [--exchange <exchange_id>] [--output <filename>]
+python scripts/download_data.py --source <source> --symbol <symbol> --timeframe <timeframe> --start-date <YYYY-MM-DD> [--end-date <YYYY-MM-DD>] [--exchange <exchange_id>] [--output <filename>]
 ```
 
 **Arguments:**
@@ -14,8 +14,8 @@ python scripts/download_data.py --source <source> --symbol <symbol> --timeframe 
   no change to the script
 - `--symbol`: Trading pair (e.g., `BTC/USDT` for `ccxt`, `BTC-USD` for `yahoo`)
 - `--timeframe`: Time interval (e.g., `1d`, `1h`, `1m`)
-- `--start_date`: Start date in `YYYY-MM-DD` format
-- `--end_date`: (Optional) End date in `YYYY-MM-DD` format, defaults to today
+- `--start-date`: Start date in `YYYY-MM-DD` format
+- `--end-date`: (Optional) End date in `YYYY-MM-DD` format, defaults to today
 - `--exchange`: (`ccxt` only) Exchange ID, defaults to `binance` if not specified. It is
   an option of the `ccxt` source, not a global flag: passing it with `--source yahoo`
   exits 1 naming the options yahoo accepts, rather than being silently ignored
@@ -60,17 +60,17 @@ Examples:
 
 **Cryptocurrency data from Binance (default exchange):**
 ```bash
-python scripts/download_data.py --source ccxt --symbol BTC/USDT --timeframe 1d --start_date 2024-01-01 --end_date 2024-01-05
+python scripts/download_data.py --source ccxt --symbol BTC/USDT --timeframe 1d --start-date 2024-01-01 --end-date 2024-01-05
 ```
 
 **Cryptocurrency data from specific exchange:**
 ```bash
-python scripts/download_data.py --source ccxt --symbol BTC/USDT --timeframe 1d --start_date 2024-01-01 --end_date 2024-01-05 --exchange bybit
+python scripts/download_data.py --source ccxt --symbol BTC/USDT --timeframe 1d --start-date 2024-01-01 --end-date 2024-01-05 --exchange bybit
 ```
 
 **Traditional financial data:**
 ```bash
-python scripts/download_data.py --source yahoo --symbol BTC-USD --timeframe 1d --start_date 2024-01-01 --end_date 2024-01-05
+python scripts/download_data.py --source yahoo --symbol BTC-USD --timeframe 1d --start-date 2024-01-01 --end-date 2024-01-05
 ```
 
 ### Adding a Data Source

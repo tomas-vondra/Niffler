@@ -74,7 +74,7 @@ Examples:
   python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma
 
   # Walk-forward with custom windows
-  python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma --train_window 12 --test_window 6 --step 3
+  python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma --train-window 12 --test-window 6 --step 3
 
   # Re-run one fixed parameter set over consecutive in-sample slices (NOT a validation)
   python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --mode segmented_in_sample --strategy simple_ma --params '{"short_window": 10, "long_window": 30}'
@@ -83,7 +83,7 @@ Examples:
   python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_carlo --strategy simple_ma --params '{"short_window": 10, "long_window": 30}' --simulations 500
 
   # Load parameters from optimization results
-  python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_carlo --strategy simple_ma --params_file optimization_results.json
+  python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_carlo --strategy simple_ma --params-file optimization_results.json
         """
     )
     
@@ -158,7 +158,7 @@ Examples:
     )
 
     parser.add_argument(
-        '--train_window',
+        '--train-window', '--train_window',
         type=int,
         default=12,
         help='Training window in months for walk-forward analysis (default: 12)'
@@ -171,21 +171,21 @@ Examples:
     )
 
     parser.add_argument(
-        '--optimization_method',
+        '--optimization-method', '--optimization_method',
         choices=get_available_optimizers(),
         default='grid',
         help='Optimizer used on each walk-forward training window (default: grid)'
     )
 
     parser.add_argument(
-        '--optimization_metric',
+        '--optimization-metric', '--optimization_metric',
         choices=list(BaseOptimizer.METRICS_CONFIG.keys()),
         default='total_return',
         help='Metric the per-fold optimizer selects parameters by (default: total_return)'
     )
 
     parser.add_argument(
-        '--test_window',
+        '--test-window', '--test_window',
         type=int,
         default=6,
         help='Test window in months for walk-forward analysis (default: 6)'
@@ -207,7 +207,7 @@ Examples:
     )
     
     parser.add_argument(
-        '--bootstrap_pct',
+        '--bootstrap-pct', '--bootstrap_pct',
         type=float,
         default=0.8,
         help='Percentage of data to sample in each simulation (default: 0.8)'
@@ -215,21 +215,21 @@ Examples:
     
     
     parser.add_argument(
-        '--block_size',
+        '--block-size', '--block_size',
         type=int,
         default=30,
         help='Block size in days for block bootstrap sampling (default: 30)'
     )
     
     parser.add_argument(
-        '--random_seed', '--seed',
+        '--seed', '--random-seed', '--random_seed',
         dest='seed',
         type=int,
         help='Random seed for reproducible Monte Carlo results'
     )
     
     parser.add_argument(
-        '--n_jobs', '--jobs',
+        '--jobs', '--n-jobs', '--n_jobs',
         dest='n_jobs',
         type=int,
         help='Number of parallel jobs for analysis (default: auto-detect)'
@@ -351,7 +351,7 @@ def run_walk_forward_analysis(args, data: pd.DataFrame, parameters: dict = None,
     if segmented:
         if not parameters:
             raise ValueError(
-                f"--mode {MODE_SEGMENTED_IN_SAMPLE} requires --params or --params_file"
+                f"--mode {MODE_SEGMENTED_IN_SAMPLE} requires --params or --params-file"
             )
         validate_parameters(strategy_class, parameters)
     else:
@@ -640,11 +640,11 @@ def main() -> int:
             logging.info(f"Strategy parameters: {parameters}")
         elif args.analysis == 'monte_carlo':
             raise ValueError(
-                "--params or --params_file is required for --analysis monte_carlo"
+                "--params or --params-file is required for --analysis monte_carlo"
             )
         elif args.mode == MODE_SEGMENTED_IN_SAMPLE:
             raise ValueError(
-                f"--params or --params_file is required for --mode {MODE_SEGMENTED_IN_SAMPLE}"
+                f"--params or --params-file is required for --mode {MODE_SEGMENTED_IN_SAMPLE}"
             )
         else:
             parameters = None
