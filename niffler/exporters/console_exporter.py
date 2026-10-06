@@ -17,14 +17,14 @@ class ConsoleExporter(BaseExporter):
     _BANNER = '!' * 66
 
 
-    def export_backtest_result(self, result: BacktestResult, backtest_id: str, 
+    def export_backtest_result(self, result: BacktestResult, run_id: str, 
                               metadata: Dict[str, Any]) -> None:
         """
         Export backtest results to console with formatted output.
         
         Args:
             result: BacktestResult object containing all backtest data
-            backtest_id: Unique identifier for this backtest run
+            run_id: Unique identifier for this backtest run
             metadata: Additional metadata about the backtest
 
         Raises:
@@ -32,7 +32,7 @@ class ConsoleExporter(BaseExporter):
         """
         self.require_valid_result(result, "console")
 
-        self._print_backtest_results(result, backtest_id, metadata)
+        self._print_backtest_results(result, run_id, metadata)
     
     def _print_transaction_costs(self, result: BacktestResult,
                                  metadata: Dict[str, Any]) -> None:
@@ -143,14 +143,14 @@ class ConsoleExporter(BaseExporter):
         print("  optimising on this same data, this p-value is not corrected for that")
         print("  search and overstates the evidence.")
 
-    def _print_backtest_results(self, result: BacktestResult, backtest_id: str,
+    def _print_backtest_results(self, result: BacktestResult, run_id: str,
                                 metadata: Dict[str, Any] = None) -> None:
         """
         Print formatted backtest results to console.
 
         Args:
             result: BacktestResult to render
-            backtest_id: Unique identifier for this backtest run
+            run_id: Unique identifier for this backtest run
             metadata: Backtest metadata. Its ``provenance`` entry is condensed into
                 a single ``Provenance:`` line, where a dirty working tree is marked
                 explicitly - a result produced from uncommitted code cannot be
@@ -159,7 +159,7 @@ class ConsoleExporter(BaseExporter):
         print(f"\n{'='*60}")
         print(f"BACKTEST RESULTS")
         print(f"{'='*60}")
-        print(f"Backtest ID: {backtest_id}")
+        print(f"Run ID: {run_id}")
         summary = format_provenance_summary((metadata or {}).get('provenance'))
         if summary:
             print(f"Provenance: {summary}")

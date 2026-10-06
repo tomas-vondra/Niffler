@@ -32,7 +32,7 @@ class _ProbeExporter(BaseExporter):
         super().__init__(config)
         self.probe_token = probe_token
 
-    def export_backtest_result(self, result, backtest_id, metadata) -> None:
+    def export_backtest_result(self, result, run_id, metadata) -> None:
         pass
 
 

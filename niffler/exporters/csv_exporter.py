@@ -75,14 +75,14 @@ class CSVExporter(BaseExporter):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def export_backtest_result(self, result: BacktestResult, backtest_id: str,
+    def export_backtest_result(self, result: BacktestResult, run_id: str,
                               metadata: Dict[str, Any]) -> None:
         """
         Export backtest results to CSV files.
 
         Args:
             result: BacktestResult object containing all backtest data
-            backtest_id: Unique identifier for this backtest run
+            run_id: Unique identifier for this backtest run
             metadata: Additional metadata about the backtest
 
         Raises:
@@ -91,20 +91,20 @@ class CSVExporter(BaseExporter):
         """
         self.require_valid_result(result, "CSV")
 
-        base_filename = self._generate_filename(result, backtest_id)
+        base_filename = self._generate_filename(result, run_id)
 
         try:
             # Export metadata
-            self._export_metadata(metadata, backtest_id, base_filename)
+            self._export_metadata(metadata, run_id, base_filename)
 
             # Export provenance as its own sidecar file
-            self._export_provenance(metadata, backtest_id, base_filename)
+            self._export_provenance(metadata, run_id, base_filename)
 
             # Export portfolio values
-            portfolio_file = self._export_portfolio_values(result, backtest_id, base_filename)
+            portfolio_file = self._export_portfolio_values(result, run_id, base_filename)
 
             # Export trades
-            trades_file = self._export_trades(result, backtest_id, base_filename)
+            trades_file = self._export_trades(result, run_id, base_filename)
 
             self.logger.info(f"CSV export completed:")
             self.logger.info(f"  Portfolio values: {portfolio_file}")
@@ -115,7 +115,7 @@ class CSVExporter(BaseExporter):
             self.logger.error(f"Failed to export CSV files: {e}")
             raise
 
-    def _generate_filename(self, result: BacktestResult, backtest_id: str) -> str:
+    def _generate_filename(self, result: BacktestResult, run_id: str) -> str:
         """
         Generate base filename for CSV files.
 
@@ -125,7 +125,7 @@ class CSVExporter(BaseExporter):
 
         Args:
             result: BacktestResult providing symbol, strategy name and date range
-            backtest_id: Unique identifier for this backtest run
+            run_id: Unique identifier for this backtest run
 
         Returns:
             A safe base filename without extension
@@ -136,15 +136,15 @@ class CSVExporter(BaseExporter):
         )
         start_date = result.start_date.strftime('%Y%m%d')
         end_date = result.end_date.strftime('%Y%m%d')
-        short_id = sanitize_path_component(str(backtest_id)[:8], fallback="00000000")
+        short_id = sanitize_path_component(str(run_id)[:8], fallback="00000000")
         return f"{symbol}_{strategy_name}_{start_date}_{end_date}_{short_id}"
 
-    def _export_metadata(self, metadata: Dict[str, Any], backtest_id: str, base_filename: str) -> str:
+    def _export_metadata(self, metadata: Dict[str, Any], run_id: str, base_filename: str) -> str:
         """Export backtest metadata to JSON file."""
         metadata_file = self.output_dir / f"{base_filename}_metadata.json"
 
-        # Add backtest_id to metadata
-        metadata_with_id = {**metadata, 'backtest_id': backtest_id}
+        # Add run_id to metadata
+        metadata_with_id = {**metadata, 'run_id': run_id}
 
         # Non-finite metrics (inf/NaN) are written as null so the file stays valid JSON.
         with open(metadata_file, 'w') as f:
@@ -152,7 +152,7 @@ class CSVExporter(BaseExporter):
 
         return str(metadata_file)
 
-    def _export_provenance(self, metadata: Dict[str, Any], backtest_id: str,
+    def _export_provenance(self, metadata: Dict[str, Any], run_id: str,
                            base_filename: str) -> str:
         """
         Write the run provenance record to its own JSON sidecar file.
@@ -168,7 +168,7 @@ class CSVExporter(BaseExporter):
 
         Args:
             metadata: Backtest metadata, optionally carrying a ``provenance`` key
-            backtest_id: Unique identifier for this backtest run
+            run_id: Unique identifier for this backtest run
             base_filename: Sanitised base filename shared by all files of this run
 
         Returns:
@@ -183,12 +183,12 @@ class CSVExporter(BaseExporter):
         provenance_file = self.output_dir / f"{base_filename}_provenance.json"
 
         with open(provenance_file, 'w') as f:
-            safe_json_dump({**provenance, 'backtest_id': backtest_id}, f,
+            safe_json_dump({**provenance, 'run_id': run_id}, f,
                            indent=2, default=str)
 
         return str(provenance_file)
 
-    def _export_portfolio_values(self, result: BacktestResult, backtest_id: str, base_filename: str) -> str:
+    def _export_portfolio_values(self, result: BacktestResult, run_id: str, base_filename: str) -> str:
         """Export portfolio values to CSV."""
         portfolio_file = self.output_dir / f"{base_filename}_portfolio.csv"
 
@@ -196,13 +196,13 @@ class CSVExporter(BaseExporter):
         portfolio_df = pd.DataFrame({
             'timestamp': result.portfolio_values.index,
             'portfolio_value': result.portfolio_values.values,
-            'backtest_id': backtest_id
+            'run_id': run_id
         })
 
         portfolio_df.to_csv(portfolio_file, index=False)
         return str(portfolio_file)
 
-    def _export_trades(self, result: BacktestResult, backtest_id: str, base_filename: str) -> str:
+    def _export_trades(self, result: BacktestResult, run_id: str, base_filename: str) -> str:
         """Export trades to CSV."""
         if not result.trades:
             self.logger.info("No trades to export")
@@ -223,7 +223,7 @@ class CSVExporter(BaseExporter):
                 # Optional on the Trade dataclass - read defensively.
                 'commission': getattr(trade, 'commission', 0.0),
                 'slippage_cost': getattr(trade, 'slippage_cost', 0.0),
-                'backtest_id': backtest_id
+                'run_id': run_id
             })
 
         trades_df = pd.DataFrame(trades_data)

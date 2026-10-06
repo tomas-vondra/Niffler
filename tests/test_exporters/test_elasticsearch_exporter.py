@@ -86,7 +86,7 @@ class TestElasticsearchExporter(unittest.TestCase):
         backtests_mapping = {
             "mappings": {
                 "properties": {
-                    "backtest_id": {"type": "keyword"},
+                    "run_id": {"type": "keyword"},
                     "strategy_name": {"type": "keyword"}
                 }
             }
@@ -95,7 +95,7 @@ class TestElasticsearchExporter(unittest.TestCase):
         portfolio_mapping = {
             "mappings": {
                 "properties": {
-                    "backtest_id": {"type": "keyword"},
+                    "run_id": {"type": "keyword"},
                     "timestamp": {"type": "date"},
                     "portfolio_value": {"type": "double"}
                 }
@@ -105,7 +105,7 @@ class TestElasticsearchExporter(unittest.TestCase):
         trades_mapping = {
             "mappings": {
                 "properties": {
-                    "backtest_id": {"type": "keyword"},
+                    "run_id": {"type": "keyword"},
                     "timestamp": {"type": "date"},
                     "symbol": {"type": "keyword"}
                 }
@@ -113,7 +113,7 @@ class TestElasticsearchExporter(unittest.TestCase):
         }
         
         # Write mapping files
-        with open(os.path.join(self.mapping_dir, "backtests.json"), 'w') as f:
+        with open(os.path.join(self.mapping_dir, "runs.json"), 'w') as f:
             json.dump(backtests_mapping, f)
         
         with open(os.path.join(self.mapping_dir, "portfolio.json"), 'w') as f:
@@ -128,7 +128,7 @@ class TestElasticsearchExporter(unittest.TestCase):
         self.assertEqual(exporter.host, 'test-host')
         self.assertEqual(exporter.port, 9200)
         self.assertEqual(exporter.index_prefix, 'test-prefix')
-        self.assertEqual(exporter.backtests_index, 'test-prefix-backtests')
+        self.assertEqual(exporter.runs_index, 'test-prefix-runs')
         self.assertEqual(exporter.portfolio_index, 'test-prefix-portfolio-values')
         self.assertEqual(exporter.trades_index, 'test-prefix-trades')
     
@@ -249,7 +249,7 @@ class TestElasticsearchExporter(unittest.TestCase):
         self.assertEqual(mock_es_client.indices.create.call_count, 4)
 
         # Verify that mappings were loaded for all index types
-        mock_load_mapping.assert_any_call('backtests')
+        mock_load_mapping.assert_any_call('runs')
         mock_load_mapping.assert_any_call('portfolio')
         mock_load_mapping.assert_any_call('trades')
         mock_load_mapping.assert_any_call('positions')
@@ -279,12 +279,12 @@ class TestElasticsearchExporter(unittest.TestCase):
             'symbol': 'BTC-USD',
             'total_return': 1500.0
         }
-        backtest_id = 'test-id-123'
+        run_id = 'test-id-123'
         
         mock_es_client = Mock()
         self.exporter.es_client = mock_es_client
         
-        self.exporter._export_backtest_metadata(metadata, backtest_id)
+        self.exporter._export_backtest_metadata(metadata, run_id)
         
         expected_doc = {
             **metadata,
@@ -293,8 +293,8 @@ class TestElasticsearchExporter(unittest.TestCase):
         
         mock_es_client.index.assert_called_once()
         call_args = mock_es_client.index.call_args
-        self.assertEqual(call_args[1]['index'], 'test-prefix-backtests')
-        self.assertEqual(call_args[1]['id'], backtest_id)
+        self.assertEqual(call_args[1]['index'], 'test-prefix-runs')
+        self.assertEqual(call_args[1]['id'], run_id)
         
         # Check that created_at was added
         self.assertIn('created_at', call_args[1]['body'])
@@ -317,12 +317,12 @@ class TestElasticsearchExporter(unittest.TestCase):
     @patch('niffler.exporters.elasticsearch_exporter.bulk')
     def test_export_portfolio_values(self, mock_bulk):
         """Test exporting portfolio values."""
-        backtest_id = 'test-id-123'
+        run_id = 'test-id-123'
         
         mock_es_client = Mock()
         self.exporter.es_client = mock_es_client
         
-        self.exporter._export_portfolio_values(self.mock_result, backtest_id)
+        self.exporter._export_portfolio_values(self.mock_result, run_id)
         
         # Check that bulk was called
         mock_bulk.assert_called_once()
@@ -338,18 +338,18 @@ class TestElasticsearchExporter(unittest.TestCase):
         # Check first action
         first_action = actions[0]
         self.assertEqual(first_action['_index'], 'test-prefix-portfolio-values')
-        self.assertEqual(first_action['_source']['backtest_id'], backtest_id)
+        self.assertEqual(first_action['_source']['run_id'], run_id)
         self.assertEqual(first_action['_source']['portfolio_value'], 10000.0)
     
     @patch('niffler.exporters.elasticsearch_exporter.bulk')
     def test_export_trades(self, mock_bulk):
         """Test exporting trades."""
-        backtest_id = 'test-id-123'
+        run_id = 'test-id-123'
         
         mock_es_client = Mock()
         self.exporter.es_client = mock_es_client
         
-        self.exporter._export_trades(self.mock_result, backtest_id)
+        self.exporter._export_trades(self.mock_result, run_id)
         
         # Check that bulk was called
         mock_bulk.assert_called_once()
@@ -365,20 +365,20 @@ class TestElasticsearchExporter(unittest.TestCase):
         # Check the action
         action = actions[0]
         self.assertEqual(action['_index'], 'test-prefix-trades')
-        self.assertEqual(action['_source']['backtest_id'], backtest_id)
+        self.assertEqual(action['_source']['run_id'], run_id)
         self.assertEqual(action['_source']['symbol'], 'BTC-USD')
         self.assertEqual(action['_source']['side'], 'buy')
     
     def test_export_trades_empty(self):
         """Test exporting with no trades."""
         self.mock_result.trades = []
-        backtest_id = 'test-id-123'
+        run_id = 'test-id-123'
         
         mock_es_client = Mock()
         self.exporter.es_client = mock_es_client
         
         with patch.object(self.exporter.logger, 'info') as mock_logger:
-            self.exporter._export_trades(self.mock_result, backtest_id)
+            self.exporter._export_trades(self.mock_result, run_id)
         
         mock_es_client.index.assert_not_called()
         mock_logger.assert_called_once_with("No trades to export")
@@ -389,7 +389,7 @@ class TestElasticsearchExporter(unittest.TestCase):
         """Test successful full export."""
         mock_connect.return_value = True
         
-        backtest_id = 'test-id-123'
+        run_id = 'test-id-123'
         metadata = {'strategy_name': 'Simple MA'}
         
         mock_es_client = Mock()
@@ -400,27 +400,27 @@ class TestElasticsearchExporter(unittest.TestCase):
                 with patch.object(self.exporter, '_export_portfolio_values') as mock_export_portfolio:
                     with patch.object(self.exporter, '_export_trades') as mock_export_trades:
                         with patch.object(self.exporter.logger, 'info') as mock_logger:
-                            self.exporter.export_backtest_result(self.mock_result, backtest_id, metadata)
+                            self.exporter.export_backtest_result(self.mock_result, run_id, metadata)
         
         mock_connect.assert_called_once()
         mock_create_indices.assert_called_once()
-        mock_export_meta.assert_called_once_with(metadata, backtest_id)
-        mock_export_portfolio.assert_called_once_with(self.mock_result, backtest_id)
-        mock_export_trades.assert_called_once_with(self.mock_result, backtest_id)
-        mock_logger.assert_called_with(f"Successfully exported backtest {backtest_id} to Elasticsearch")
+        mock_export_meta.assert_called_once_with(metadata, run_id)
+        mock_export_portfolio.assert_called_once_with(self.mock_result, run_id)
+        mock_export_trades.assert_called_once_with(self.mock_result, run_id)
+        mock_logger.assert_called_with(f"Successfully exported backtest {run_id} to Elasticsearch")
     
     @patch.object(ElasticsearchExporter, '_connect')
     def test_export_backtest_result_connection_failed(self, mock_connect):
         """An unreachable cluster raises so the caller can report the failed export."""
         mock_connect.return_value = False
 
-        backtest_id = 'test-id-123'
+        run_id = 'test-id-123'
         metadata = {'strategy_name': 'Simple MA'}
 
         with patch.object(self.exporter, 'validate_result', return_value=True):
             with patch.object(self.exporter.logger, 'error') as mock_logger:
                 with self.assertRaises(ExportError) as context:
-                    self.exporter.export_backtest_result(self.mock_result, backtest_id, metadata)
+                    self.exporter.export_backtest_result(self.mock_result, run_id, metadata)
                 self.assertIn(self.exporter.url, str(context.exception))
                 mock_logger.assert_called_once_with(
                     f"Cannot connect to Elasticsearch at {self.exporter.url}"
@@ -431,13 +431,13 @@ class TestElasticsearchExporter(unittest.TestCase):
         """An unexportable result raises instead of reporting a silent success."""
         mock_connect.return_value = True
 
-        backtest_id = 'test-id-123'
+        run_id = 'test-id-123'
         metadata = {'strategy_name': 'Simple MA'}
 
         with patch.object(self.exporter, 'validate_result', return_value=False):
             with patch.object(self.exporter.logger, 'error') as mock_logger:
                 with self.assertRaises(ExportError):
-                    self.exporter.export_backtest_result(self.mock_result, backtest_id, metadata)
+                    self.exporter.export_backtest_result(self.mock_result, run_id, metadata)
                 mock_logger.assert_called_once_with(
                     "Invalid backtest result, cannot export to Elasticsearch"
                 )
@@ -622,12 +622,12 @@ class TestListIndicesFailureReporting(unittest.TestCase):
     def test_matching_indices_are_returned(self):
         mock_client = Mock()
         mock_client.indices.get.return_value = {'test-prefix-trades': {},
-                                                'test-prefix-backtests': {}}
+                                                'test-prefix-runs': {}}
 
         with patch.object(self.exporter, '_connect', return_value=True):
             self.exporter.es_client = mock_client
             self.assertEqual(sorted(self.exporter.list_indices()),
-                             ['test-prefix-backtests', 'test-prefix-trades'])
+                             ['test-prefix-runs', 'test-prefix-trades'])
 
 
 class TestExportPositionsReconciliation(unittest.TestCase):

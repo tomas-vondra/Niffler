@@ -38,7 +38,10 @@ shared sections and the profiles are lenient about keys the current parser does
 not declare - ``[common]`` is read by seven scripts that share no single flag
 between them, so rejecting there would make the section unusable. The cost,
 worth stating plainly, is that a typo in a shared section is skipped instead of
-reported.
+reported. A profile is lenient for the same reason - one profile per research
+question is used by ``optimize.py`` and ``backtest.py`` alike - but the keys a
+script did not read are printed, because a misspelt ``experiment`` would
+otherwise put a run in no experiment at all without a word.
 """
 
 import argparse
@@ -72,6 +75,11 @@ PROFILE_SECTION = 'profile'
 #: Dests a file must never set: they select the file itself.
 _RESERVED_DESTS: Tuple[str, ...] = ('help', 'config', 'profile')
 
+#: Dests a file may set only inside a ``[profile.<name>]``. An experiment name
+#: in a shared or per-script section would apply to every run, and so collide
+#: with every params file that came out of a different experiment.
+PROFILE_ONLY_DESTS: Tuple[str, ...] = ('experiment',)
+
 
 class ConfigError(ValueError):
     """A configuration file could not be read, or asks for something invalid."""
@@ -87,11 +95,20 @@ class LoadedConfig:
     values: Dict[str, Any] = field(default_factory=dict)
     origins: Dict[str, str] = field(default_factory=dict)
     tables: Dict[str, Mapping[str, Any]] = field(default_factory=dict)
+    table_origins: Dict[str, str] = field(default_factory=dict)
+    #: Profile keys this script's parser does not declare. A profile is shared
+    #: by several scripts, so such a key is not an error - but a misspelt one
+    #: looks exactly the same, so it is reported rather than dropped in silence.
+    unread_profile_keys: List[str] = field(default_factory=list)
 
     def describe(self) -> str:
-        """One line naming the file and the sections that were applied."""
+        """Name the file and the sections applied, and any profile key not read."""
         sections = ', '.join(self.sections) if self.sections else 'no matching sections'
-        return f"Config: {self.path} [{sections}]"
+        line = f"Config: {self.path} [{sections}]"
+        if self.unread_profile_keys:
+            line += (f"\n  profile {self.profile}: keys this script does not read: "
+                     f"{', '.join(sorted(self.unread_profile_keys))}")
+        return line
 
 
 def script_sections() -> Tuple[str, ...]:
@@ -182,8 +199,12 @@ def load_config(parser: argparse.ArgumentParser,
                 f"{path}: no [profile.{known.profile}] section. "
                 f"Available profiles: {available}"
             )
+        # A profile's table replaces the script section's rather than merging
+        # with it: "the profile wins" has to mean the same for a table as for
+        # a scalar.
         _apply_section(loaded, profiles[known.profile],
-                       f'{PROFILE_SECTION}.{known.profile}', actions, strict=False)
+                       f'{PROFILE_SECTION}.{known.profile}', actions, strict=False,
+                       tables=tables, is_profile=True)
 
     return loaded
 
@@ -226,6 +247,44 @@ def apply_config(parser: argparse.ArgumentParser,
             action.required = False
 
     return loaded
+
+
+def typed_on_command_line(parser: argparse.ArgumentParser, dest: str,
+                          argv: Optional[Sequence[str]] = None) -> bool:
+    """Report whether a flag was actually typed, rather than defaulted.
+
+    After ``parse_args`` a typed ``--experiment x`` and a file-supplied
+    ``experiment = "x"`` are the same Namespace attribute, and comparing values
+    cannot separate them when the user types the name the file already holds.
+    Re-parsing with every default suppressed leaves only what was typed.
+
+    Args:
+        parser: The script's parser, after :func:`apply_config`.
+        dest: The argparse dest to look for.
+        argv: Argument list (default: ``sys.argv[1:]``).
+
+    Returns:
+        True when the flag appears on the command line.
+    """
+    actions = [(action, action.default, action.required) for action in parser._actions]
+    groups = [(group, group.required) for group in parser._mutually_exclusive_groups]
+    defaults = dict(parser._defaults)
+    try:
+        for action, _, _ in actions:
+            action.default = argparse.SUPPRESS
+            action.required = False
+        for group, _ in groups:
+            group.required = False
+        parser._defaults.clear()
+        typed, _ = parser.parse_known_args(argv)
+    finally:
+        for action, default, required in actions:
+            action.default = default
+            action.required = required
+        for group, required in groups:
+            group.required = required
+        parser._defaults.update(defaults)
+    return hasattr(typed, dest)
 
 
 def report_config(loaded: Optional[LoadedConfig]) -> None:
@@ -312,7 +371,8 @@ def _apply_section(loaded: LoadedConfig,
                    label: str,
                    actions: Mapping[str, argparse.Action],
                    strict: bool,
-                   tables: Sequence[str] = ()) -> None:
+                   tables: Sequence[str] = (),
+                   is_profile: bool = False) -> None:
     """Fold one section over what the earlier sections contributed."""
     if body is None:
         return
@@ -323,6 +383,10 @@ def _apply_section(loaded: LoadedConfig,
 
     for key, value in body.items():
         if isinstance(value, dict):
+            if key not in tables and is_profile:
+                # Another script's table, e.g. parameter_space under backtest.
+                loaded.unread_profile_keys.append(key)
+                continue
             if key not in tables:
                 expected = ', '.join(tables) if tables else 'none'
                 raise ConfigError(
@@ -330,10 +394,22 @@ def _apply_section(loaded: LoadedConfig,
                     f"reads. Sub-tables of [{label}]: {expected}"
                 )
             loaded.tables[key] = value
+            loaded.table_origins[key] = f"{loaded.path} [{label}.{key}]"
             continue
+
+        if key in PROFILE_ONLY_DESTS and not is_profile:
+            raise ConfigError(
+                f"{loaded.path}: [{label}] must not set '{key}'. It belongs in a "
+                f"[{PROFILE_SECTION}.<name>] section or on the command line: set "
+                f"here it would apply to every run, and collide with every params "
+                f"file produced under a different {key}"
+            )
 
         action = actions.get(key)
         if action is None:
+            if is_profile:
+                loaded.unread_profile_keys.append(key)
+                continue
             if not strict:
                 # A shared section is written once for seven scripts; a key
                 # this one does not declare belongs to one of the others.

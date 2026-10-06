@@ -18,11 +18,13 @@ and no script can populate half of it.
 """
 
 import argparse
+import json
 import logging
 import os
 import sys
 import warnings
-from typing import Dict, List, Optional, Sequence, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -44,6 +46,13 @@ from niffler.backtesting.significance import (
     DEFAULT_BOOTSTRAP_SAMPLES,
     DEFAULT_BOOTSTRAP_SEED,
     DEFAULT_MIN_TRADES,
+)
+from niffler.strategies.registry import get_strategy_parameter_names
+from niffler.utils.run_identity import (
+    RunIdentity,
+    format_run_identity,
+    new_run_identity,
+    resolve_experiment,
 )
 from scripts.config_file import CONFIG_ORIGINS_ATTR
 
@@ -725,3 +734,316 @@ def describe_risk_configuration(risk_manager) -> str:
 
     rendered = ', '.join(f"{key}={value:g}" for key, value in parameters.items())
     return f"{name} ({rendered})"
+
+
+# ---------------------------------------------------------------------------
+# Strategy parameters
+# ---------------------------------------------------------------------------
+
+#: Sub-table of a script's section (or of a profile) holding strategy
+#: parameters: ``[backtest.params]``. Passed to ``apply_config(tables=...)``.
+PARAMS_TABLE = 'params'
+
+
+@dataclass(frozen=True)
+class ParentRun:
+    """The run a params file came out of.
+
+    Attributes:
+        run_id: Id of the run that wrote the file.
+        experiment: The experiment that run belonged to, or None.
+        source: Where this was read from, for messages.
+    """
+
+    run_id: str
+    experiment: Optional[str]
+    source: str
+
+
+@dataclass(frozen=True)
+class StrategyParameters:
+    """Strategy parameters resolved from every source a command line offers.
+
+    Attributes:
+        values: Keyword arguments for the strategy constructor.
+        parent: The run that produced the params file, when one was read and it
+            records its run.
+        supplied: False when no source supplied anything, so a caller that
+            requires parameters can tell "defaults" from "forgotten".
+    """
+
+    values: Dict[str, Any]
+    parent: Optional[ParentRun] = None
+    supplied: bool = False
+
+
+def add_strategy_parameter_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add ``--params`` and ``--params-file``, spelled the same in every script.
+
+    Args:
+        parser: Parser to extend.
+    """
+    group = parser.add_argument_group('strategy parameters')
+    group.add_argument(
+        '--params', default=None,
+        help='Strategy parameters as a JSON object, e.g. '
+             '\'{"rsi_period": 14, "oversold": 30}\'. Overrides the same keys '
+             'from --params-file. A name the strategy does not accept is an error'
+    )
+    group.add_argument(
+        '--params-file', '--params_file', dest='params_file', default=None,
+        help='JSON file holding strategy parameters: an optimization result '
+             '(the best result is used) or {"parameters": {...}}. A file written '
+             'by optimize.py also names the run it came from, which is recorded '
+             'as this run\'s parent'
+    )
+
+
+def read_params_file(path: str, origin: Optional[str] = None
+                     ) -> Tuple[Dict[str, Any], Optional[ParentRun]]:
+    """Read strategy parameters, and the run that produced them, from a file.
+
+    The single place a params file is opened, so the parameters and the parent
+    link can never come from two different reads of it.
+
+    Args:
+        path: Path to the JSON file.
+        origin: Where the path was configured, when not typed.
+
+    Returns:
+        ``(parameters, parent)``; ``parent`` is None for a file that records no
+        run (hand-written, or saved before runs had ids).
+
+    Raises:
+        ValueError: If the file is missing, is not JSON, or holds no parameters.
+    """
+    where = f"{path} ({origin})" if origin else path
+    try:
+        with open(path, 'r') as handle:
+            document = json.load(handle)
+    except FileNotFoundError:
+        raise ValueError(f"Parameters file not found: {where}") from None
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in parameters file {where}: {e}") from e
+
+    if not isinstance(document, dict):
+        raise ValueError(
+            f"Parameters file {where} must hold a JSON object, got "
+            f"{type(document).__name__}"
+        )
+
+    if 'results' in document:
+        results = document['results']
+        if not results:
+            raise ValueError(f"Parameters file {where} holds no optimization results")
+        parameters = results[0]['parameters']
+    elif 'parameters' in document:
+        parameters = document['parameters']
+    else:
+        parameters = document
+
+    if not isinstance(parameters, dict):
+        raise ValueError(f"Parameters in {where} must be a JSON object")
+
+    parent = None
+    run = document.get('run')
+    if isinstance(run, dict) and run.get('run_id'):
+        parent = ParentRun(
+            run_id=run['run_id'],
+            experiment=run.get('experiment'),
+            source=where,
+        )
+
+    return dict(parameters), parent
+
+
+def resolve_strategy_parameters(args: argparse.Namespace,
+                                strategy: str,
+                                config=None,
+                                flags: Optional[Dict[str, str]] = None
+                                ) -> StrategyParameters:
+    """Resolve strategy parameters from every source, lowest precedence first.
+
+    Order: the strategy's own defaults (implicit - every parameter has one),
+    the ``params`` table of the configuration file, ``--params-file``,
+    ``--params``, then the per-strategy convenience flags. The table sits
+    *below* the file on purpose: a default saved in a profile must not
+    silently override the winner an optimization just produced.
+
+    Validation happens after the merge, so a parameter the strategy does not
+    accept is an error whichever source it came from.
+
+    Args:
+        args: Parsed arguments carrying ``params`` and ``params_file``.
+        strategy: Registry name of the strategy.
+        config: The value ``apply_config`` returned, or None.
+        flags: Parameter name to flag spelling for the script's convenience
+            flags (``backtest.py`` only), or None.
+
+    Returns:
+        The resolved parameters, the parent run and whether anything was supplied.
+
+    Raises:
+        ValueError: If a source is malformed, or supplies a parameter the
+            strategy does not accept.
+    """
+    flags = flags or {}
+    origins = getattr(args, CONFIG_ORIGINS_ATTR, None) or {}
+    parameters: Dict[str, Any] = {}
+    # Where each surviving key came from, for the rejection message.
+    sources: Dict[str, str] = {}
+    parent: Optional[ParentRun] = None
+
+    table = getattr(config, 'tables', {}).get(PARAMS_TABLE) if config is not None else None
+    if table:
+        table_origin = config.table_origins.get(PARAMS_TABLE, 'configuration file')
+        parameters.update(table)
+        sources.update(dict.fromkeys(table, table_origin))
+
+    params_file = getattr(args, 'params_file', None)
+    if params_file:
+        from_file, parent = read_params_file(params_file, origins.get('params_file'))
+        parameters.update(from_file)
+        sources.update(dict.fromkeys(from_file, params_file))
+
+    raw = getattr(args, 'params', None)
+    if raw:
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in --params: {e}") from e
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                f"--params must be a JSON object, got {type(parsed).__name__}"
+            )
+        parameters.update(parsed)
+        for name in parsed:
+            sources.pop(name, None)
+
+    for name in flags:
+        value = getattr(args, name, None)
+        if value is not None:
+            parameters[name] = value
+            sources.pop(name, None)
+
+    accepted = get_strategy_parameter_names(strategy)
+    unknown = sorted(set(parameters) - accepted)
+    if unknown:
+        # Report the flag spelling where the parameter has one, since that is
+        # what the user typed; a file or table entry is named with its source.
+        rendered = ', '.join(
+            flags.get(name, name)
+            + (f" (from {sources[name]})" if name in sources else '')
+            for name in unknown
+        )
+        raise ValueError(
+            f"Strategy '{strategy}' does not accept: {rendered}. "
+            f"It accepts: {', '.join(sorted(accepted))}"
+        )
+
+    return StrategyParameters(
+        values=parameters,
+        parent=parent,
+        supplied=bool(table or params_file or raw
+                      or any(getattr(args, name, None) is not None for name in flags)),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Run identity
+# ---------------------------------------------------------------------------
+
+def add_experiment_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add ``--experiment`` to a script's parser.
+
+    Args:
+        parser: Parser to extend.
+    """
+    parser.add_argument(
+        '--experiment', default=None,
+        help='Name of the research question this run belongs to, e.g. '
+             'breakout-btc-5bps. Usually set once in a [profile.<name>] of '
+             'niffler.toml. A run fed by --params-file inherits its parent\'s '
+             'experiment when this is unset; a different name is an error unless '
+             'typed here'
+    )
+
+
+def build_run_identity(args: argparse.Namespace,
+                       kind: str,
+                       config=None,
+                       parent: Optional[ParentRun] = None,
+                       experiment_typed: bool = False
+                       ) -> Tuple[RunIdentity, Optional[str]]:
+    """Mint this run's identity. Called once per run, like provenance.
+
+    Args:
+        args: Parsed arguments carrying ``experiment``.
+        kind: One of :data:`niffler.utils.run_identity.RUN_KINDS`.
+        config: The value ``apply_config`` returned, or None.
+        parent: The run that produced this run's params file, or None.
+        experiment_typed: True when ``--experiment`` was typed on the command
+            line (see :func:`scripts.config_file.typed_on_command_line`).
+
+    Returns:
+        ``(identity, note)``; ``note`` is a line to print when the experiment
+        was inherited or deliberately differs from the parent's, else None.
+
+    Raises:
+        ExperimentMismatchError: If the configured experiment differs from the
+            parent's and was not typed on the command line.
+        ValueError: If the experiment name is blank.
+    """
+    own = getattr(args, 'experiment', None)
+    if own is not None:
+        own = own.strip()
+        if not own:
+            raise ValueError("The experiment name must not be blank")
+
+    origins = getattr(args, CONFIG_ORIGINS_ATTR, None) or {}
+    experiment, note = resolve_experiment(
+        own,
+        parent.experiment if parent is not None else None,
+        own_is_explicit=experiment_typed,
+        own_origin=None if experiment_typed else origins.get('experiment'),
+        parent_origin=parent.source if parent is not None else None,
+    )
+
+    identity = new_run_identity(
+        kind,
+        experiment=experiment,
+        parent_run_id=parent.run_id if parent is not None else None,
+        profile=getattr(config, 'profile', None),
+    )
+    return identity, note
+
+
+def report_run_identity(identity: RunIdentity, note: Optional[str] = None,
+                        stream=None) -> None:
+    """Print the run's identity, and how its experiment was decided if notable.
+
+    Args:
+        identity: The identity minted for this run.
+        note: The second value :func:`build_run_identity` returned.
+        stream: Output stream (default: stdout).
+    """
+    print(format_run_identity(identity), file=stream or sys.stdout)
+    if note:
+        print(f"  {note}", file=stream or sys.stdout)
+
+
+def run_metadata(identity: RunIdentity, strategy_key: Optional[str]) -> Dict[str, Any]:
+    """Render the ``run`` block written into every saved result file.
+
+    The registry key is recorded beside the identity because ``strategy_name``
+    is the display string: a grouping keyed on prose splits a strategy's history
+    in two the day its display name is edited.
+
+    Args:
+        identity: The identity minted for this run.
+        strategy_key: Registry name of the strategy, e.g. ``'rsi'``.
+
+    Returns:
+        A JSON-safe dict.
+    """
+    return {**identity.to_metadata(), 'strategy_key': strategy_key}

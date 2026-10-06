@@ -72,6 +72,16 @@ strategy  = "simple_ma"
 exporters = "console,csv"
 # symbol  = "BTCUSDT"      # default: derived from the data file name
 
+# Strategy parameters used when no optimization result is passed. They sit BELOW
+# --params-file and --params, so an optimized winner always overrides them; a
+# parameter the file does not hold (position_size here) still comes from this
+# table. A name the strategy does not accept is an error. analyze.py reads
+# [analyze.params] the same way.
+[backtest.params]
+short_window  = 10
+long_window   = 30
+position_size = 1.0
+
 [optimize]
 method  = "grid"
 sort_by = "sharpe_ratio"
@@ -123,3 +133,20 @@ suffix = "_cleaned"
 [profile.quick]
 simulations = 100
 n_jobs      = 2
+
+# One profile per research question. `experiment` names the box every run of
+# that question lands in, and may ONLY be set here or with --experiment: in a
+# shared or per-script section it would apply to every run. Use the same
+# --profile on optimize.py, analyze.py and backtest.py; a step fed by
+# --params-file inherits the experiment if you forget, and a different one is an
+# error. Keys a script does not read (trials under backtest.py) are listed on
+# the "Config:" line rather than rejected, so a typo is visible.
+[profile.breakout-btc-5bps]
+experiment   = "breakout-btc-5bps"
+strategy     = "breakout"
+cost_model   = "fixed"
+slippage_bps = 5.0
+# A profile's params table REPLACES the script section's, it does not merge.
+# [profile.breakout-btc-5bps.params]
+# entry_window = 20
+# exit_window  = 10

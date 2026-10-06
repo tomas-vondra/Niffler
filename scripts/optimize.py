@@ -49,15 +49,25 @@ from niffler.strategies.registry import (
     get_strategy_class,
     get_strategy_parameter_names,
 )
+from niffler.utils.run_identity import RUN_KIND_OPTIMIZE
 from scripts.common import (
     add_cost_model_arguments,
     add_engine_arguments,
+    add_experiment_arguments,
     add_risk_manager_arguments,
     build_run_config,
+    build_run_identity,
     load_ohlcv_csv,
     report_run_config,
+    report_run_identity,
+    run_metadata,
 )
-from scripts.config_file import add_config_arguments, apply_config, report_config
+from scripts.config_file import (
+    add_config_arguments,
+    apply_config,
+    report_config,
+    typed_on_command_line,
+)
 
 
 # Results the CLI retains before the optimizer starts discarding the
@@ -293,11 +303,13 @@ def main() -> int:
     
     # Persisted defaults. [optimize.parameter_space.<strategy>] is structured
     # data rather than a flag value, so it is handed over separately.
+    add_experiment_arguments(parser)
     add_config_arguments(parser)
     config = apply_config(parser, 'optimize', tables=('parameter_space',))
 
     args = parser.parse_args()
-    
+    experiment_typed = typed_on_command_line(parser, 'experiment')
+
     # Setup logging
     setup_logging(level=args.log_level)
     report_config(config)
@@ -317,6 +329,13 @@ def main() -> int:
         # reported up front.
         run_config = build_run_config(args)
         report_run_config(run_config)
+
+        # An optimization starts a chain, so it has no parent: its experiment
+        # is whatever the profile or --experiment names, or none.
+        identity, identity_note = build_run_identity(
+            args, RUN_KIND_OPTIMIZE, config=config, experiment_typed=experiment_typed
+        )
+        report_run_identity(identity, identity_note)
 
         # Create optimizer
         optimizer = create_optimizer(
@@ -429,7 +448,8 @@ def main() -> int:
         # Collected once here rather than inside save_results, which is also called
         # from library code that has no idea what the input file was.
         provenance = collect_provenance(args.data)
-        optimizer.save_results(results, args.output, provenance=provenance)
+        optimizer.save_results(results, args.output, provenance=provenance,
+                               run=run_metadata(identity, args.strategy))
         print(f"Full results saved to: {args.output}")
 
         # Plateau analysis last, and non-fatally: it reads scores the run

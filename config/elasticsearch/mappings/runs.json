@@ -10,9 +10,14 @@
       }
     ],
     "properties": {
-      "backtest_id": {"type": "keyword"},
+      "run_id": {"type": "keyword"},
+      "kind": {"type": "keyword"},
+      "experiment": {"type": "keyword"},
+      "parent_run_id": {"type": "keyword"},
+      "profile": {"type": "keyword"},
+      "strategy_key": {"type": "keyword"},
       "strategy_name": {"type": "keyword"},
-      "strategy_params": {"type": "object"},
+      "strategy_params": {"type": "flattened"},
       "symbol": {"type": "keyword"},
       "start_date": {"type": "date"},
       "end_date": {"type": "date"},

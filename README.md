@@ -228,6 +228,58 @@ Every exported result carries a **provenance** record (see below), so a number f
 Grafana six months from now can still be traced back to the code and the data that
 produced it.
 
+## Run identity: which runs belong together
+
+Provenance (next section) says *what code and data* produced a result. It cannot say which
+results belong together: an optimization, the walk-forward that validates it and the final
+backtest all run on the same commit and the same file, so their provenance is identical.
+Every run of every script therefore also records:
+
+| Field | Meaning | Who sets it |
+|-------|---------|-------------|
+| `run_id` | One execution of one script | Niffler, always |
+| `kind` | `backtest`, `optimize`, `walk_forward`, `monte_carlo`, `compare` or `screen` | Niffler |
+| `experiment` | The research question, as a name you choose | You - or empty |
+| `parent_run_id` | The run whose output this run was fed | Niffler, from `--params-file` |
+| `profile` | The `niffler.toml` profile in force | Niffler |
+| `strategy_key` | The registry name (`rsi`), beside the display name | Niffler |
+
+The **experiment is never invented**. An unnamed run is shown as `(none)`; a minted id would
+make a forgotten flag look like a deliberate one-run experiment.
+
+Name the experiment once, in a profile, and use that profile on every step:
+
+```bash
+python scripts/optimize.py --profile breakout-btc-5bps --data data/BTCUSDT_1d.csv
+python scripts/analyze.py  --profile breakout-btc-5bps --data data/BTCUSDT_1d.csv --analysis walk_forward
+python scripts/backtest.py --data data/BTCUSDT_1d.csv --strategy breakout \
+  --params-file optimization_results_breakout_grid_20261006_141203.json
+```
+
+A step fed by `--params-file` reads the optimization's `run_id` and experiment out of the
+file. What happens to the experiment:
+
+| This run's experiment | Result |
+|-----------------------|--------|
+| Not set | Inherits the parent's, and says so |
+| Same as the parent's | Nothing to report |
+| Different, from a profile | **Error** naming both - nearly always a forgotten or wrong profile |
+| Different, typed as `--experiment` | Allowed and noted: reusing tuned parameters under a new question on purpose |
+
+Runs with no file input (`optimize.py`, walk-forward, `compare.py`, `screen.py`) have nothing
+to inherit from, so they need the profile or `--experiment`. `experiment` may be set only in
+a `[profile.<name>]` or on the command line; in `[common]` or a per-script section it is
+rejected, because it would apply to every run.
+
+Strategy parameters resolve in one order in `backtest.py` and `analyze.py`: the strategy's
+own defaults, then a `[backtest.params]` / `[analyze.params]` table in `niffler.toml`, then
+`--params-file`, then `--params`, then `backtest.py`'s per-strategy flags. The table sits
+below the file so a saved default cannot override an optimized winner.
+
+In Elasticsearch the per-run summary index is now `niffler-runs` (it was `niffler-backtests`),
+the field `backtest_id` is `run_id` in every index, and `strategy_params` is mapped
+`flattened`. Existing `niffler-backtests` documents are not migrated.
+
 ## Run provenance
 
 A backtest result is only meaningful next to the code and the data behind it. Before this
@@ -265,7 +317,7 @@ Where it lands:
 |--------|-----------------------|
 | Console | One `Provenance:` line - short SHA, branch, dirty marker, short data hash |
 | CSV export | Inside `*_metadata.json`, plus a standalone `*_provenance.json` sidecar |
-| Elasticsearch | A mapped `provenance` object on the `-backtests` index |
+| Elasticsearch | A mapped `provenance` object on the `-runs` index |
 | `optimize.py --output` | Top-level `provenance` key in the results JSON |
 | `analyze.py --output` | Top-level `provenance` key in the analysis JSON |
 
@@ -404,7 +456,7 @@ prices will differ.
   `df.attrs['partial']`; `download_data.py` writes it to `<name>.partial.csv` and exits 1
   rather than presenting it as a complete series.
 - `ExporterManager.export_backtest_result` returns an `ExportSummary`
-  (`successes`, `failures`, `backtest_id`, `ok`) instead of a bare id, exporters raise
+  (`successes`, `failures`, `run_id`, `ok`) instead of a bare id, exporters raise
   rather than logging "skipping", and `backtest.py` prints a per-exporter report and exits 1
   on any failure — including exporters whose constructor was rejected.
 - An exporter or data-source option nobody accepts **raises**. It used to be filtered out
@@ -808,7 +860,7 @@ The suite is the source of truth for its own size. Run it:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-At the time of writing this reports **1240 tests, 0 failures, 0 errors**. Treat that as a
+At the time of writing this reports **1406 tests, 0 failures, 0 errors**. Treat that as a
 sanity check, not a spec — if the command disagrees with this paragraph, believe the
 command. It is the only place in the documentation that quotes a count.
 

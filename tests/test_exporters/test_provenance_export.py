@@ -106,7 +106,7 @@ class _RecordingExporter(BaseExporter):
         super().__init__()
         self.metadata = None
 
-    def export_backtest_result(self, result, backtest_id, metadata):
+    def export_backtest_result(self, result, run_id, metadata):
         self.metadata = metadata
 
 
@@ -231,7 +231,7 @@ class TestCSVExporterProvenanceFile(unittest.TestCase):
 
         written = json.loads((Path(self.temp_dir) / provenance_files[0]).read_text())
         self.assertEqual(written['code']['git_sha'], 'a' * 40)
-        self.assertEqual(written['backtest_id'], 'abcdef12-3456')
+        self.assertEqual(written['run_id'], 'abcdef12-3456')
 
     def test_sidecar_filename_is_sanitised(self):
         """BTC/USDT must not become a directory separator - reuse the audit's sanitiser."""
@@ -263,7 +263,7 @@ class TestElasticsearchBacktestsMapping(unittest.TestCase):
     def setUpClass(cls):
         mapping_file = (
             Path(__file__).resolve().parents[2]
-            / 'config' / 'elasticsearch' / 'mappings' / 'backtests.json'
+            / 'config' / 'elasticsearch' / 'mappings' / 'runs.json'
         )
         cls.mapping = json.loads(mapping_file.read_text())
         cls.provenance = cls.mapping['mappings']['properties']['provenance']['properties']

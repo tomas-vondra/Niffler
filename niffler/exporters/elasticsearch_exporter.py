@@ -119,7 +119,7 @@ class ElasticsearchExporter(BaseExporter):
         self.es_client = None
 
         # Index names
-        self.backtests_index = f"{self.index_prefix}-backtests"
+        self.runs_index = f"{self.index_prefix}-runs"
         self.portfolio_index = f"{self.index_prefix}-portfolio-values"
         self.trades_index = f"{self.index_prefix}-trades"
         self.positions_index = f"{self.index_prefix}-positions"
@@ -200,14 +200,14 @@ class ElasticsearchExporter(BaseExporter):
             )
         bulk(self.es_client, actions)
 
-    def export_backtest_result(self, result: BacktestResult, backtest_id: str, 
+    def export_backtest_result(self, result: BacktestResult, run_id: str, 
                               metadata: Dict[str, Any]) -> None:
         """
         Export backtest results to Elasticsearch.
         
         Args:
             result: BacktestResult object containing all backtest data
-            backtest_id: Unique identifier for this backtest run
+            run_id: Unique identifier for this backtest run
             metadata: Additional metadata about the backtest
 
         Raises:
@@ -227,18 +227,18 @@ class ElasticsearchExporter(BaseExporter):
             self._create_indices()
             
             # Export backtest metadata
-            self._export_backtest_metadata(metadata, backtest_id)
+            self._export_backtest_metadata(metadata, run_id)
             
             # Export portfolio values
-            self._export_portfolio_values(result, backtest_id)
+            self._export_portfolio_values(result, run_id)
             
             # Export trades
-            self._export_trades(result, backtest_id)
+            self._export_trades(result, run_id)
 
             # Export positions (paired trades with P&L)
-            self._export_positions(result, backtest_id)
+            self._export_positions(result, run_id)
 
-            self.logger.info(f"Successfully exported backtest {backtest_id} to Elasticsearch")
+            self.logger.info(f"Successfully exported backtest {run_id} to Elasticsearch")
             
         except Exception as e:
             self.logger.error(f"Failed to export to Elasticsearch: {e}")
@@ -265,7 +265,7 @@ class ElasticsearchExporter(BaseExporter):
         """Create Elasticsearch indices with mappings loaded from configuration files."""
         # Define index mappings
         indices_config = [
-            (self.backtests_index, "backtests"),
+            (self.runs_index, "runs"),
             (self.portfolio_index, "portfolio"),
             (self.trades_index, "trades"),
             (self.positions_index, "positions")
@@ -294,11 +294,11 @@ class ElasticsearchExporter(BaseExporter):
         """
         return sanitize_numeric_values(data)
 
-    def _export_backtest_metadata(self, metadata: Dict[str, Any], backtest_id: str) -> None:
+    def _export_backtest_metadata(self, metadata: Dict[str, Any], run_id: str) -> None:
         """Export backtest metadata to Elasticsearch."""
         doc = {
             **metadata,
-            "backtest_id": backtest_id,
+            "run_id": run_id,
             "created_at": datetime.now(UTC).isoformat()
         }
 
@@ -306,13 +306,13 @@ class ElasticsearchExporter(BaseExporter):
         doc = self._sanitize_numeric_values(doc)
 
         self.es_client.index(
-            index=self.backtests_index,
-            id=backtest_id,
+            index=self.runs_index,
+            id=run_id,
             body=doc
         )
-        self.logger.debug(f"Exported backtest metadata for {backtest_id}")
+        self.logger.debug(f"Exported backtest metadata for {run_id}")
     
-    def _export_portfolio_values(self, result: BacktestResult, backtest_id: str) -> None:
+    def _export_portfolio_values(self, result: BacktestResult, run_id: str) -> None:
         """Export portfolio values with drawdown, rolling Sharpe ratio, and volatility to Elasticsearch using bulk API."""
         if result.portfolio_values.empty:
             self.logger.warning("No portfolio values to export")
@@ -352,7 +352,7 @@ class ElasticsearchExporter(BaseExporter):
             action = {
                 "_index": self.portfolio_index,
                 "_source": {
-                    "backtest_id": backtest_id,
+                    "run_id": run_id,
                     "timestamp": timestamp.isoformat(),
                     "portfolio_value": float(row['portfolio_value']),
                     "drawdown_pct": float(row['drawdown_pct']),
@@ -365,9 +365,9 @@ class ElasticsearchExporter(BaseExporter):
 
         # Bulk insert
         self._bulk_index(actions)
-        self.logger.debug(f"Exported {len(actions)} portfolio values with metrics for {backtest_id}")
+        self.logger.debug(f"Exported {len(actions)} portfolio values with metrics for {run_id}")
     
-    def _export_trades(self, result: BacktestResult, backtest_id: str) -> None:
+    def _export_trades(self, result: BacktestResult, run_id: str) -> None:
         """Export trades to Elasticsearch using bulk API."""
         if not result.trades:
             self.logger.info("No trades to export")
@@ -380,7 +380,7 @@ class ElasticsearchExporter(BaseExporter):
             action = {
                 "_index": self.trades_index,
                 "_source": {
-                    "backtest_id": backtest_id,
+                    "run_id": run_id,
                     "timestamp": trade.timestamp.isoformat(),
                     "symbol": trade.symbol,
                     "side": trade.side.value,
@@ -397,9 +397,9 @@ class ElasticsearchExporter(BaseExporter):
 
         # Bulk insert
         self._bulk_index(actions)
-        self.logger.debug(f"Exported {len(actions)} trades for {backtest_id}")
+        self.logger.debug(f"Exported {len(actions)} trades for {run_id}")
 
-    def _export_positions(self, result: BacktestResult, backtest_id: str) -> None:
+    def _export_positions(self, result: BacktestResult, run_id: str) -> None:
         """
         Export realised round trips (positions) with P&L calculations to Elasticsearch.
 
@@ -407,7 +407,7 @@ class ElasticsearchExporter(BaseExporter):
         same FIFO routine the engine derives ``win_rate``, ``profit_factor`` and the
         win/loss counts from. Using a second, hand-rolled pairing here made the
         ``niffler-positions`` index contradict the metrics written for the same
-        ``backtest_id``: it dropped every sell after the first, compared a partial
+        ``run_id``: it dropped every sell after the first, compared a partial
         exit's notional against the whole entry's, and ignored commission entirely.
 
         Each document carries entry/exit prices and timestamps, the matched quantity,
@@ -416,7 +416,7 @@ class ElasticsearchExporter(BaseExporter):
 
         Args:
             result: BacktestResult whose trades are paired
-            backtest_id: Unique identifier for this backtest run
+            run_id: Unique identifier for this backtest run
         """
         if not result.trades:
             self.logger.info("No trades to pair into positions")
@@ -441,8 +441,8 @@ class ElasticsearchExporter(BaseExporter):
             duration_hours = duration.total_seconds() / 3600
 
             positions.append({
-                "backtest_id": backtest_id,
-                "position_id": f"{backtest_id}-pos-{counter}",
+                "run_id": run_id,
+                "position_id": f"{run_id}-pos-{counter}",
                 "symbol": rt.symbol,
                 "entry_timestamp": rt.entry_timestamp.isoformat(),
                 "exit_timestamp": rt.exit_timestamp.isoformat(),
@@ -473,7 +473,7 @@ class ElasticsearchExporter(BaseExporter):
 
         # Bulk insert
         self._bulk_index(actions)
-        self.logger.info(f"Exported {len(actions)} positions for {backtest_id}")
+        self.logger.info(f"Exported {len(actions)} positions for {run_id}")
 
     def test_connection(self) -> bool:
         """Test connection to Elasticsearch."""

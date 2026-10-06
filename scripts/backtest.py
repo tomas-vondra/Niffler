@@ -17,20 +17,32 @@ from niffler.backtesting import BacktestEngine
 from niffler.strategies.registry import (
     create_strategy,
     get_available_strategies,
-    get_strategy_parameter_names,
 )
 from niffler.exporters import ExporterManager, get_available_exporters
 from niffler.utils.provenance import collect_provenance
+from niffler.utils.run_identity import RUN_KIND_BACKTEST
 from niffler.config.logging import setup_logging
 from scripts.common import (
+    PARAMS_TABLE,
+    StrategyParameters,
     add_cost_model_arguments,
     add_engine_arguments,
+    add_experiment_arguments,
     add_risk_manager_arguments,
+    add_strategy_parameter_arguments,
     build_run_config,
+    build_run_identity,
     load_ohlcv_csv,
     report_cost_model,
+    report_run_identity,
+    resolve_strategy_parameters,
 )
-from scripts.config_file import add_config_arguments, apply_config, report_config
+from scripts.config_file import (
+    add_config_arguments,
+    apply_config,
+    report_config,
+    typed_on_command_line,
+)
 
 
 def extract_symbol_from_filename(file_path: str) -> str:
@@ -74,27 +86,18 @@ def load_data(file_path: str, clean: bool = False) -> pd.DataFrame:
 def report_export_outcome(export_result: Any, exporter_names: List[str]) -> int:
     """Print a per-exporter export report and derive the process exit code.
 
-    Accepts either the ``ExportSummary`` returned by the current
-    ``ExporterManager`` or the bare backtest id returned by older versions.
-
     Args:
-        export_result: Value returned by ExporterManager.export_backtest_result.
-        exporter_names: Names of the configured exporters, used as a fallback
-            when the manager only returns a backtest id.
+        export_result: The ``ExportSummary`` returned by
+            ExporterManager.export_backtest_result.
+        exporter_names: Names of the configured exporters.
 
     Returns:
         0 when every exporter succeeded, 1 when at least one failed.
     """
-    successes = getattr(export_result, 'successes', None)
-    failures = getattr(export_result, 'failures', None)
-    backtest_id = getattr(export_result, 'backtest_id', export_result)
+    successes = export_result.successes
+    failures = export_result.failures
 
-    print(f"Backtest completed with ID: {backtest_id}")
-
-    if successes is None or failures is None:
-        # Legacy ExporterManager: no per-exporter outcome is available.
-        print(f"Exported using: {', '.join(exporter_names)}")
-        return 0
+    print(f"Backtest completed with run ID: {export_result.run_id}")
 
     print("Export report:")
     for name in successes:
@@ -119,54 +122,29 @@ STRATEGY_PARAMETER_FLAGS = {
 }
 
 
-def build_strategy_parameters(args) -> Dict[str, Any]:
-    """Collect strategy parameters from --params and the convenience flags.
+def build_strategy_parameters(args, config=None) -> StrategyParameters:
+    """Resolve strategy parameters, adding this script's convenience flags.
 
-    An explicitly passed flag overrides the same key in ``--params``. A parameter
+    The work is :func:`scripts.common.resolve_strategy_parameters`, shared with
+    ``analyze.py``; only the convenience flags are this script's own. A parameter
     the chosen strategy does not accept raises rather than being dropped, so
     ``--strategy rsi --short-window 5`` fails loudly instead of silently running
     an RSI backtest with default settings.
 
     Args:
         args: Parsed command line arguments.
+        config: The value ``apply_config`` returned, or None.
 
     Returns:
-        Keyword arguments for the strategy constructor.
+        The resolved parameters and the run that produced them, if any.
 
     Raises:
-        ValueError: If --params is not a JSON object, or a supplied parameter is
-            not accepted by the chosen strategy.
+        ValueError: If a source is malformed, or a supplied parameter is not
+            accepted by the chosen strategy.
     """
-    parameters: Dict[str, Any] = {}
-
-    if args.params:
-        try:
-            parsed = json.loads(args.params)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON in --params: {e}") from e
-        if not isinstance(parsed, dict):
-            raise ValueError(
-                f"--params must be a JSON object, got {type(parsed).__name__}"
-            )
-        parameters.update(parsed)
-
-    for name in STRATEGY_PARAMETER_FLAGS:
-        value = getattr(args, name, None)
-        if value is not None:
-            parameters[name] = value
-
-    accepted = get_strategy_parameter_names(args.strategy)
-    unknown = sorted(set(parameters) - accepted)
-    if unknown:
-        # Report the flag spelling where the parameter has one, since that is
-        # what the user typed.
-        rendered = ', '.join(STRATEGY_PARAMETER_FLAGS.get(name, name) for name in unknown)
-        raise ValueError(
-            f"Strategy '{args.strategy}' does not accept: {rendered}. "
-            f"It accepts: {', '.join(sorted(accepted))}"
-        )
-
-    return parameters
+    return resolve_strategy_parameters(
+        args, args.strategy, config=config, flags=STRATEGY_PARAMETER_FLAGS
+    )
 
 
 # Convenience flags that map onto exporter constructor options: option name ->
@@ -260,10 +238,8 @@ Examples:
     # share; each defaults to None so an explicitly passed flag can be told apart
     # from an unset one. A flag the chosen strategy does not accept is an error,
     # never silently ignored - the same rule the cost-model flags follow.
-    parser.add_argument('--params',
-                       help='Strategy parameters as a JSON object, e.g. '
-                            '\'{"rsi_period": 14, "oversold": 30}\'. Works for any '
-                            'strategy; unknown names are reported with the accepted ones.')
+    add_strategy_parameter_arguments(parser)
+    add_experiment_arguments(parser)
     parser.add_argument('--short-window', type=int, default=None,
                        help='Short MA window (simple_ma; default: strategy default)')
     parser.add_argument('--long-window', type=int, default=None,
@@ -332,10 +308,11 @@ Examples:
     # Persisted defaults, folded in after every flag is declared and before
     # parsing, so a flag typed on the command line still wins.
     add_config_arguments(parser)
-    config = apply_config(parser, 'backtest')
+    config = apply_config(parser, 'backtest', tables=(PARAMS_TABLE,))
 
     args = parser.parse_args()
-    
+    experiment_typed = typed_on_command_line(parser, 'experiment')
+
     # Configure logging
     setup_logging(level=args.log_level)
     report_config(config)
@@ -364,11 +341,20 @@ Examples:
         
         # Initialize strategy. Construction is generic: a strategy registered in
         # niffler.strategies.registry is usable here with no change to this file.
+        strategy_parameters = build_strategy_parameters(args, config)
         strategy = create_strategy(
             args.strategy,
-            build_strategy_parameters(args),
+            strategy_parameters.values,
             risk_manager=risk_manager
         )
+
+        # Minted once, before the backtest runs, so an experiment mismatch
+        # stops the run instead of surfacing after the work is done.
+        identity, identity_note = build_run_identity(
+            args, RUN_KIND_BACKTEST, config=config,
+            parent=strategy_parameters.parent, experiment_typed=experiment_typed
+        )
+        report_run_identity(identity, identity_note)
 
 
         print(f"Strategy: {strategy.get_description()}")
@@ -427,7 +413,9 @@ Examples:
             commission=run_config.commission,
             provenance=provenance,
             cost_model=engine.cost_model.description,
-            risk_manager=run_config.to_metadata()['risk_manager']
+            risk_manager=run_config.to_metadata()['risk_manager'],
+            identity=identity,
+            strategy_key=args.strategy
         )
 
         return report_export_outcome(export_result, exporter_manager.get_exporter_names())

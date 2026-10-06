@@ -1,3 +1,4 @@
+import argparse
 import unittest
 import pandas as pd
 import numpy as np
@@ -150,45 +151,40 @@ class TestAnalyzeScript(unittest.TestCase):
     def test_load_parameters_from_json_string(self):
         """Test loading parameters from JSON string."""
         # Mock args with params
-        args = Mock()
-        args.params = '{"short_window": 10, "long_window": 20}'
-        args.params_file = None
-        
-        params = analyze.load_parameters(args)
+        args = argparse.Namespace(strategy='simple_ma', params_file=None,
+                                  params='{"short_window": 10, "long_window": 20}')
+
+        params = analyze.load_parameters(args).values
         self.assertEqual(params, {'short_window': 10, 'long_window': 20})
     
     def test_load_parameters_from_file(self):
         """Test loading parameters from file."""
-        args = Mock()
-        args.params = None
-        args.params_file = self.temp_params_file.name
-        
-        params = analyze.load_parameters(args)
+        args = argparse.Namespace(strategy='simple_ma', params=None,
+                                  params_file=self.temp_params_file.name)
+
+        params = analyze.load_parameters(args).values
         self.assertEqual(params, self.test_params)
     
     def test_load_parameters_from_optimization_file(self):
         """Test loading parameters from optimization results file."""
-        args = Mock()
-        args.params = None
-        args.params_file = self.temp_opt_file.name
-        
-        params = analyze.load_parameters(args)
+        args = argparse.Namespace(strategy='simple_ma', params=None,
+                                  params_file=self.temp_opt_file.name)
+
+        params = analyze.load_parameters(args).values
         self.assertEqual(params, self.test_params)  # Should get best result
     
     def test_load_parameters_invalid_json(self):
         """Test loading invalid JSON parameters."""
-        args = Mock()
-        args.params = '{"invalid": json}'
-        args.params_file = None
+        args = argparse.Namespace(strategy='simple_ma', params='{"invalid": json}',
+                                  params_file=None)
         
         with self.assertRaises(ValueError):
             analyze.load_parameters(args)
     
     def test_load_parameters_file_not_found(self):
         """Test loading from non-existent file."""
-        args = Mock()
-        args.params = None
-        args.params_file = 'non_existent.json'
+        args = argparse.Namespace(strategy='simple_ma', params=None,
+                                  params_file='non_existent.json')
         
         with self.assertRaises(ValueError):
             analyze.load_parameters(args)
@@ -461,7 +457,8 @@ class TestAnalyzeScript(unittest.TestCase):
         """Test main function with successful walk-forward analysis."""
         # Setup mocks
         mock_load_data.return_value = self.test_data
-        mock_load_params.return_value = self.test_params
+        mock_load_params.return_value = analyze.StrategyParameters(
+            values=self.test_params, supplied=True)
         mock_result = Mock()
         mock_run_wf.return_value = mock_result
         
@@ -490,7 +487,8 @@ class TestAnalyzeScript(unittest.TestCase):
         """Test main function with successful Monte Carlo analysis."""
         # Setup mocks
         mock_load_data.return_value = self.test_data
-        mock_load_params.return_value = self.test_params
+        mock_load_params.return_value = analyze.StrategyParameters(
+            values=self.test_params, supplied=True)
         mock_result = Mock()
         mock_run_mc.return_value = mock_result
         
@@ -525,13 +523,19 @@ class TestAnalyzeScript(unittest.TestCase):
         provenance = {'run_timestamp_utc': '2026-01-01T00:00:00+00:00'}
         with patch('analyze.load_parameters') as mock_load_params, \
                 patch('analyze.collect_provenance', return_value=provenance) as mock_collect:
-            mock_load_params.return_value = self.test_params
+            mock_load_params.return_value = analyze.StrategyParameters(
+            values=self.test_params, supplied=True)
             analyze.main()
 
         # Verify save_results was called, carrying the provenance record for the run
-        mock_save_results.assert_called_once_with(
-            mock_result, 'results.json', provenance=provenance
-        )
+        mock_save_results.assert_called_once()
+        call = mock_save_results.call_args
+        self.assertEqual(call.args, (mock_result, 'results.json'))
+        self.assertEqual(call.kwargs['provenance'], provenance)
+        # The run block names this run so a later step can record it as a parent.
+        self.assertEqual(call.kwargs['run']['kind'], 'walk_forward')
+        self.assertEqual(call.kwargs['run']['strategy_key'], 'simple_ma')
+        self.assertTrue(call.kwargs['run']['run_id'])
         # Provenance is fingerprinted against the input file the analysis actually read.
         mock_collect.assert_called_once_with('test.csv')
 
@@ -550,7 +554,8 @@ class TestAnalyzeScript(unittest.TestCase):
         mock_save_results.side_effect = OSError("disk full")
 
         with patch('analyze.load_parameters') as mock_load_params:
-            mock_load_params.return_value = self.test_params
+            mock_load_params.return_value = analyze.StrategyParameters(
+            values=self.test_params, supplied=True)
             with patch('sys.stdout', new_callable=StringIO) as mock_stdout:
                 exit_code = analyze.main()
 

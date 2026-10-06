@@ -38,28 +38,28 @@ class TestBuildStrategyParameters(unittest.TestCase):
 
     def test_no_flags_yields_no_parameters(self):
         """An untouched CLI must fall through to the strategy's own defaults."""
-        self.assertEqual({}, build_strategy_parameters(args_for('simple_ma')))
+        self.assertEqual({}, build_strategy_parameters(args_for('simple_ma')).values)
 
     def test_named_flags_are_collected(self):
         parameters = build_strategy_parameters(
             args_for('simple_ma', short_window=5, long_window=40)
         )
 
-        self.assertEqual({'short_window': 5, 'long_window': 40}, parameters)
+        self.assertEqual({'short_window': 5, 'long_window': 40}, parameters.values)
 
     def test_params_json_is_parsed(self):
         parameters = build_strategy_parameters(
             args_for('rsi', params='{"rsi_period": 9, "oversold": 25}')
         )
 
-        self.assertEqual({'rsi_period': 9, 'oversold': 25}, parameters)
+        self.assertEqual({'rsi_period': 9, 'oversold': 25}, parameters.values)
 
     def test_an_explicit_flag_overrides_params_json(self):
         parameters = build_strategy_parameters(
             args_for('simple_ma', params='{"short_window": 3}', short_window=11)
         )
 
-        self.assertEqual(11, parameters['short_window'])
+        self.assertEqual(11, parameters.values['short_window'])
 
     def test_position_size_is_shared_by_every_strategy(self):
         for strategy in ('simple_ma', 'rsi', 'breakout'):
@@ -67,7 +67,7 @@ class TestBuildStrategyParameters(unittest.TestCase):
                 parameters = build_strategy_parameters(
                     args_for(strategy, position_size=0.3)
                 )
-                self.assertEqual(0.3, parameters['position_size'])
+                self.assertEqual(0.3, parameters.values['position_size'])
 
     def test_a_flag_from_another_strategy_is_an_error(self):
         """--strategy rsi --short-window 5 must fail, not run RSI with defaults."""
@@ -108,7 +108,7 @@ class TestBuildStrategyParameters(unittest.TestCase):
         }
         for strategy, params in cases.items():
             with self.subTest(strategy=strategy):
-                self.assertTrue(build_strategy_parameters(args_for(strategy, params=params)))
+                self.assertTrue(build_strategy_parameters(args_for(strategy, params=params)).values)
 
 
 class TestMainRejectsForeignFlags(unittest.TestCase):
