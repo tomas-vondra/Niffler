@@ -41,6 +41,7 @@ from niffler.optimization.optimizer_factory import (
 )
 from niffler.strategies.registry import get_available_strategies, get_strategy_class
 from niffler.exporters import ExporterManager
+from niffler.exporters.run_record import DETAIL_COMPARISON
 from niffler.utils.provenance import collect_provenance
 from niffler.utils.run_identity import RUN_KIND_COMPARE
 from scripts.common import (
@@ -165,7 +166,8 @@ def evaluate(data_path: str, strategy: str, run_config: RunConfig,
         so a broken pair is visibly missing rather than silently absent.
     """
     symbol = symbol_from_path(data_path)
-    row: Dict[str, Any] = {'symbol': symbol, 'strategy': strategy, 'error': None}
+    row: Dict[str, Any] = {'symbol': symbol, 'strategy': strategy,
+                           'data_path': data_path, 'error': None}
 
     try:
         data = load_ohlcv_csv(data_path, clean=schedule.clean)
@@ -217,6 +219,33 @@ def evaluate(data_path: str, strategy: str, run_config: RunConfig,
         row.update({'median_fold_pct': None, 'median_bh_pct': None,
                     'median_excess_pct': None, 'beat_bh_pct': None})
     return row
+
+
+def comparison_details(rows: List[Dict[str, Any]],
+                       provenance: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
+    """Shape comparison rows for a document store, one document per row.
+
+    A comparison reads several files, so no single fingerprint describes the
+    run: each row names the data it was computed from instead. The strategy
+    column becomes ``strategy_key``, overriding the run-level one, which is
+    None when the table spans several strategies.
+
+    Args:
+        rows: The rows :func:`evaluate` returned.
+        provenance: One provenance record per dataset, keyed by path.
+
+    Returns:
+        ``details`` for ``ExporterManager.create_run_record``.
+    """
+    detailed = []
+    for row in rows:
+        record = (provenance.get(row.get('data_path')) or {})
+        detailed.append({
+            **row,
+            'strategy_key': row.get('strategy'),
+            'data_sha256': (record.get('data') or {}).get('sha256'),
+        })
+    return {DETAIL_COMPARISON: detailed}
 
 
 def render(rows: List[Dict[str, Any]]) -> None:
@@ -395,23 +424,30 @@ Examples:
 
     render(rows)
 
+    # One record per dataset: a single provenance block would hash one file and
+    # imply it covered every row in the table.
+    provenance = {p: collect_provenance(p) for p in args.data}
+    windows = {
+        'train_window_months': args.train_window,
+        'test_window_months': args.test_window,
+        'step_months': step_months,
+    }
     record = exporter_manager.create_run_record(
         identity,
         # A table over several strategies has no single registry key; each row
         # names its own.
         strategies[0] if len(strategies) == 1 else None,
-        {
-            'settings': {
-                'train_window_months': args.train_window,
-                'test_window_months': args.test_window,
-                'step_months': step_months,
-                **run_config.to_metadata(),
-            },
-            'rows': rows,
+        {'settings': {**windows, **run_config.to_metadata()}, 'rows': rows},
+        provenance=provenance,
+        settings=run_config.to_metadata(),
+        summary={
+            **windows,
+            'n_rows': len(rows),
+            'n_failed_rows': sum(1 for r in rows if r['error']),
+            'strategies': list(strategies),
+            'symbols': sorted({r['symbol'] for r in rows}),
         },
-        # One record per dataset: a single provenance block would hash one file
-        # and imply it covered every row in the table.
-        provenance={p: collect_provenance(p) for p in args.data},
+        details=comparison_details(rows, provenance),
     )
     export_failed = report_export_outcome(
         exporter_manager.export_run(record), what='Comparison')

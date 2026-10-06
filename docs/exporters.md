@@ -41,7 +41,7 @@ is the default list and which exporters can export that script's kind of run:
 | `console` | every kind (for non-backtest kinds: the run's identity; the script prints its own tables) |
 | `json` | every kind, one document per run |
 | `csv` | backtests |
-| `elasticsearch` | backtests |
+| `elasticsearch` | every kind: one summary per run, plus one document per trial, fold, simulation or comparison row |
 
 ```bash
 # --output PATH implies the json exporter, in every script that has the flag
@@ -217,16 +217,59 @@ importing a generic JSON helper does not drag in the optional Elasticsearch clie
 
 ## Elasticsearch Exporter
 
-Bulk-indexes results into four indices (prefix configurable, default `niffler`):
+Indexes every kind of run (prefix configurable, default `niffler`):
 
-| Index | One document per |
-|-------|------------------|
-| `niffler-runs` | Backtest, with metadata and metrics |
-| `niffler-portfolio-values` | Portfolio value observation |
-| `niffler-trades` | Executed trade (includes `commission`) |
-| `niffler-positions` | Completed **round trip** |
+| Index | One document per | Written by |
+|-------|------------------|------------|
+| `niffler-runs` | **Run**, of any kind: its summary | every script |
+| `niffler-portfolio-values` | Portfolio value observation | `backtest.py` |
+| `niffler-trades` | Executed trade (includes `commission`) | `backtest.py` |
+| `niffler-positions` | Completed **round trip** | `backtest.py` |
+| `niffler-trials` | Parameter combination an optimization evaluated | `optimize.py` |
+| `niffler-folds` | Walk-forward fold | `analyze.py` |
+| `niffler-simulations` | Monte Carlo simulation | `analyze.py` |
+| `niffler-comparisons` | Dataset × strategy row | `compare.py`, `screen.py` |
 
-Mappings live in `config/elasticsearch/mappings/`.
+Mappings live in `config/elasticsearch/mappings/` (`run_details.json` is shared by folds,
+simulations and comparisons, whose columns differ by run).
+
+### One summary per run, one header on every document
+
+Elasticsearch has no joins, so the run's header is copied onto every document it writes:
+`run_id`, `kind`, `experiment`, `parent_run_id`, `profile`, `strategy_key`, `symbol`, the
+engine settings (`initial_capital`, `commission`, `cost_model`, `risk_manager`, ...),
+`git_sha`, `git_dirty` and `data_sha256`. Filtering trials, folds and summaries by
+experiment is therefore one clause, `experiment:"breakout-btc-5bps"`, in any index.
+
+`kind` tells the summaries apart in `niffler-runs`. What each carries beyond the header:
+
+| Kind | Summary fields |
+|------|----------------|
+| `backtest` | the full backtest metadata document, unchanged |
+| `optimize` | `n_trials`, `method`, `sort_by`, `selection`, `results_truncated`, `best_parameters`, the winner's metrics under the same names a backtest uses, and `plateau_metric`, `grid_baseline`, `grid_median`, `fraction_beating_baseline`, `plateau_retention` |
+| `walk_forward`, `monte_carlo` | `n_periods`, `combined_metrics`, `stability_metrics`, `analysis_parameters`, `attempted_runs`, `failed_runs`, `failure_rate` |
+| `compare` | the fold windows, `n_rows`, `n_failed_rows`, `strategies`, `symbols` |
+| `screen` | `passed`, `stopped_at`, `stopped_at_quantity`, `forced`, and `stages` (one entry per gate) |
+
+Rules the export keeps:
+
+- **A truncated optimization exports flagged, with no grid statistic.** When the optimizer
+  discarded results to cap memory, `results_truncated` is true and `grid_median`,
+  `fraction_beating_baseline` and `plateau_retention` are null: the survivors were selected
+  by score, so a median computed from them flatters the grid.
+- **A trial that never traded is a state, not a score.** Each trial carries `status`:
+  `ok`, `no_trades` or `non_finite`.
+- **A walk-forward fold row carries the in-sample/out-of-sample pair**
+  (`train_return_pct`, `test_return_pct`, `efficiency_ratio`, `in_sample`, `parameters`).
+- **A run over several files claims no single data fingerprint.** `data_sha256` is null on
+  a comparison's header and set on each of its rows.
+- **Unknown is null.** `git_dirty` is null when it could not be determined.
+- **Ids are deterministic** (`run_id` for the summary, `run_id:type:index` for a row), so
+  exporting the same run twice overwrites rather than duplicates.
+
+The mappings map every parameter object as `flattened` and every otherwise unmapped integer
+as `double`. Without the second, the first document decides the type and a later `10.5` is
+silently truncated into a field that first saw `10`.
 
 ### The provenance mapping
 

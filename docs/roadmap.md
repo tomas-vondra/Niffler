@@ -82,15 +82,15 @@ Kept struck through rather than deleted, so the list stays honest about what mov
 ## Experiment tracking
 
 The gap between what the platform computes and what a person can actually see. Agreed as
-the direction on 2026-09-05, deferred rather than started.
+the direction on 2026-09-05; the data side is now delivered and the dashboards are not.
 
-Today only `scripts/backtest.py` exports to Elasticsearch. `optimize.py` and `analyze.py`
-write local JSON, so the 396-1632 trials of a grid search and every walk-forward fold and
-Monte Carlo simulation — the actual research record — never reach Kibana or Grafana. The
-single provisioned dashboard (`config/grafana/dashboards/backtest-detailed-analysis.json`)
-is a one-run drill-down: pick a `run_id`, read eleven gauges. There is no
-cross-strategy comparison, and nothing joins an optimization to the validation and the
-final backtest that came out of it.
+Until the two items struck through below, only `scripts/backtest.py` exported to
+Elasticsearch: the 396-1632 trials of a grid search and every walk-forward fold and Monte
+Carlo simulation — the actual research record — stayed in local JSON, and nothing joined
+an optimization to the validation and the final backtest that came out of it. What is left
+is the view. The single provisioned dashboard
+(`config/grafana/dashboards/backtest-detailed-analysis.json`) is still a one-run
+drill-down: pick a `run_id`, read eleven gauges. There is no cross-strategy comparison yet.
 
 In dependency order:
 
@@ -101,13 +101,22 @@ In dependency order:
   one would make a forgotten flag look like a deliberate one-run experiment. A file-fed run
   inherits an unset experiment and a different one is an error. The identity is written
   into every saved JSON result and onto the `niffler-runs` summary document.
-- **Export optimization and analysis results.** Two indices (`optimizations`: one document
-  per trial plus a run summary; `analyses`: per-fold / per-simulation plus a summary),
-  reusing `ExporterManager` and the existing provenance block. The `SELECTION_TRUNCATED`
-  discipline has to carry over: a truncated result set exports what it has, flagged, never
-  a grid statistic computed from score-biased survivors.
-- **A cross-strategy dashboard.** Leaderboard by strategy and experiment, in-sample versus
-  out-of-sample scatter from the walk-forward efficiency ratio, and performance over time.
+- ~~**Export optimization and analysis results.**~~ — shipped, with a different index
+  layout than first written. Every script takes the same `--exporters` flags; every run of
+  any kind writes one summary to `niffler-runs`, and its trials, folds, simulations or
+  comparison rows go to `niffler-trials` / `-folds` / `-simulations` / `-comparisons`. One
+  summary index rather than one per kind, so a leaderboard reads a single place. Every
+  document carries the run's header, because Elasticsearch has no joins. The
+  `SELECTION_TRUNCATED` discipline carried over: a truncated result set exports flagged,
+  with its grid statistics null.
+- **A cross-strategy dashboard.** Not started; the data it needs is now in Elasticsearch.
+  Three levels: a leaderboard over `niffler-runs` (one row per experiment, sorted by
+  out-of-sample result, with the walk-forward efficiency ratio, the share of the grid
+  beating buy-and-hold and plateau retention beside it); an experiment view filtered on
+  `experiment` (trial-score distribution with the winner and the baseline marked, in-sample
+  versus out-of-sample per fold, the Monte Carlo return distribution); and the existing
+  single-run drill-down. Missing must render as missing, never as zero, and a truncated
+  grid must show no distribution.
 
 Two traps found while scoping this, both worth handling in the export work rather than
 discovering later:

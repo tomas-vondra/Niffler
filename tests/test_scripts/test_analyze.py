@@ -21,6 +21,11 @@ from niffler.utils.run_identity import new_run_identity
 from niffler.backtesting.backtest_result import BacktestResult
 
 
+def args_analysis() -> str:
+    """The --analysis value of the command line currently patched into sys.argv."""
+    return sys.argv[sys.argv.index('--analysis') + 1]
+
+
 def save_results(result, path, provenance=None):
     """Write an analysis result the way main() does: document, record, JSON exporter."""
     record = ExporterManager.create_run_record(
@@ -473,7 +478,10 @@ class TestAnalyzeScript(unittest.TestCase):
         mock_run_wf.return_value = mock_result
         
         # Capture stdout
-        with patch('sys.stdout', new_callable=StringIO) as mock_stdout:
+        # The analysis is stubbed out, so there is no real result to render.
+        with patch('analyze.build_results_document',
+                   return_value={'analysis_type': args_analysis(), 'n_periods': 1}), \
+                patch('sys.stdout', new_callable=StringIO) as mock_stdout:
             analyze.main()
         
         # Verify calls
@@ -503,7 +511,10 @@ class TestAnalyzeScript(unittest.TestCase):
         mock_run_mc.return_value = mock_result
         
         # Capture stdout
-        with patch('sys.stdout', new_callable=StringIO) as mock_stdout:
+        # The analysis is stubbed out, so there is no real result to render.
+        with patch('analyze.build_results_document',
+                   return_value={'analysis_type': args_analysis(), 'n_periods': 1}), \
+                patch('sys.stdout', new_callable=StringIO) as mock_stdout:
             analyze.main()
         
         # Verify calls

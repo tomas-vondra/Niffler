@@ -15,11 +15,17 @@ from .registry import (
     get_exporter_option_names,
     get_exporters_supporting,
 )
-from .run_record import RunRecord
+from .run_record import DETAIL_TYPES, RunRecord
 from ..backtesting.backtest_result import BacktestResult
 from ..utils.run_identity import RUN_KIND_BACKTEST, RunIdentity, new_run_identity
 
 logger = logging.getLogger(__name__)
+
+
+def _is_single_provenance(provenance: Optional[Dict[str, Any]]) -> bool:
+    """True for one provenance record, False for one-per-dataset keyed by path."""
+    return isinstance(provenance, dict) and (
+        'code' in provenance or 'data' in provenance or 'environment' in provenance)
 
 
 @dataclass
@@ -305,7 +311,12 @@ class ExporterManager:
     @staticmethod
     def create_run_record(identity: RunIdentity, strategy_key: Optional[str],
                           body: Dict[str, Any],
-                          provenance: Optional[Dict[str, Any]] = None) -> RunRecord:
+                          provenance: Optional[Dict[str, Any]] = None,
+                          settings: Optional[Dict[str, Any]] = None,
+                          symbol: Optional[str] = None,
+                          summary: Optional[Dict[str, Any]] = None,
+                          details: Optional[Dict[str, List[Dict[str, Any]]]] = None
+                          ) -> RunRecord:
         """
         Build the record of a run that is not a single backtest.
 
@@ -321,16 +332,68 @@ class ExporterManager:
             strategy_key: Registry name of the strategy, or None for a run that
                 spans several
             body: The script's own result document
-            provenance: Optional run provenance record, collected once by the caller
+            provenance: Optional run provenance record, collected once by the
+                caller. A run over several datasets passes one record per file,
+                keyed by path
+            settings: The engine settings the run used
+                (``RunConfig.to_metadata()``), copied onto every exported document
+            symbol: The instrument, or None for a run over several
+            summary: The run-level result, for exporters that store one document
+                per run
+            details: Detail rows by type (see
+                :data:`niffler.exporters.run_record.DETAIL_TYPES`)
 
         Returns:
             The record handed to every exporter
+
+        Raises:
+            ValueError: If ``details`` names a type that does not exist
         """
+        details = dict(details or {})
+        unknown = sorted(set(details) - set(DETAIL_TYPES))
+        if unknown:
+            raise ValueError(
+                f"Unknown detail type(s): {', '.join(unknown)}. "
+                f"Types: {', '.join(DETAIL_TYPES)}"
+            )
+
+        run_block = {**identity.to_metadata(), 'strategy_key': strategy_key}
+
         document = dict(body)
         if provenance is not None:
             document['provenance'] = provenance
-        document['run'] = {**identity.to_metadata(), 'strategy_key': strategy_key}
-        return RunRecord(identity=identity, strategy_key=strategy_key, document=document)
+        document['run'] = run_block
+
+        # A single record has 'code' and 'data' blocks. One record per dataset is
+        # keyed by path instead: the code is the same for all of them, and no
+        # single data fingerprint describes the run - each detail row names its own.
+        single = provenance if _is_single_provenance(provenance) else None
+        any_record = single or next(iter((provenance or {}).values()), None)
+        if not isinstance(any_record, dict):
+            any_record = {}
+        code = any_record.get('code') or {}
+        data = (single or {}).get('data') or {}
+
+        header = {
+            **run_block,
+            'symbol': symbol,
+            **(settings or {}),
+            'git_sha': code.get('git_sha'),
+            # None when it could not be determined: False would assert a
+            # cleanliness nobody checked.
+            'git_dirty': code.get('dirty'),
+            'data_sha256': data.get('sha256'),
+        }
+
+        return RunRecord(
+            identity=identity,
+            strategy_key=strategy_key,
+            document=document,
+            header=header,
+            summary=dict(summary or {}),
+            details=details,
+            provenance=single,
+        )
 
     def create_metadata(self, result: BacktestResult, strategy_params: Dict[str, Any],
                         symbol: str, initial_capital: float, commission: float,

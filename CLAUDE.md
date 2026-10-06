@@ -49,6 +49,10 @@ The short version, because these are easy to "helpfully" undo:
 | An exporter declares `SUPPORTED_KINDS`; one that cannot export the run's kind is a `ValueError` at creation, and `BaseExporter.export_run` **raises** by default | Let an unsupported exporter return normally - `ExporterManager` would report the run as exported |
 | The `run` and `provenance` blocks of a saved document have **one** builder, `ExporterManager.create_run_record` (the non-backtest counterpart of `create_metadata`) | Attach a `run` block in a script or an exporter; scripts build only their own body (`results_document`, `build_results_document`) |
 | `--output PATH` **implies** the `json` exporter | Treat it as an option no chosen exporter accepts - `analyze.py --output x.json` with the default `console` list would start failing |
+| Every exported document of a run carries the **same header**, assembled once in `ExporterManager.create_run_record` (identity, `strategy_key`, `symbol`, engine settings, `git_sha`, `git_dirty`, `data_sha256`) | Build a header in a script or an exporter, or drop it from detail rows - Elasticsearch has no joins, so the copy *is* the join |
+| A truncated optimization exports **flagged**, with `grid_median` / `fraction_beating_baseline` / `plateau_retention` **null** | Export a grid statistic computed from the survivors of the memory cap, which were selected by score |
+| A run over several datasets has **no** run-level `data_sha256`; each detail row names its own | Stamp the first file's hash on a `compare` or `screen` summary |
+| Exported document ids are deterministic (`run_id`, `run_id:type:index`) | Let Elasticsearch generate ids, which turns a re-export into duplicates; the trial index relies on `_evaluate_parallel` retaining submission order |
 | A run id has **one** mint site (`niffler/utils/run_identity.mint_run_id`), and the identity is built **once per run at the CLI** by `scripts/common.build_run_identity` | Mint a uuid in an exporter or a manager, or put the identity on `RunConfig` - it is not an engine knob and would make two equal configs unequal |
 | The **experiment is never minted**; unnamed is `None`, shown `(none)` | Generate an experiment id for an unlabelled run - a forgotten flag would then look like a deliberate one-run experiment |
 | A run fed by `--params-file` **inherits** an unset experiment, and a *different* one is an **error** unless `--experiment` was typed (`typed_on_command_line`) | Let the file silently win, let a profile value override the error, or compare values to decide "typed" - the user may type the name the file already holds |
@@ -408,7 +412,9 @@ Exit codes: `0` every gate passed, `3` a gate stopped the run, `1` the run faile
   - `json_exporter.py` - One JSON document per run, every kind. This is the durable record
     and the file `--params-file` reads; `--output PATH` in any script selects it
   - `csv_exporter.py` - CSV file export for analysis tools (backtests only)
-  - `elasticsearch_exporter.py` - Elasticsearch integration for visualization
+  - `elasticsearch_exporter.py` - Elasticsearch integration for visualization. Every run
+    kind: one summary per run in `-runs`, plus `-trials`, `-folds`, `-simulations` and
+    `-comparisons` detail indices (see [docs/exporters.md](docs/exporters.md))
   - `exporter_manager.py` - Multi-exporter coordination, `create_metadata` and
     `ExportSummary`. It holds **no** name→class map of its own.
     `create_exporters_from_list` broadcasts one option pool over several exporters and
@@ -438,7 +444,8 @@ Exit codes: `0` every gate passed, `3` a gate stopped the run, `1` the run faile
   `from config.logging import setup_logging` path. New code imports
   `niffler.config.logging`
 - `config/elasticsearch/mappings/` - Elasticsearch schema definitions
-  (`backtests`, `portfolio`, `trades`, `positions`)
+  (`runs`, `portfolio`, `trades`, `positions`, `trials`, and `run_details` shared by
+  folds, simulations and comparisons)
 - `scripts/` - Command-line interfaces for core functionality
   - `compare.py` - Cross-dataset comparison. Runs the same walk-forward over several
     datasets and reports them side by side. Two conventions make the table mean

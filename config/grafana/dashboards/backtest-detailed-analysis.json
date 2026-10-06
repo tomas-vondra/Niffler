@@ -245,7 +245,7 @@
               "type": "raw_data"
             }
           ],
-          "query": "_index:niffler-runs",
+          "query": "_index:niffler-runs AND kind:backtest",
           "refId": "A",
           "timeField": "created_at"
         }
@@ -2063,12 +2063,12 @@
           "type": "elasticsearch",
           "uid": "niffler-elasticsearch"
         },
-        "definition": "{\"find\": \"terms\", \"field\": \"run_id\", \"query\": \"_index:niffler-runs\"}",
+        "definition": "{\"find\": \"terms\", \"field\": \"run_id\", \"query\": \"_index:niffler-runs AND kind:backtest\"}",
         "includeAll": false,
         "label": "Run ID",
         "name": "run_id",
         "options": [],
-        "query": "{\"find\": \"terms\", \"field\": \"run_id\", \"query\": \"_index:niffler-runs\"}",
+        "query": "{\"find\": \"terms\", \"field\": \"run_id\", \"query\": \"_index:niffler-runs AND kind:backtest\"}",
         "refresh": 1,
         "regex": "",
         "sort": 1,

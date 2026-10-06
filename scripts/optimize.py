@@ -22,10 +22,12 @@ Examples:
 """
 
 import argparse
+import math
 import sys
 import pandas as pd
 import logging
 from datetime import datetime
+from typing import Any, Dict
 from pathlib import Path
 
 # Running "python scripts/optimize.py" puts scripts/ on sys.path but not the
@@ -36,6 +38,7 @@ if __package__ in (None, ''):
 
 from niffler.config.logging import setup_logging
 from niffler.exporters import ExporterManager
+from niffler.exporters.run_record import DETAIL_TRIAL
 from niffler.utils.provenance import collect_provenance
 from niffler.optimization import plateau as plateau_analysis
 from niffler.optimization.optimizer_factory import (
@@ -64,6 +67,7 @@ from scripts.common import (
     report_export_outcome,
     report_run_config,
     report_run_identity,
+    symbol_from_data_path,
 )
 from scripts.config_file import (
     add_config_arguments,
@@ -147,6 +151,112 @@ def report_plateau(results, args, selection: str) -> None:
         cells = plateau_analysis.write_surface_csv(
             report.surface, args.plateau_csv, report.plateau)
         print(f"Parameter surface ({cells} cells) written to: {args.plateau_csv}")
+
+
+#: The plateau figures an exported optimization summary carries. All None when
+#: they could not be honestly computed.
+_NO_PLATEAU_SUMMARY = {
+    'plateau_metric': None,
+    'grid_baseline': None,
+    'grid_median': None,
+    'fraction_beating_baseline': None,
+    'plateau_retention': None,
+}
+
+
+def plateau_summary(results, args, selection: str) -> Dict[str, Any]:
+    """Whole-grid figures for the exported summary, or None where unknowable.
+
+    The same analysis :func:`report_plateau` prints, reduced to the numbers
+    that say whether the winner is typical of its grid. It reads scores the
+    run already produced, so a failure here must not cost the export.
+
+    Args:
+        results: The optimisation results, as returned by the optimizer.
+        args: Parsed command line carrying the plateau flags.
+        selection: One of the ``plateau.SELECTION_*`` constants.
+
+    Returns:
+        ``plateau_metric``, ``grid_baseline``, ``grid_median``,
+        ``fraction_beating_baseline`` and ``plateau_retention``. A truncated
+        result set reports **no** grid statistic: its survivors were selected
+        by score, so a median computed from them flatters the grid.
+    """
+    if args.no_plateau:
+        return dict(_NO_PLATEAU_SUMMARY)
+
+    metric = args.plateau_metric or args.sort_by
+    try:
+        report = plateau_analysis.analyse_results(
+            results, metric=metric, selection=selection,
+            tolerance=args.plateau_tolerance,
+        )
+    except Exception as e:
+        logging.getLogger(__name__).warning(
+            f"Plateau figures left out of the export: {e}")
+        return dict(_NO_PLATEAU_SUMMARY)
+
+    distribution = report.distribution
+    if not distribution.reliable:
+        return {**_NO_PLATEAU_SUMMARY, 'plateau_metric': metric}
+
+    return {
+        'plateau_metric': metric,
+        'grid_baseline': distribution.baseline,
+        'grid_median': distribution.median,
+        'fraction_beating_baseline': distribution.fraction_beating_baseline,
+        'plateau_retention': report.plateau.retention if report.plateau else None,
+    }
+
+
+def build_export_views(document: Dict[str, Any], args, selection: str,
+                       truncated: bool, plateau: Dict[str, Any]):
+    """Shape an optimization for a document store: one summary, one row per trial.
+
+    Args:
+        document: The value ``BaseOptimizer.results_document`` returned.
+        args: Parsed command line.
+        selection: One of the ``plateau.SELECTION_*`` constants.
+        truncated: Whether the optimizer discarded results to cap memory.
+        plateau: The value :func:`plateau_summary` returned.
+
+    Returns:
+        ``(summary, details)`` for ``ExporterManager.create_run_record``.
+    """
+    trials = document.get('results') or []
+    rows = []
+    for rank, trial in enumerate(trials, start=1):
+        metrics = trial.get('metrics') or {}
+        score = metrics.get(args.sort_by)
+        # The same four states the plateau surface uses: a combination that
+        # never traded or produced no finite score is not a mediocre result.
+        if metrics.get('total_trades') == 0:
+            status = plateau_analysis.CELL_NO_TRADES
+        elif isinstance(score, float) and not math.isfinite(score):
+            status = plateau_analysis.CELL_NON_FINITE
+        else:
+            status = plateau_analysis.CELL_OK
+        rows.append({
+            'rank': rank,
+            'parameters': trial.get('parameters'),
+            **metrics,
+            'status': status,
+        })
+
+    winner = trials[0] if trials else {}
+    summary = {
+        'method': args.method,
+        'sort_by': args.sort_by,
+        'n_trials': len(trials),
+        'results_truncated': truncated,
+        'selection': selection,
+        'best_parameters': winner.get('parameters'),
+        # The winner's own metrics, under the names a backtest summary uses, so
+        # one table can hold both. `kind` says which is which.
+        **(winner.get('metrics') or {}),
+        **plateau,
+    }
+    return summary, {DETAIL_TRIAL: rows}
 
 
 def build_parameter_space(strategy: str, config) -> ParameterSpace:
@@ -457,9 +567,27 @@ def main() -> int:
         # Export the results, stamped with the run and with the code, data and
         # environment that produced them. Provenance is collected once here and
         # shared by every exporter.
+        # How the evaluated combinations were chosen. Only this script knows
+        # whether a partial grid is an unbiased sample or score-biased survivors.
+        if optimizer.results_truncated:
+            selection = plateau_analysis.SELECTION_TRUNCATED
+        elif args.method == 'random':
+            selection = plateau_analysis.SELECTION_SAMPLED
+        else:
+            selection = plateau_analysis.SELECTION_EXHAUSTIVE
+
+        document = optimizer.results_document(results)
+        summary, details = build_export_views(
+            document, args, selection, bool(optimizer.results_truncated),
+            plateau_summary(results, args, selection)
+        )
         record = exporter_manager.create_run_record(
-            identity, args.strategy, optimizer.results_document(results),
-            provenance=collect_provenance(args.data)
+            identity, args.strategy, document,
+            provenance=collect_provenance(args.data),
+            settings=run_config.to_metadata(),
+            symbol=symbol_from_data_path(args.data),
+            summary=summary,
+            details=details,
         )
         exit_code = report_export_outcome(
             exporter_manager.export_run(record), what='Optimization')
@@ -468,13 +596,6 @@ def main() -> int:
         # already produced, so a reporting bug must not throw away an
         # optimisation that has just been saved to disk.
         if not args.no_plateau:
-            if optimizer.results_truncated:
-                selection = plateau_analysis.SELECTION_TRUNCATED
-            elif args.method == 'random':
-                selection = plateau_analysis.SELECTION_SAMPLED
-            else:
-                selection = plateau_analysis.SELECTION_EXHAUSTIVE
-
             try:
                 report_plateau(results, args, selection)
             except Exception as e:

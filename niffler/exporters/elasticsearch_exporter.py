@@ -5,7 +5,7 @@ Exports backtest results to Elasticsearch for visualization with Grafana.
 """
 
 from typing import Dict, Any, List, Optional
-from datetime import datetime, UTC
+from datetime import date, datetime, UTC
 import pandas as pd
 import numpy as np
 import os
@@ -13,7 +13,15 @@ import json
 from pathlib import Path
 
 from .base_exporter import BaseExporter, ExportError
+from .run_record import (
+    DETAIL_COMPARISON,
+    DETAIL_FOLD,
+    DETAIL_SIMULATION,
+    DETAIL_TRIAL,
+    RunRecord,
+)
 from ..utils.json_utils import sanitize_numeric_values
+from ..utils.run_identity import RUN_KINDS
 from ..backtesting.backtest_result import BacktestResult
 from ..backtesting.round_trip import pair_trades
 
@@ -66,8 +74,41 @@ def _env_flag(name: str, default: bool) -> bool:
     return raw.lower() in _TRUTHY
 
 
+def _document_safe(value: Any) -> Any:
+    """Make a value indexable: ISO timestamps, no inf/NaN, no numpy scalars.
+
+    Timestamps are rendered with ``isoformat`` rather than ``str``: the latter
+    separates date and time with a space, which Elasticsearch does not detect as
+    a date and would index as a keyword.
+    """
+    if isinstance(value, dict):
+        return {str(key): _document_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_document_safe(item) for item in value]
+    if isinstance(value, (datetime, date)):
+        return None if pd.isna(value) else value.isoformat()
+    return sanitize_numeric_values(value)
+
+
 class ElasticsearchExporter(BaseExporter):
-    """Exporter that saves backtest results to Elasticsearch."""
+    """Exporter that saves results to Elasticsearch.
+
+    A backtest writes its summary to ``-runs`` and its equity curve, trades and
+    positions to their own indices. Every other kind of run writes one summary
+    to ``-runs`` too, and one document per trial, fold, simulation or comparison
+    to a detail index.
+    """
+
+    SUPPORTED_KINDS = RUN_KINDS
+
+    #: Detail type -> (index suffix, mapping file). Trials have a fixed shape;
+    #: the rest share a permissive mapping because their columns differ by run.
+    _DETAIL_INDICES = {
+        DETAIL_TRIAL: ('trials', 'trials'),
+        DETAIL_FOLD: ('folds', 'run_details'),
+        DETAIL_SIMULATION: ('simulations', 'run_details'),
+        DETAIL_COMPARISON: ('comparisons', 'run_details'),
+    }
 
     def __init__(self, host: str = None, port: int = None,
                  index_prefix: str = None, config: Dict[str, Any] = None,
@@ -244,6 +285,98 @@ class ElasticsearchExporter(BaseExporter):
             self.logger.error(f"Failed to export to Elasticsearch: {e}")
             raise
     
+    def detail_index(self, detail_type: str) -> str:
+        """Return the index a detail type is written to.
+
+        Args:
+            detail_type: One of :data:`niffler.exporters.run_record.DETAIL_TYPES`
+
+        Returns:
+            The index name, carrying the configured prefix
+
+        Raises:
+            ExportError: If the type has no index
+        """
+        if detail_type not in self._DETAIL_INDICES:
+            raise ExportError(f"No Elasticsearch index for detail type '{detail_type}'")
+        return f"{self.index_prefix}-{self._DETAIL_INDICES[detail_type][0]}"
+
+    def export_run(self, record: RunRecord) -> None:
+        """
+        Export a run that is not a single backtest to Elasticsearch.
+
+        One summary document goes to the runs index, keyed by the run id, and one
+        document per detail row to that row type's index. Every document carries
+        the run's shared header, so a dashboard filters trials, folds and
+        summaries by experiment without a join.
+
+        Document ids are deterministic (``run_id``, ``run_id:type:index``), so
+        exporting the same run twice overwrites rather than duplicates. For
+        optimization trials that relies on the optimizer returning results in a
+        stable order, which ``BaseOptimizer._evaluate_parallel`` guarantees by
+        retaining them in submission order.
+
+        Args:
+            record: The run to export
+
+        Raises:
+            ExportError: If the cluster is unreachable or a detail type is unknown
+            Exception: If indexing fails
+        """
+        if not self._connect():
+            message = f"Cannot connect to Elasticsearch at {self.url}"
+            self.logger.error(message)
+            raise ExportError(message)
+
+        run_id = record.identity.run_id
+        created_at = datetime.now(UTC).isoformat()
+
+        try:
+            self._ensure_index(self.runs_index, "runs")
+
+            summary = {**record.header, **record.summary, "created_at": created_at}
+            if record.provenance is not None:
+                summary["provenance"] = record.provenance
+            self.es_client.index(
+                index=self.runs_index, id=run_id, body=_document_safe(summary)
+            )
+
+            for detail_type, rows in record.details.items():
+                if not rows:
+                    continue
+                index_name = self.detail_index(detail_type)
+                self._ensure_index(index_name, self._DETAIL_INDICES[detail_type][1])
+                self._bulk_index([
+                    {
+                        "_index": index_name,
+                        "_id": f"{run_id}:{detail_type}:{row_index}",
+                        "_source": _document_safe({
+                            **record.header,
+                            **row,
+                            "doc_type": detail_type,
+                            "row_index": row_index,
+                            "created_at": created_at,
+                        }),
+                    }
+                    for row_index, row in enumerate(rows)
+                ])
+                self.logger.debug(f"Exported {len(rows)} {detail_type} documents for {run_id}")
+
+            self.logger.info(
+                f"Successfully exported {record.identity.kind} run {run_id} to Elasticsearch")
+
+        except Exception as e:
+            self.logger.error(f"Failed to export to Elasticsearch: {e}")
+            raise
+
+    def _ensure_index(self, index_name: str, mapping_name: str) -> None:
+        """Create an index from its mapping file when it does not exist yet."""
+        if not self.es_client.indices.exists(index=index_name):
+            mapping = self._load_mapping(mapping_name)
+            self.es_client.indices.create(index=index_name, body=mapping)
+            self.logger.info(
+                f"Created Elasticsearch index: {index_name} using mapping: {mapping_name}.json")
+
     def _load_mapping(self, mapping_name: str) -> Dict[str, Any]:
         """Load Elasticsearch mapping from JSON file."""
         # Get the project root directory
@@ -273,10 +406,7 @@ class ElasticsearchExporter(BaseExporter):
         
         # Create indices with mappings loaded from files
         for index_name, mapping_name in indices_config:
-            if not self.es_client.indices.exists(index=index_name):
-                mapping = self._load_mapping(mapping_name)
-                self.es_client.indices.create(index=index_name, body=mapping)
-                self.logger.info(f"Created Elasticsearch index: {index_name} using mapping: {mapping_name}.json")
+            self._ensure_index(index_name, mapping_name)
     
     def _sanitize_numeric_values(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """

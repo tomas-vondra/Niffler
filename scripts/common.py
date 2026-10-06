@@ -1033,6 +1033,19 @@ def report_run_identity(identity: RunIdentity, note: Optional[str] = None,
         print(f"  {note}", file=stream or sys.stdout)
 
 
+def symbol_from_data_path(path: str) -> str:
+    """Derive the instrument label from a data file name.
+
+    Args:
+        path: Path to the CSV file.
+
+    Returns:
+        The leading underscore-delimited token of the file stem -
+        ``data/BTCUSDT_binance_1d.csv`` gives ``BTCUSDT``.
+    """
+    return os.path.splitext(os.path.basename(path))[0].split('_')[0]
+
+
 # ---------------------------------------------------------------------------
 # Exporters
 # ---------------------------------------------------------------------------
