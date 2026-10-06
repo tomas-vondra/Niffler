@@ -22,6 +22,7 @@ import pandas as pd
 project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
 
+from niffler.exporters import ExporterManager
 from niffler.utils.run_identity import ExperimentMismatchError
 from scripts import backtest
 from scripts.common import (
@@ -32,7 +33,6 @@ from scripts.common import (
     build_run_identity,
     read_params_file,
     resolve_strategy_parameters,
-    run_metadata,
 )
 from scripts.config_file import (
     ConfigError,
@@ -309,7 +309,7 @@ class TestBuildRunIdentity(TempDirTestCase):
 
     def test_the_run_block_carries_the_registry_key(self):
         identity, _ = self.identity('', [])
-        block = run_metadata(identity, 'rsi')
+        block = ExporterManager.create_run_record(identity, 'rsi', {}).document['run']
         self.assertEqual(block['strategy_key'], 'rsi')
         self.assertEqual(block['run_id'], identity.run_id)
 

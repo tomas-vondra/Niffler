@@ -30,14 +30,29 @@ from .base_exporter import BaseExporter
 from .console_exporter import ConsoleExporter
 from .csv_exporter import CSVExporter
 from .elasticsearch_exporter import ElasticsearchExporter
+from .json_exporter import JsonExporter
 
 
 # The registry. Adding an exporter means adding a line here - nothing else.
 EXPORTER_CLASSES: Dict[str, Type[BaseExporter]] = {
     'console': ConsoleExporter,
     'csv': CSVExporter,
+    'json': JsonExporter,
     'elasticsearch': ElasticsearchExporter,
 }
+
+
+def get_exporters_supporting(kind: str) -> List[str]:
+    """Return the registered exporters that can export a given kind of run.
+
+    Args:
+        kind: One of :data:`niffler.utils.run_identity.RUN_KINDS`.
+
+    Returns:
+        Exporter names in registration order.
+    """
+    return [name for name, exporter_class in EXPORTER_CLASSES.items()
+            if kind in exporter_class.SUPPORTED_KINDS]
 
 
 def get_available_exporters() -> List[str]:

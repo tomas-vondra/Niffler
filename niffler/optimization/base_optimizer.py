@@ -409,6 +409,10 @@ class BaseOptimizer(ABC):
         """
         Save optimization results to a JSON file.
 
+        A convenience for library callers. The command line does not use it: it
+        hands :meth:`results_document` to the exporters, which is how the same
+        document reaches a JSON file, Elasticsearch or both.
+
         Metrics such as ``sharpe_ratio`` or ``win_rate`` can legitimately be ``inf`` or
         ``NaN`` for degenerate parameter combinations. Those values are sanitised to
         ``null`` via :func:`niffler.utils.json_utils.safe_json_dump`, which also
@@ -425,6 +429,34 @@ class BaseOptimizer(ABC):
                 under a top-level ``run`` key. It is what lets a later
                 ``--params-file`` step record this optimisation as its parent
         """
+        output_data = self.results_document(results)
+
+        if provenance is not None:
+            output_data['provenance'] = provenance
+
+        if run is not None:
+            output_data['run'] = run
+
+        with open(filename, 'w') as f:
+            safe_json_dump(output_data, f, indent=2)
+
+        logging.info(f"Optimization results saved to {filename}")
+
+    def results_document(self, results: List[OptimizationResult]) -> Dict[str, Any]:
+        """
+        Render optimization results as the document every exporter is handed.
+
+        The single definition of what a saved optimisation contains. It carries
+        neither a ``run`` nor a ``provenance`` block: those are attached once, by
+        :meth:`niffler.exporters.exporter_manager.ExporterManager.create_run_record`.
+
+        Args:
+            results: Optimization results to render, best first
+
+        Returns:
+            ``{'metadata': {...}, 'results': [...]}``. Values may be ``inf`` or
+            ``NaN``; serialisers sanitise them
+        """
         output_data = {
             'metadata': {
                 'optimizer_class': self.__class__.__name__,
@@ -439,12 +471,6 @@ class BaseOptimizer(ABC):
             },
             'results': []
         }
-
-        if provenance is not None:
-            output_data['provenance'] = provenance
-
-        if run is not None:
-            output_data['run'] = run
 
         for result in results:
             result_data = {
@@ -467,12 +493,9 @@ class BaseOptimizer(ABC):
                 }
             }
             output_data['results'].append(result_data)
-        
-        with open(filename, 'w') as f:
-            safe_json_dump(output_data, f, indent=2)
-        
-        logging.info(f"Optimization results saved to {filename}")
-    
+
+        return output_data
+
     def analyze_best_metrics(self, results: List[OptimizationResult]) -> Dict[str, Dict[str, Any]]:
         """
         Analyze results to find best parameters for each metric.

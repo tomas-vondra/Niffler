@@ -40,20 +40,22 @@ from niffler.optimization.optimizer_factory import (
     get_parameter_space,
 )
 from niffler.strategies.registry import get_available_strategies, get_strategy_class
-from niffler.utils.json_utils import safe_json_dump
+from niffler.exporters import ExporterManager
 from niffler.utils.provenance import collect_provenance
 from niffler.utils.run_identity import RUN_KIND_COMPARE
 from scripts.common import (
     add_cost_model_arguments,
     add_engine_arguments,
     add_experiment_arguments,
+    add_exporter_arguments,
     add_risk_manager_arguments,
     build_run_config,
     build_run_identity,
+    configure_exporters,
     load_ohlcv_csv,
+    report_export_outcome,
     report_run_config,
     report_run_identity,
-    run_metadata,
 )
 from scripts.config_file import (
     add_config_arguments,
@@ -286,8 +288,9 @@ Examples:
     parser.add_argument('--strategy', nargs='+', default=None,
                         choices=get_available_strategies(),
                         help='Strategies to compare (default: all registered)')
+    add_exporter_arguments(parser, default='console')
     parser.add_argument('--output', default=None,
-                        help='Write the rows to this JSON file')
+                        help='Write the rows to this JSON file; implies the json exporter')
     parser.add_argument('--clean', action='store_true',
                         help='Run the preprocessing pipeline on each dataset first')
 
@@ -369,6 +372,15 @@ Examples:
         return 1
     report_run_identity(identity, identity_note)
 
+    # Created before the walk-forward runs, so an unusable exporter stops the
+    # comparison now rather than after every dataset has been evaluated.
+    exporter_manager = ExporterManager()
+    try:
+        configure_exporters(exporter_manager, args, RUN_KIND_COMPARE)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
     print(f"Comparing {len(strategies)} strategy(ies) across {len(args.data)} dataset(s) "
           f"= {len(strategies) * len(args.data)} walk-forward runs")
     print(f"Folds: train {args.train_window}m / test {args.test_window}m / "
@@ -383,15 +395,12 @@ Examples:
 
     render(rows)
 
-    if args.output:
-        payload = {
-            # A table over several strategies has no single registry key; each
-            # row names its own.
-            'run': run_metadata(identity,
-                                strategies[0] if len(strategies) == 1 else None),
-            # One record per dataset: a single provenance block would hash one
-            # file and imply it covered every row in the table.
-            'provenance': {p: collect_provenance(p) for p in args.data},
+    record = exporter_manager.create_run_record(
+        identity,
+        # A table over several strategies has no single registry key; each row
+        # names its own.
+        strategies[0] if len(strategies) == 1 else None,
+        {
             'settings': {
                 'train_window_months': args.train_window,
                 'test_window_months': args.test_window,
@@ -399,12 +408,15 @@ Examples:
                 **run_config.to_metadata(),
             },
             'rows': rows,
-        }
-        with open(args.output, 'w') as f:
-            safe_json_dump(payload, f, indent=2, default=str)
-        print(f"\nWrote {args.output}")
+        },
+        # One record per dataset: a single provenance block would hash one file
+        # and imply it covered every row in the table.
+        provenance={p: collect_provenance(p) for p in args.data},
+    )
+    export_failed = report_export_outcome(
+        exporter_manager.export_run(record), what='Comparison')
 
-    return 1 if any(r['error'] for r in rows) else 0
+    return 1 if export_failed or any(r['error'] for r in rows) else 0
 
 
 if __name__ == '__main__':

@@ -45,6 +45,10 @@ The short version, because these are easy to "helpfully" undo:
 | Every strategy parameter has a **default** and every strategy accepts `position_size` / `risk_manager` | Add a required constructor argument - the library builds strategies as `strategy_class(**parameters)` |
 | There is **one** risk registry (`niffler/risk/registry.py`); `--risk-manager` choices derive from it, and `niffler/risk/` imports nothing from `niffler/backtesting/` or `niffler/strategies/` | Hardcode `choices=['none', 'fixed']`, or import the engine into a risk module - the engine imports the `RiskManager` protocol, so it closes an import cycle |
 | A risk manager holds **no position state**; it receives a `PortfolioSnapshot` per call, and `evaluate_trade` has **no default** for it | Put `self._positions` back, or default the snapshot to flat - which silently disables `max_positions` and re-breaks parallel walk-forward folds |
+| Every script takes the **same** exporter flags (`scripts/common.add_exporter_arguments`) and builds exporters with `configure_exporters` **before** it computes | Give a script its own `--exporters` block or its own `json.dump`, or create exporters after the run - an unusable one would then be discovered after a finished grid search |
+| An exporter declares `SUPPORTED_KINDS`; one that cannot export the run's kind is a `ValueError` at creation, and `BaseExporter.export_run` **raises** by default | Let an unsupported exporter return normally - `ExporterManager` would report the run as exported |
+| The `run` and `provenance` blocks of a saved document have **one** builder, `ExporterManager.create_run_record` (the non-backtest counterpart of `create_metadata`) | Attach a `run` block in a script or an exporter; scripts build only their own body (`results_document`, `build_results_document`) |
+| `--output PATH` **implies** the `json` exporter | Treat it as an option no chosen exporter accepts - `analyze.py --output x.json` with the default `console` list would start failing |
 | A run id has **one** mint site (`niffler/utils/run_identity.mint_run_id`), and the identity is built **once per run at the CLI** by `scripts/common.build_run_identity` | Mint a uuid in an exporter or a manager, or put the identity on `RunConfig` - it is not an engine knob and would make two equal configs unequal |
 | The **experiment is never minted**; unnamed is `None`, shown `(none)` | Generate an experiment id for an unlabelled run - a forgotten flag would then look like a deliberate one-run experiment |
 | A run fed by `--params-file` **inherits** an unset experiment, and a *different* one is an **error** unless `--experiment` was typed (`typed_on_command_line`) | Let the file silently win, let a profile value override the error, or compare values to decide "typed" - the user may type the name the file already holds |
@@ -396,8 +400,14 @@ Exit codes: `0` every gate passed, `3` a gate stopped the run, `1` the run faile
     `get_available_exporters`, `get_exporter_option_names`, `create_exporter`). Options
     come from each exporter's `__init__` via `inspect.signature`, so registering the class
     is the whole edit; an option the exporter does not accept raises naming what it does
-  - `console_exporter.py` - Human-readable console output
-  - `csv_exporter.py` - CSV file export for analysis tools
+  - `run_record.py` - `RunRecord` (identity, `strategy_key`, `document`): what an
+    exporter is handed for a run that is not a single backtest
+  - `console_exporter.py` - Human-readable console output. Supports every run kind; for
+    non-backtest kinds it prints the run's identity, since those scripts print their own
+    tables
+  - `json_exporter.py` - One JSON document per run, every kind. This is the durable record
+    and the file `--params-file` reads; `--output PATH` in any script selects it
+  - `csv_exporter.py` - CSV file export for analysis tools (backtests only)
   - `elasticsearch_exporter.py` - Elasticsearch integration for visualization
   - `exporter_manager.py` - Multi-exporter coordination, `create_metadata` and
     `ExportSummary`. It holds **no** name→class map of its own.

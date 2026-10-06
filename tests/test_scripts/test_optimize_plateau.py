@@ -178,6 +178,7 @@ class TestMainWiring(unittest.TestCase):
                                            else results)
         optimizer.analyze_best_metrics.return_value = {}
         optimizer.results_truncated = truncated
+        optimizer.results_document.return_value = {'metadata': {}, 'results': []}
 
         argv = ['optimize.py', '--data', 'test.csv', '--strategy', 'simple_ma',
                 '--output', self.output] + list(extra_argv)
@@ -258,7 +259,8 @@ class TestMainWiring(unittest.TestCase):
         optimizer.optimize.return_value = sample_results()
         optimizer.analyze_best_metrics.return_value = {}
         optimizer.results_truncated = False
-        optimizer.save_results.side_effect = lambda *a, **k: order.append('save')
+        optimizer.results_document.side_effect = (
+            lambda *a, **k: order.append('save') or {'metadata': {}, 'results': []})
 
         argv = ['optimize.py', '--data', 'test.csv', '--strategy', 'simple_ma',
                 '--output', self.output]

@@ -6,15 +6,31 @@ Exports backtest results to console with human-readable formatting.
 
 from typing import Dict, Any
 from .base_exporter import BaseExporter
+from .run_record import RunRecord
 from ..backtesting.backtest_result import BacktestResult
 from ..utils.provenance import format_provenance_summary
+from ..utils.run_identity import RUN_KINDS, format_run_identity
 
 
 class ConsoleExporter(BaseExporter):
     """Exporter that prints formatted backtest results to console."""
 
+    SUPPORTED_KINDS = RUN_KINDS
+
     #: Rule used to fence off the blocks a reader must not skim past.
     _BANNER = '!' * 66
+
+    def export_run(self, record: RunRecord) -> None:
+        """
+        Print the identity of a run whose report the script has already printed.
+
+        An optimization or an analysis writes its own tables as it goes, so the
+        console's share of the export is the line that says which run they were.
+
+        Args:
+            record: The run to export
+        """
+        print(f"\n{format_run_identity(record.identity)}")
 
 
     def export_backtest_result(self, result: BacktestResult, run_id: str, 

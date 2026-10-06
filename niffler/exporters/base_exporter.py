@@ -5,10 +5,14 @@ Defines the interface that all exporters must implement for backtesting results.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
+from typing import TYPE_CHECKING, Dict, Any, Optional, Tuple
 import logging
 
 from ..backtesting.backtest_result import BacktestResult
+from ..utils.run_identity import RUN_KIND_BACKTEST
+
+if TYPE_CHECKING:
+    from .run_record import RunRecord
 
 
 class ExportError(RuntimeError):
@@ -22,8 +26,14 @@ class ExportError(RuntimeError):
 
 
 class BaseExporter(ABC):
-    """Abstract base class for backtesting result exporters."""
-    
+    """Abstract base class for result exporters."""
+
+    #: The kinds of run this exporter can export (see
+    #: :data:`niffler.utils.run_identity.RUN_KINDS`). Checked when the exporter
+    #: is created, before any computation: an exporter that cannot handle the
+    #: run must not be discovered after a 1632-trial grid has finished.
+    SUPPORTED_KINDS: Tuple[str, ...] = (RUN_KIND_BACKTEST,)
+
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         """
         Initialize the exporter with optional configuration.
@@ -53,6 +63,25 @@ class BaseExporter(ABC):
             Exception: If the export could not be completed
         """
         pass
+
+    def export_run(self, record: 'RunRecord') -> None:
+        """
+        Export a run that is not a single backtest (an optimization, an analysis,
+        a comparison, a screen).
+
+        The default refuses rather than doing nothing: an exporter that returned
+        normally here would be reported as having exported the run.
+
+        Args:
+            record: The run to export
+
+        Raises:
+            ExportError: If this exporter does not support the run's kind
+        """
+        raise ExportError(
+            f"{self.__class__.__name__} cannot export a {record.identity.kind} run. "
+            f"It supports: {', '.join(self.SUPPORTED_KINDS)}"
+        )
 
     def require_valid_result(self, result: BacktestResult, destination: str) -> None:
         """

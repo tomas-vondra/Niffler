@@ -223,6 +223,11 @@ library or by `compare.py`.
 - **Console**: Immediate human-readable feedback
 - **CSV Files**: Structured data for external analysis tools
 - **Elasticsearch**: Database integration for visualization dashboards
+- **JSON**: One document per run, for every script; the file `--params-file` reads
+
+Every script takes the same `--exporters` / `--exporter-params` flags, and `--output PATH`
+implies the JSON exporter. An exporter that cannot export a script's kind of run is rejected
+before the run starts. See [docs/exporters.md](docs/exporters.md).
 
 Every exported result carries a **provenance** record (see below), so a number found in
 Grafana six months from now can still be traced back to the code and the data that
@@ -860,7 +865,7 @@ The suite is the source of truth for its own size. Run it:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-At the time of writing this reports **1406 tests, 0 failures, 0 errors**. Treat that as a
+At the time of writing this reports **1436 tests, 0 failures, 0 errors**. Treat that as a
 sanity check, not a spec — if the command disagrees with this paragraph, believe the
 command. It is the only place in the documentation that quotes a count.
 

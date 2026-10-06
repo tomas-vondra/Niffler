@@ -14,6 +14,7 @@ from niffler.exporters.base_exporter import BaseExporter
 from niffler.exporters.console_exporter import ConsoleExporter
 from niffler.exporters.csv_exporter import CSVExporter
 from niffler.exporters.elasticsearch_exporter import ElasticsearchExporter
+from niffler.exporters.json_exporter import JsonExporter
 from niffler.exporters.registry import EXPORTER_CLASSES
 from tests.test_exporters.test_registry import _ProbeExporter
 from niffler.backtesting.backtest_result import BacktestResult
@@ -83,6 +84,7 @@ class TestExporterManager(unittest.TestCase):
         expected_types = {
             'console': ConsoleExporter,
             'csv': CSVExporter,
+            'json': JsonExporter,
             'elasticsearch': ElasticsearchExporter
         }
         self.assertEqual(EXPORTER_CLASSES, expected_types)
@@ -90,7 +92,7 @@ class TestExporterManager(unittest.TestCase):
     def test_get_available_exporter_names(self):
         """Test getting available exporter names."""
         names = ExporterManager.get_available_exporter_names()
-        expected_names = ['console', 'csv', 'elasticsearch']
+        expected_names = ['console', 'csv', 'json', 'elasticsearch']
         self.assertEqual(sorted(names), sorted(expected_names))
     
     def test_add_exporter(self):

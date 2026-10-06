@@ -47,6 +47,7 @@ from niffler.backtesting.significance import (
     DEFAULT_BOOTSTRAP_SEED,
     DEFAULT_MIN_TRADES,
 )
+from niffler.exporters.registry import get_available_exporters
 from niffler.strategies.registry import get_strategy_parameter_names
 from niffler.utils.run_identity import (
     RunIdentity,
@@ -1032,18 +1033,189 @@ def report_run_identity(identity: RunIdentity, note: Optional[str] = None,
         print(f"  {note}", file=stream or sys.stdout)
 
 
-def run_metadata(identity: RunIdentity, strategy_key: Optional[str]) -> Dict[str, Any]:
-    """Render the ``run`` block written into every saved result file.
+# ---------------------------------------------------------------------------
+# Exporters
+# ---------------------------------------------------------------------------
 
-    The registry key is recorded beside the identity because ``strategy_name``
-    is the display string: a grouping keyed on prose splits a strategy's history
-    in two the day its display name is edited.
+# Convenience flags that map onto exporter constructor options: option name ->
+# argparse attribute. Each flag defaults to None so an explicitly passed one can be
+# told apart from an unset one, and only the ones actually passed are forwarded - an
+# option nobody asked for must not be broadcast to exporters that would reject it.
+#
+# This carries no flag spellings: the rejection happens in ExporterManager, which
+# serves callers that have no CLI, so its message names the option (output_dir)
+# rather than the flag (--csv-output-dir).
+EXPORTER_OPTION_FLAGS = {
+    'output_dir': 'csv_output_dir',
+    'host': 'es_host',
+    'port': 'es_port',
+    'index_prefix': 'es_index_prefix',
+}
+
+#: The exporter ``--output`` selects, and the option that carries the path.
+OUTPUT_EXPORTER = 'json'
+OUTPUT_OPTION = 'output_path'
+
+
+def add_exporter_arguments(parser: argparse.ArgumentParser,
+                           default: str = 'console') -> None:
+    """Add the exporter flags, identical in every script.
+
+    The choices come from :mod:`niffler.exporters.registry`, and
+    ``--exporter-params`` is the generic path that reaches any registered
+    exporter's constructor. The named flags are conveniences for the options the
+    shipped exporters happen to have. An option no chosen exporter accepts is an
+    error, never silently ignored, and so is an exporter that cannot export this
+    script's kind of run.
 
     Args:
-        identity: The identity minted for this run.
-        strategy_key: Registry name of the strategy, e.g. ``'rsi'``.
+        parser: Parser to extend.
+        default: The script's default exporter list.
+    """
+    available = ','.join(get_available_exporters())
+    group = parser.add_argument_group('output')
+    group.add_argument(
+        '--exporters', type=str, default=default,
+        help=f'Comma-separated list of exporters to use: {available} '
+             f'(default: {default})'
+    )
+    group.add_argument(
+        '--exporter-params',
+        help='Exporter options as a JSON object, e.g. \'{"output_dir": "results"}\'. '
+             'Works for any registered exporter; an option none of the chosen '
+             'exporters accepts is reported with the accepted ones.'
+    )
+    group.add_argument(
+        '--csv-output-dir', default=None,
+        help='Directory for CSV output files (default: current directory)'
+    )
+    # Elasticsearch options (optional overrides for .env file configuration)
+    group.add_argument(
+        '--es-host',
+        help='Elasticsearch host (overrides ELASTICSEARCH_HOST env var)'
+    )
+    group.add_argument(
+        '--es-port', type=int,
+        help='Elasticsearch port (overrides ELASTICSEARCH_PORT env var)'
+    )
+    group.add_argument(
+        '--es-index-prefix',
+        help='Elasticsearch index prefix (overrides ELASTICSEARCH_INDEX_PREFIX env var)'
+    )
+
+
+def build_exporter_options(args: argparse.Namespace) -> Dict[str, Any]:
+    """Collect exporter options from --exporter-params and the convenience flags.
+
+    An explicitly passed flag overrides the same key in ``--exporter-params``. The
+    options are validated against the chosen exporters by
+    ``ExporterManager.create_exporters_from_list``, which raises when none of them
+    accepts an option, so ``--exporters console --csv-output-dir results/`` fails
+    loudly instead of writing nothing anywhere.
+
+    Args:
+        args: Parsed command line arguments.
 
     Returns:
-        A JSON-safe dict.
+        Keyword arguments for the exporter constructors.
+
+    Raises:
+        ValueError: If --exporter-params is not a JSON object.
     """
-    return {**identity.to_metadata(), 'strategy_key': strategy_key}
+    options: Dict[str, Any] = {}
+
+    raw = getattr(args, 'exporter_params', None)
+    if raw:
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in --exporter-params: {e}") from e
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                f"--exporter-params must be a JSON object, got {type(parsed).__name__}"
+            )
+        options.update(parsed)
+
+    for option, attribute in EXPORTER_OPTION_FLAGS.items():
+        value = getattr(args, attribute, None)
+        if value is not None:
+            options[option] = value
+
+    return options
+
+
+def configure_exporters(manager, args: argparse.Namespace, kind: str,
+                        default_output: Optional[str] = None) -> List[str]:
+    """Create the exporters a command line asks for, before the run computes.
+
+    ``--output PATH`` is a shortcut for the JSON exporter: it adds ``json`` to
+    the list when it is not there and sets its path, so a command written before
+    exporters were shared (``analyze.py --output x.json``) still writes its file.
+
+    Called before the computation on purpose. An exporter that cannot export
+    this kind of run, or an option nothing accepts, must stop the run now and
+    not after a grid search has finished.
+
+    Args:
+        manager: The ``ExporterManager`` to populate.
+        args: Parsed arguments carrying the flags :func:`add_exporter_arguments`
+            added, and optionally ``output``.
+        kind: The kind of run about to be exported.
+        default_output: Path for the JSON exporter when it is requested and
+            ``--output`` was not given, or None to let the exporter name the file.
+
+    Returns:
+        The exporter names that were requested.
+
+    Raises:
+        ValueError: If an exporter does not support ``kind``, an option is
+            accepted by none of the exporters, or no usable exporter remains.
+    """
+    names = [name.strip().lower() for name in args.exporters.split(',') if name.strip()]
+    options = build_exporter_options(args)
+
+    output = getattr(args, 'output', None)
+    if output:
+        if OUTPUT_EXPORTER not in names:
+            names.append(OUTPUT_EXPORTER)
+        options[OUTPUT_OPTION] = output
+    elif default_output and OUTPUT_EXPORTER in names:
+        options.setdefault(OUTPUT_OPTION, default_output)
+
+    manager.create_exporters_from_list(names, kind=kind, **options)
+
+    if manager.get_exporter_count() == 0:
+        raise ValueError(f"no usable exporters created from '{args.exporters}'")
+
+    return names
+
+
+def report_export_outcome(export_result, exporter_names: Optional[List[str]] = None,
+                          what: str = 'Backtest') -> int:
+    """Print a per-exporter export report and derive the process exit code.
+
+    Args:
+        export_result: The ``ExportSummary`` an ``ExporterManager`` returned.
+        exporter_names: Unused; kept so existing callers need not change.
+        what: What ran, for the first line.
+
+    Returns:
+        0 when every exporter succeeded, 1 when at least one failed.
+    """
+    successes = export_result.successes
+    failures = export_result.failures
+
+    print(f"{what} completed with run ID: {export_result.run_id}")
+
+    print("Export report:")
+    for name in successes:
+        print(f"  OK     {name}")
+    for name, error in failures:
+        print(f"  FAILED {name}: {error}")
+
+    if failures:
+        total = len(successes) + len(failures)
+        print(f"Error: {len(failures)} of {total} exporters failed", file=sys.stderr)
+        return 1
+
+    return 0

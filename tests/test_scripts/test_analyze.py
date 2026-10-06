@@ -16,7 +16,17 @@ sys.path.append(str(Path(__file__).parent.parent.parent / 'scripts'))
 
 import analyze
 from niffler.analysis.analysis_result import AnalysisResult
+from niffler.exporters import ExporterManager, JsonExporter
+from niffler.utils.run_identity import new_run_identity
 from niffler.backtesting.backtest_result import BacktestResult
+
+
+def save_results(result, path, provenance=None):
+    """Write an analysis result the way main() does: document, record, JSON exporter."""
+    record = ExporterManager.create_run_record(
+        new_run_identity(result.analysis_type), 'simple_ma',
+        analyze.build_results_document(result), provenance=provenance)
+    JsonExporter(output_path=path).export_run(record)
 
 
 class TestAnalyzeScript(unittest.TestCase):
@@ -358,7 +368,7 @@ class TestAnalyzeScript(unittest.TestCase):
         temp_output.close()
         
         try:
-            analyze.save_results(mock_result, temp_output.name)
+            save_results(mock_result, temp_output.name)
             
             # Load and verify saved data
             with open(temp_output.name, 'r') as f:
@@ -399,7 +409,7 @@ class TestAnalyzeScript(unittest.TestCase):
         temp_output.close()
 
         try:
-            analyze.save_results(mock_result, temp_output.name, provenance=provenance)
+            save_results(mock_result, temp_output.name, provenance=provenance)
 
             with open(temp_output.name, 'r') as f:
                 saved_data = json.load(f)
@@ -434,7 +444,7 @@ class TestAnalyzeScript(unittest.TestCase):
         temp_output.close()
         
         try:
-            analyze.save_results(mock_result, temp_output.name)
+            save_results(mock_result, temp_output.name)
             
             # Load and verify saved data
             with open(temp_output.name, 'r') as f:
@@ -506,61 +516,54 @@ class TestAnalyzeScript(unittest.TestCase):
         output = mock_stdout.getvalue()
         self.assertIn('Analysis completed successfully!', output)
     
-    @patch('analyze.setup_logging')
-    @patch('analyze.load_data')
-    @patch('analyze.save_results')
-    @patch('analyze.run_walk_forward_analysis')
-    @patch('sys.argv', ['analyze.py', '--data', 'test.csv', '--analysis', 'walk_forward',
-                       '--strategy', 'simple_ma', '--params', '{"short_window": 10, "long_window": 20}',
-                       '--output', 'results.json'])
-    def test_main_with_output_file(self, mock_run_wf, mock_save_results, mock_load_data, mock_setup_logging):
-        """Test main function with output file specified."""
-        # Setup mocks
-        mock_load_data.return_value = self.test_data
-        mock_result = Mock()
-        mock_run_wf.return_value = mock_result
+    def _run_main_with_output(self, output_path, provenance=None):
+        """Run main() for a walk-forward with --output, the analysis stubbed out."""
+        argv = ['analyze.py', '--data', 'test.csv', '--analysis', 'walk_forward',
+                '--strategy', 'simple_ma', '--output', output_path]
+        with patch('sys.argv', argv), \
+                patch('analyze.setup_logging'), \
+                patch('analyze.load_data', return_value=self.test_data), \
+                patch('analyze.run_walk_forward_analysis', return_value=Mock()), \
+                patch('analyze.build_results_document', return_value={'n_periods': 2}), \
+                patch('analyze.collect_provenance', return_value=provenance) as collect, \
+                patch('sys.stdout', new_callable=StringIO) as stdout:
+            exit_code = analyze.main()
+        return exit_code, stdout.getvalue(), collect
 
+    def test_main_with_output_file(self):
+        """--output alone writes the file: it implies the json exporter."""
         provenance = {'run_timestamp_utc': '2026-01-01T00:00:00+00:00'}
-        with patch('analyze.load_parameters') as mock_load_params, \
-                patch('analyze.collect_provenance', return_value=provenance) as mock_collect:
-            mock_load_params.return_value = analyze.StrategyParameters(
-            values=self.test_params, supplied=True)
-            analyze.main()
+        directory = tempfile.mkdtemp()
+        output_path = os.path.join(directory, 'results.json')
+        try:
+            exit_code, _, collect = self._run_main_with_output(output_path, provenance)
 
-        # Verify save_results was called, carrying the provenance record for the run
-        mock_save_results.assert_called_once()
-        call = mock_save_results.call_args
-        self.assertEqual(call.args, (mock_result, 'results.json'))
-        self.assertEqual(call.kwargs['provenance'], provenance)
+            self.assertEqual(exit_code, 0)
+            with open(output_path, 'r') as f:
+                saved = json.load(f)
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+            os.rmdir(directory)
+
+        self.assertEqual(saved['n_periods'], 2)
+        self.assertEqual(saved['provenance'], provenance)
         # The run block names this run so a later step can record it as a parent.
-        self.assertEqual(call.kwargs['run']['kind'], 'walk_forward')
-        self.assertEqual(call.kwargs['run']['strategy_key'], 'simple_ma')
-        self.assertTrue(call.kwargs['run']['run_id'])
+        self.assertEqual(saved['run']['kind'], 'walk_forward')
+        self.assertEqual(saved['run']['strategy_key'], 'simple_ma')
+        self.assertTrue(saved['run']['run_id'])
         # Provenance is fingerprinted against the input file the analysis actually read.
-        mock_collect.assert_called_once_with('test.csv')
+        collect.assert_called_once_with('test.csv')
 
-    @patch('analyze.setup_logging')
-    @patch('analyze.load_data')
-    @patch('analyze.save_results')
-    @patch('analyze.run_walk_forward_analysis')
-    @patch('sys.argv', ['analyze.py', '--data', 'test.csv', '--analysis', 'walk_forward',
-                       '--strategy', 'simple_ma', '--params', '{"short_window": 10, "long_window": 20}',
-                       '--output', 'results.json'])
-    def test_main_reports_failure_when_results_cannot_be_saved(self, mock_run_wf, mock_save_results,
-                                                               mock_load_data, mock_setup_logging):
+    def test_main_reports_failure_when_results_cannot_be_saved(self):
         """A failed save must not be reported as a successful analysis."""
-        mock_load_data.return_value = self.test_data
-        mock_run_wf.return_value = Mock()
-        mock_save_results.side_effect = OSError("disk full")
-
-        with patch('analyze.load_parameters') as mock_load_params:
-            mock_load_params.return_value = analyze.StrategyParameters(
-            values=self.test_params, supplied=True)
-            with patch('sys.stdout', new_callable=StringIO) as mock_stdout:
-                exit_code = analyze.main()
+        missing_directory = os.path.join(tempfile.gettempdir(), 'niffler-no-such-dir',
+                                         'results.json')
+        with patch('sys.stderr', new_callable=StringIO):
+            exit_code, stdout, _ = self._run_main_with_output(missing_directory)
 
         self.assertEqual(exit_code, 1)
-        self.assertNotIn('Analysis completed successfully!', mock_stdout.getvalue())
+        self.assertNotIn('Analysis completed successfully!', stdout)
 
     def test_save_results_propagates_write_errors(self):
         """save_results must raise instead of silently swallowing IO errors."""
@@ -581,7 +584,7 @@ class TestAnalyzeScript(unittest.TestCase):
 
         with patch('builtins.open', side_effect=OSError("disk full")):
             with self.assertRaises(OSError):
-                analyze.save_results(mock_result, 'unwritable.json')
+                save_results(mock_result, 'unwritable.json')
 
 
     @patch('analyze.setup_logging')

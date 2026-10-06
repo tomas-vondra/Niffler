@@ -370,10 +370,13 @@ class TestScreenOutputInvariants(unittest.TestCase):
         import inspect
 
         import scripts.screen as screen
+        from niffler.exporters import json_exporter
 
-        source = inspect.getsource(screen)
-        self.assertIn('safe_json_dump', source)
-        self.assertNotIn('json.dump(', source)
+        # The script no longer writes the file itself; the JSON exporter does.
+        self.assertNotIn('json.dump(', inspect.getsource(screen))
+        writer = inspect.getsource(json_exporter)
+        self.assertIn('safe_json_dump', writer)
+        self.assertNotIn('json.dump(', writer)
 
     def test_provenance_is_collected_per_dataset_actually_read(self):
         """One record per file the run opened.
