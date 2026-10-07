@@ -9,6 +9,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from niffler.strategies.base_strategy import BaseStrategy
 from niffler.backtesting.backtest_engine import BacktestEngine
 from niffler.backtesting.run_config import RunConfig, resolve_run_config
+from niffler.utils.run_identity import RUN_KIND_MONTE_CARLO
 from .analysis_result import AnalysisResult, log_failure_rate
 
 
@@ -169,7 +170,7 @@ class MonteCarloAnalyzer:
         distribution_stats = self._calculate_distribution_statistics(results)
 
         return AnalysisResult(
-            analysis_type='monte_carlo',
+            analysis_type=RUN_KIND_MONTE_CARLO,
             strategy_name=self.strategy_class.__name__,
             symbol=symbol,
             analysis_start_date=data.index[0],

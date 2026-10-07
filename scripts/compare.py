@@ -42,7 +42,7 @@ from niffler.optimization.optimizer_factory import (
 from niffler.strategies.registry import get_available_strategies, get_strategy_class
 from niffler.exporters import ExporterManager
 from niffler.exporters.run_record import DETAIL_COMPARISON
-from niffler.utils.provenance import collect_provenance
+from niffler.utils.provenance import collect_provenance, provenance_fingerprint
 from niffler.utils.run_identity import RUN_KIND_COMPARE
 from scripts.common import (
     add_cost_model_arguments,
@@ -239,11 +239,11 @@ def comparison_details(rows: List[Dict[str, Any]],
     """
     detailed = []
     for row in rows:
-        record = (provenance.get(row.get('data_path')) or {})
+        fingerprint = provenance_fingerprint(provenance.get(row.get('data_path')))
         detailed.append({
             **row,
             'strategy_key': row.get('strategy'),
-            'data_sha256': (record.get('data') or {}).get('sha256'),
+            'data_sha256': fingerprint['data_sha256'],
         })
     return {DETAIL_COMPARISON: detailed}
 

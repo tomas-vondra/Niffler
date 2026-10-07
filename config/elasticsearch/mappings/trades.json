@@ -1,7 +1,19 @@
 {
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0
+  },
   "mappings": {
     "properties": {
       "run_id": {"type": "keyword"},
+      "kind": {"type": "keyword"},
+      "experiment": {"type": "keyword"},
+      "parent_run_id": {"type": "keyword"},
+      "profile": {"type": "keyword"},
+      "strategy_key": {"type": "keyword"},
+      "git_sha": {"type": "keyword"},
+      "git_dirty": {"type": "boolean"},
+      "data_sha256": {"type": "keyword"},
       "timestamp": {"type": "date"},
       "symbol": {"type": "keyword"},
       "side": {"type": "keyword"},

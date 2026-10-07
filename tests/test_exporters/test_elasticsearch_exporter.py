@@ -14,6 +14,7 @@ from pathlib import Path
 
 from niffler.exporters.base_exporter import ExportError
 from niffler.exporters.elasticsearch_exporter import ElasticsearchExporter
+from niffler.exporters.run_record import HEADER_FIELDS
 from niffler.backtesting.backtest_result import BacktestResult
 from niffler.backtesting.trade import Trade, TradeSide
 
@@ -405,8 +406,10 @@ class TestElasticsearchExporter(unittest.TestCase):
         mock_connect.assert_called_once()
         mock_create_indices.assert_called_once()
         mock_export_meta.assert_called_once_with(metadata, run_id)
-        mock_export_portfolio.assert_called_once_with(self.mock_result, run_id)
-        mock_export_trades.assert_called_once_with(self.mock_result, run_id)
+        # The detail documents get the run's header, read off the metadata.
+        header = {name: metadata.get(name) for name in HEADER_FIELDS}
+        mock_export_portfolio.assert_called_once_with(self.mock_result, run_id, header)
+        mock_export_trades.assert_called_once_with(self.mock_result, run_id, header)
         mock_logger.assert_called_with(f"Successfully exported backtest {run_id} to Elasticsearch")
     
     @patch.object(ElasticsearchExporter, '_connect')

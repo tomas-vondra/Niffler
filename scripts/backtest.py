@@ -302,7 +302,8 @@ Examples:
             cost_model=engine.cost_model.description,
             risk_manager=run_config.to_metadata()['risk_manager'],
             identity=identity,
-            strategy_key=args.strategy
+            strategy_key=args.strategy,
+            settings=run_config.to_metadata()
         )
 
         return report_export_outcome(export_result, exporter_manager.get_exporter_names())

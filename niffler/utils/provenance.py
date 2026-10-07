@@ -370,6 +370,46 @@ def collect_provenance(data_path: Optional[Union[Path, str]] = None) -> Dict[str
         }
 
 
+def provenance_fingerprint(provenance: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Reduce a provenance record to the three fields an exported document is keyed on.
+
+    The single reader of the record's shape outside this module: a caller that
+    reached into ``code.dirty`` itself would silently get None after a rename,
+    and None is exactly the value that means "unknown".
+
+    Args:
+        provenance: Provenance record as returned by :func:`collect_provenance`,
+            or None
+
+    Returns:
+        ``git_sha``, ``git_dirty`` and ``data_sha256``; each None when unknown.
+        ``git_dirty`` is None, never False, when it could not be determined
+    """
+    record = provenance if isinstance(provenance, dict) else {}
+    code = record.get('code') or {}
+    data = record.get('data') or {}
+    return {
+        'git_sha': code.get('git_sha'),
+        'git_dirty': code.get('dirty'),
+        'data_sha256': data.get('sha256'),
+    }
+
+
+def is_provenance_record(provenance: Any) -> bool:
+    """
+    Tell one provenance record from a dict of records keyed by data path.
+
+    Args:
+        provenance: A value a caller was handed as "the provenance"
+
+    Returns:
+        True when it has the blocks :func:`collect_provenance` writes
+    """
+    return isinstance(provenance, dict) and any(
+        block in provenance for block in ('code', 'data', 'environment'))
+
+
 def format_provenance_summary(provenance: Optional[Dict[str, Any]]) -> Optional[str]:
     """
     Render a one-line human summary of a provenance record.
