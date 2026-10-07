@@ -34,6 +34,48 @@ VALID_MODES = (MODE_WALK_FORWARD, MODE_SEGMENTED_IN_SAMPLE)
 MIN_TRAIN_BARS = 30
 MIN_TEST_BARS = 30
 
+#: The combined metrics computed from the pooled, deduplicated out-of-sample bars.
+#: Every other walk-forward statistic counts one fold as one observation.
+POOLED_METRICS = frozenset({
+    'independent_oos_bars',
+    'overlapping_oos_bars',
+    'oos_overlap_pct',
+    'combined_sharpe_ratio',
+})
+
+#: Sections of a saved walk-forward document in which every number is per-fold.
+PER_FOLD_SECTIONS = ('stability_metrics', 'performance_consistency', 'summary_statistics')
+
+#: Suffix on a console line whose number treats overlapping folds as separate samples.
+OVERLAP_TAG = '[overlapping folds - not independent]'
+
+
+def describe_fold_independence(combined_metrics: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Say whether a walk-forward's per-fold statistics count independent folds.
+
+    When consecutive test windows overlap, a bar belongs to more than one fold,
+    so "7 of 8 folds profitable" is not eight observations. This reports that
+    fact; it deliberately does not estimate an effective fold count.
+
+    Args:
+        combined_metrics: ``AnalysisResult.combined_metrics`` of a walk-forward
+
+    Returns:
+        ``folds_independent`` (None when the overlap is unknown), the
+        ``oos_overlap_pct`` it was read from, ``per_fold_metrics`` - the names
+        of the combined metrics that count folds as observations - and
+        ``per_fold_sections``, the result sections made only of such numbers.
+    """
+    metrics = combined_metrics or {}
+    overlap_pct = metrics.get('oos_overlap_pct')
+    return {
+        'folds_independent': None if overlap_pct is None else overlap_pct == 0,
+        'oos_overlap_pct': overlap_pct,
+        'per_fold_metrics': sorted(name for name in metrics if name not in POOLED_METRICS),
+        'per_fold_sections': list(PER_FOLD_SECTIONS),
+    }
+
 
 @dataclass
 class WalkForwardWindow:
@@ -116,7 +158,7 @@ class WalkForwardAnalyzer:
                  optimal_parameters: Optional[Dict[str, Any]] = None,
                  train_window_months: int = 12,
                  test_window_months: int = 6,
-                 step_months: int = 3,
+                 step_months: Optional[int] = None,
                  mode: str = MODE_WALK_FORWARD,
                  anchored: bool = False,
                  optimization_method: str = 'grid',
@@ -135,7 +177,9 @@ class WalkForwardAnalyzer:
                 ``segmented_in_sample`` mode.
             train_window_months: Months of in-sample data used to fit each fold
             test_window_months: Months of out-of-sample data used to evaluate each fold
-            step_months: Months to step forward between folds
+            step_months: Months to step forward between folds. None (the default)
+                uses ``test_window_months``, which keeps out-of-sample windows
+                non-overlapping; a smaller value overlaps them and is warned about.
             mode: ``walk_forward`` (default) or ``segmented_in_sample``
             anchored: If True the training window always starts at the first bar of the
                 dataset (anchored walk-forward). If False the training window rolls.
@@ -161,7 +205,7 @@ class WalkForwardAnalyzer:
         self.optimal_parameters = optimal_parameters
         self.train_window_months = train_window_months
         self.test_window_months = test_window_months
-        self.step_months = step_months
+        self.step_months = step_months if step_months is not None else test_window_months
         self.run_config = resolve_run_config(run_config)
         self.mode = mode
         self.anchored = anchored
@@ -277,8 +321,9 @@ class WalkForwardAnalyzer:
                 f"({self.test_window_months}): consecutive out-of-sample windows overlap by "
                 f"{overlap_pct:.0f}%. Folds are NOT independent observations; the pooled "
                 f"metrics deduplicate repeated bars (see 'oos_overlap_pct'), but the "
-                f"per-fold counters still treat every fold as one sample. Set "
-                f"step_months >= test_window_months for non-overlapping folds."
+                f"per-fold counters still treat every fold as one sample and are "
+                f"labelled as such. Leave step_months unset, or set it >= "
+                f"test_window_months, for non-overlapping folds."
             )
 
         windows = self._generate_walk_forward_periods(data)

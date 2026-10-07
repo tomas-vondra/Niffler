@@ -40,7 +40,8 @@ prints "Analysis completed successfully!" after failing to save.
 - `--mode`: `walk_forward` (default, genuinely out-of-sample) or `segmented_in_sample`
 - `--train-window`: Training window size in months, default: 12
 - `--test-window`: Test window size in months, default: 6
-- `--step`: Step size in months between windows, default: 3
+- `--step`: Months between folds, default: `--test-window`, which keeps out-of-sample
+  windows non-overlapping. The step actually used is printed with the results
 - `--anchored`: Anchor every training window to the first bar instead of rolling it
 - `--optimization-method`: Optimizer used per training window (`grid` or `random`), default: `grid`
 - `--optimization-metric`: Metric the per-fold optimizer selects by, default: `total_return`
@@ -80,7 +81,7 @@ python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis monte_ca
 
 **Walk-forward with custom time windows:**
 ```bash
-python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma --train-window 12 --test-window 6 --step 3
+python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma --train-window 12 --test-window 6 --step 6
 ```
 
 ## Analysis Framework
@@ -110,7 +111,7 @@ parameters were already fitted on — so it must be requested explicitly, requir
 
 #### Implementation Process
 1. **Window Generation**: Emits `WalkForwardWindow(train_start, train_end, test_start, test_end)`
-2. **Window Stepping**: Advances by step size between folds (default: 3 months)
+2. **Window Stepping**: Advances by step size between folds (default: the test window)
 3. **Per-Fold Optimization**: Runs the configured optimizer on the **training slice only**
    (always `n_jobs=1` so fold-level and optimizer-level pools never nest)
 4. **Out-of-Sample Backtest**: Backtests the chosen parameters on the untouched test slice
@@ -127,7 +128,7 @@ With `--anchored`, every training window instead starts at the first bar of the 
 #### Configuration Parameters
 - **Training Window**: 12 months (default) - In-sample data used to fit each fold
 - **Test Window**: 6 months (default) - Out-of-sample data used to evaluate each fold
-- **Step Size**: 3 months (default) - Time between fold start dates
+- **Step Size**: the test window (default) - Time between fold start dates
 - **Minimum Data**: 30 bars minimum for both the train and the test slice
 - **Memory Management**: Keeps max 1000 folds; when exceeded it retains the **most recent**
   half and logs a warning that the reported aggregates cover only that subset
@@ -146,11 +147,11 @@ With `--anchored`, every training window instead starts at the first bar of the 
   `max_drawdown` is a **negative** percentage, so `worst_max_drawdown` is the *minimum*
   (deepest) value and `best_max_drawdown` the maximum (shallowest)
 - `independent_oos_bars`, `overlapping_oos_bars`, `oos_overlap_pct`: How much of the pooled
-  out-of-sample series was repeated across folds. With the defaults
-  (`test_window_months=6`, `step_months=3`) consecutive test windows overlap by 50%;
-  repeated bars are counted once in `combined_sharpe_ratio`, and a warning is logged
-  whenever `step_months < test_window_months`. Set `step_months >= test_window_months` for
-  folds that tile without overlap
+  out-of-sample series was repeated across folds. By default the step equals the test
+  window and nothing is repeated. With a smaller step (`test_window_months=6`,
+  `step_months=3` overlaps by 50%) repeated bars are counted once in
+  `combined_sharpe_ratio`, a warning is logged, and every other figure here is tagged
+  `[overlapping folds - not independent]`
 - `avg_win_rate`, `avg_trades_per_period`: Trading statistics
 
 **Efficiency Metrics (walk_forward mode):**
@@ -354,14 +355,20 @@ Both analysis methods help answer:
 
 Stated plainly, so results are not over-read:
 
-- **Out-of-sample windows overlap by default.** With `test_window_months=6` and
-  `step_months=3`, consecutive test windows share half their bars. Repeated bars are
-  counted once when computing `combined_sharpe_ratio`, and `oos_overlap_pct` plus a warning
-  report the overlap — but the per-fold counters (`positive_return_pct`,
-  `profitable_periods_pct`, `return_consistency`) still treat each fold as one independent
-  sample, which they are not. Set `--step` >= `--test-window` for folds that tile cleanly.
-  The default was left alone deliberately, because changing it would silently alter every
-  existing schedule
+- **Overlapping out-of-sample windows are labelled, not corrected.** `--step` defaults to
+  `--test-window`, so folds tile cleanly unless you ask otherwise. With a smaller step
+  (`test_window_months=6`, `step_months=3` shares half the bars) repeated bars are counted
+  once when computing `combined_sharpe_ratio`, and `oos_overlap_pct` plus a warning report
+  the overlap — but the per-fold counters (`positive_return_pct`,
+  `profitable_periods_pct`, `return_consistency`, everything under Stability Metrics) still
+  treat each fold as one independent sample, which they are not. The console tags each of
+  them `[overlapping folds - not independent]` and the saved document carries
+  `fold_independence` (`folds_independent`, `oos_overlap_pct`, the affected metric names).
+  The `niffler-runs` summary carries the first two at top level, explicitly mapped as a
+  boolean and a double so a dashboard can filter on them; an unknown overlap is `null`.
+  No effective fold count is estimated. The default used to be 3 months and was once left
+  alone so as not to alter existing schedules; it changed when all three walk-forward
+  scripts were put on one rule, and `--step 3` reproduces the old schedule
 - **Walk-forward parallelism uses a fixed 600s per-fold timeout.** A large parameter space
   combined with a slow optimizer can exceed it and be counted as a failed fold
 - **Monte Carlo inherits the backtest engine's limitations**: long-only, no slippage, no

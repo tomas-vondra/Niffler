@@ -607,10 +607,12 @@ The analysis framework provides two main approaches for testing strategy robustn
   `parameter_space`) and `segmented_in_sample` (the old fixed-parameter behaviour — it
   validates nothing, requires `optimal_parameters`, logs a warning and marks every fold
   in-sample)
-- **Overlap caveat**: with the defaults (`test_window_months=6`, `step_months=3`)
-  consecutive out-of-sample windows overlap 50%. Repeated bars are counted once in
-  `combined_sharpe_ratio` and the overlap is reported/warned, but per-fold counters still
-  treat each fold as one sample
+- **Folds do not overlap by default**: `step_months=None` means `test_window_months`, the
+  same rule `compare.py` and `screen.py` use, and `analyze.py --step` defaults to it. A
+  smaller step overlaps the out-of-sample windows: repeated bars are counted once in
+  `combined_sharpe_ratio`, the overlap is reported/warned, and every per-fold counter is
+  labelled via `describe_fold_independence` (console tag, `fold_independence` in the
+  document) rather than corrected - do not add an "effective fold count"
 
 #### Monte Carlo Analysis
 - **Purpose**: Tests market scenario robustness using block bootstrap sampling

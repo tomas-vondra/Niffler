@@ -66,6 +66,8 @@
       "data_sha256": {"type": "keyword"},
       "best_parameters": {"type": "flattened"},
       "analysis_parameters": {"type": "flattened"},
+      "folds_independent": {"type": "boolean"},
+      "oos_overlap_pct": {"type": "double"},
       "stages": {"type": "flattened"},
       "holdout_data_sha256": {"type": "keyword"},
       "holdout_excess_pct": {"type": "double"},
