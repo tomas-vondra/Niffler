@@ -67,6 +67,8 @@
       "best_parameters": {"type": "flattened"},
       "analysis_parameters": {"type": "flattened"},
       "stages": {"type": "flattened"},
+      "holdout_data_sha256": {"type": "keyword"},
+      "holdout_excess_pct": {"type": "double"},
       "results_truncated": {"type": "boolean"},
       "total_commission": {"type": "double"},
       "total_slippage": {"type": "double"},

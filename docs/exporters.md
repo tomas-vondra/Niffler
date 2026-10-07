@@ -228,7 +228,7 @@ Indexes every kind of run (prefix configurable, default `niffler`):
 | `niffler-trials` | Parameter combination an optimization evaluated | `optimize.py` |
 | `niffler-folds` | Walk-forward fold | `analyze.py` |
 | `niffler-simulations` | Monte Carlo simulation | `analyze.py` |
-| `niffler-comparisons` | Dataset × strategy row | `compare.py`, `screen.py` |
+| `niffler-comparisons` | Dataset × strategy row; a `screen.py` holdout run adds one row with `stage: holdout` and the holdout file's `data_sha256` | `compare.py`, `screen.py` |
 
 Mappings live in `config/elasticsearch/mappings/` (`run_details.json` is shared by folds,
 simulations and comparisons, whose columns differ by run).
