@@ -1263,7 +1263,8 @@ def render_distribution(stats: DistributionStats, surface: ParameterSurface) -> 
         )
 
     lines.append(f'  READ THIS: the winner is the maximum of {stats.count} estimates on one')
-    lines.append('  dataset, not an effect. There is no multiple-testing correction here.')
+    lines.append('  dataset, not an effect. Nothing in this block corrects for that; the')
+    lines.append('  DEFLATED SHARPE block does, for the Sharpe ratio.')
     if fraction <= 0.10:
         lines.append(f'  Only {fraction * 100:.1f}% of the grid beat the baseline at all - a '
                      'single winner')

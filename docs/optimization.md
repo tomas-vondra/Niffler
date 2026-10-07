@@ -168,6 +168,51 @@ drawdown every time.
 It is now sorted highest-first, so the **shallowest** drawdown ranks first. Sorting by any
 other metric is unchanged.
 
+### Deflated Sharpe
+
+A search keeps the best of N combinations, and the best of N estimates is biased upwards
+even when none of them has any edge: flip ten coins 396 times and somebody gets nine heads.
+Every `optimize.py` run therefore prints a `DEFLATED SHARPE` block after the plateau block,
+following Bailey & López de Prado (2014). It computes:
+
+- **A luck line** - the Sharpe the best of N trials is expected to show by chance, from N
+  and the spread of the trial Sharpe ratios:
+  `sqrt(V[SR]) * ((1 - γ) Z⁻¹[1 - 1/N] + γ Z⁻¹[1 - 1/(N e)])`.
+- **The deflated Sharpe** - the probability that the winner's *true* Sharpe is above that
+  line, given its bar count and the skewness and kurtosis of its returns.
+
+"By luck" needs a null, so two lines are reported:
+
+| Reading | Null | Luck line |
+|---------|------|-----------|
+| 1 - the published deflated Sharpe | no combination has any edge at all | the allowance above **zero** |
+| 2 - versus the grid | every combination is as good as the average one, and tuning found nothing | the same allowance above the **grid's mean Sharpe** |
+
+The second exists because the first is easy to clear for the wrong reason: every
+combination of a long-only strategy on an asset that rose carries the same market exposure,
+so the whole grid sits above zero. On the default `breakout` grid over BTCUSDT 2019-07 to
+2024-07 the trial Sharpe ratios average 1.007 with a spread of 0.123, and the winner's is
+1.263. Reading 1 puts the luck line at 0.366 and the probability at 97.9%; reading 2 puts
+the line at 1.373 and the probability at 40.1%. The family is above zero; the search is no
+evidence for those particular parameters.
+
+What it does not do:
+
+- **N is every combination evaluated.** Neighbouring parameter sets are near-duplicates, so
+  the number of independent trials is smaller. A smaller N lowers the luck line, so the
+  default over-corrects rather than under-corrects. `--effective-trials N` overrides it and
+  the block says which was used; estimating it from the trials is not implemented.
+- **One search.** Other strategies and earlier grids on the same data are not counted.
+- **Neither null is "no edge over the market".** Buy-and-hold stays a separate comparison.
+- **A truncated result set gets no figure.** When the memory cap discarded results the
+  survivors were selected by score, so their spread is not the grid's. The block says
+  `NOT COMPUTED` and the exported fields are null.
+
+The winner is whatever `--sort-by` ranked first. When that is not the Sharpe ratio, the
+winner's Sharpe is at most the grid's best, so judging it against the expected *best* Sharpe
+is the stricter reading. The probability is computed in per-bar Sharpe; the annualised
+figures shown use the engine's own inferred annualisation.
+
 ### Output Format
 
 #### JSON Output Structure

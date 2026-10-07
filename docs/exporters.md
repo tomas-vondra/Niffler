@@ -250,7 +250,7 @@ header, `build_run_header` in `exporter_manager.py`.
 | Kind | Summary fields |
 |------|----------------|
 | `backtest` | the full backtest metadata document, unchanged |
-| `optimize` | `n_trials`, `method`, `sort_by`, `selection`, `results_truncated`, `best_parameters`, the winner's metrics under the same names a backtest uses, and `plateau_metric`, `grid_baseline`, `grid_median`, `fraction_beating_baseline`, `plateau_retention` |
+| `optimize` | `n_trials`, `method`, `sort_by`, `selection`, `results_truncated`, `best_parameters`, the winner's metrics under the same names a backtest uses, `plateau_metric`, `grid_baseline`, `grid_median`, `fraction_beating_baseline`, `plateau_retention`, and the deflated Sharpe: `deflated_sharpe` and `deflated_sharpe_vs_grid` (probabilities), `deflated_sharpe_status`, `deflated_sharpe_trials`, `deflated_sharpe_trials_source`, `expected_max_sharpe`, `expected_max_sharpe_vs_grid`, `trial_sharpe_mean`, `trial_sharpe_std` (annualised, like `sharpe_ratio`) |
 | `walk_forward`, `monte_carlo` | `n_periods`, `combined_metrics`, `stability_metrics`, `analysis_parameters`, `attempted_runs`, `failed_runs`, `failure_rate` |
 | `compare` | the fold windows, `n_rows`, `n_failed_rows`, `strategies`, `symbols` |
 | `screen` | `passed`, `stopped_at`, `stopped_at_quantity`, `forced`, and `stages` (one entry per gate) |
@@ -260,7 +260,8 @@ Rules the export keeps:
 - **A truncated optimization exports flagged, with no grid statistic.** When the optimizer
   discarded results to cap memory, `results_truncated` is true and `grid_median`,
   `fraction_beating_baseline` and `plateau_retention` are null: the survivors were selected
-  by score, so a median computed from them flatters the grid.
+  by score, so a median computed from them flatters the grid. The deflated-Sharpe figures
+  are null for the same reason, and `deflated_sharpe_status` is `truncated`.
 - **A trial that never traded is a state, not a score.** Each trial carries `status`:
   `ok`, `no_trades` or `non_finite`.
 - **A walk-forward fold row carries the in-sample/out-of-sample pair**

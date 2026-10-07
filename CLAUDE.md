@@ -53,7 +53,7 @@ The short version, because these are easy to "helpfully" undo:
 | The provenance record's shape is read in **one** place outside its module, `provenance.provenance_fingerprint` | Reach into `code.dirty` or `data.sha256` from an exporter or a script - after a rename it silently yields `None`, which is the value that means "unknown" |
 | Index names have **one** source, `ElasticsearchExporter.index_catalog()`; the Kibana setup derives from it and `tests/test_exporters/test_export_consistency.py` checks the Grafana dashboards against it | Keep a list of index names in a script or a doc-driven config - the Kibana list had already lost `-positions` and ignored the configured prefix |
 | Metric `choices` derive from `BaseOptimizer.METRICS_CONFIG`, and `--analysis` choices are `RUN_KIND_*` constants | Restate the metric names in an argparse list, or compare `analysis_type` against a typed `'walk_forward'` |
-| A truncated optimization exports **flagged**, with `grid_median` / `fraction_beating_baseline` / `plateau_retention` **null** | Export a grid statistic computed from the survivors of the memory cap, which were selected by score |
+| A truncated optimization exports **flagged**, with `grid_median` / `fraction_beating_baseline` / `plateau_retention` and every deflated-Sharpe figure **null** | Export a grid statistic computed from the survivors of the memory cap, which were selected by score |
 | A run over several datasets has **no** run-level `data_sha256`; each detail row names its own | Stamp the first file's hash on a `compare` or `screen` summary |
 | Exported document ids are deterministic in **every** index (`run_id`, `run_id:type:index`, the position id) | Let Elasticsearch generate ids, which turns a re-export into duplicates; the trial index relies on `_evaluate_parallel` retaining submission order |
 | Every flag has a **hyphen** spelling, listed first; an underscore spelling (`--train_window`) survives only as an alias of its hyphen twin, and the **dest never changes** | Add a flag spelled only with underscores, drop an old spelling, or rename a dest - `niffler.toml` keys are dests, so a rename orphans a user's file (`tests/test_scripts/test_flag_spelling.py` checks every script's real parser) |
@@ -67,9 +67,11 @@ The short version, because these are easy to "helpfully" undo:
 Scope limits that are deliberate, not oversights: long-only, no live trading, three
 textbook strategies rather than an edge, Kelly risk manager is a stub. Slippage/spread/market impact **are** modelled now
 (`niffler/backtesting/cost_model.py`) but default to off, and a run with no cost model
-labels itself as frictionless. There is **no multiple-testing correction and no deflated
-Sharpe ratio**: a p-value from a run whose parameters were fitted on the same data
-overstates the evidence, and the docs and console say so rather than pretending otherwise.
+labels itself as frictionless. A backtest's p-value is **not corrected for multiple
+testing**: when its parameters were fitted on the same data it overstates the evidence, and
+the docs and console say so rather than pretending otherwise. The correction exists for one
+thing only - the winner of a single `optimize.py` search, as a deflated Sharpe ratio
+(`niffler/optimization/deflated_sharpe.py`) that counts every combination as a trial.
 
 ## Development Setup
 
@@ -201,6 +203,10 @@ python scripts/optimize.py --data data/BTCUSDT_binance_1d.csv --strategy simple_
 # on every run; the surface itself is opt-in
 python scripts/optimize.py --data data/BTCUSDT_binance_1d.csv --strategy simple_ma \
   --plateau-heatmap --plateau-centre --plateau-csv surface.csv
+
+# The deflated Sharpe of the winner prints on every run, counting every combination as a
+# trial. Override the count when you have a defensible number of independent trials
+python scripts/optimize.py --data data/BTCUSDT_binance_1d.csv --strategy simple_ma --effective-trials 30
 ```
 
 Note: `--plateau-centre` reports the centre of the plateau *beside* the winner. It never
@@ -373,6 +379,13 @@ Exit codes: `0` every gate passed, `3` a gate stopped the run, `1` the run faile
     `BaseOptimizer.METRICS_CONFIG`, so `max_drawdown` cannot be read upside down here.
     A `SELECTION_TRUNCATED` result set reports **no** distribution rather than one
     computed from score-biased survivors
+  - `deflated_sharpe.py` - Deflated Sharpe ratio of a search's winner (Bailey & López de
+    Prado): a luck line from the trial count and the spread of the trial Sharpe ratios, and
+    the probability the winner's true Sharpe is above it. Reported against **two** nulls -
+    zero edge (the published figure) and "as good as the grid's average" - because a
+    long-only grid on a rising asset clears the first from exposure alone. Computed in
+    per-bar Sharpe; N defaults to every combination evaluated (`--effective-trials`
+    overrides). A `SELECTION_TRUNCATED` result set gets `STATUS_TRUNCATED` and no number
   - `BaseOptimizer.max_results_in_memory` / `results_truncated` - the in-memory result cap
     is now a constructor argument, and hitting it is recorded. Discarding the worst half
     never changes the winner but does bias the sample; `optimize.py` raises the cap to
