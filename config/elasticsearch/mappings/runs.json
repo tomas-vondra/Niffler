@@ -7,6 +7,18 @@
           "match_mapping_type": "string",
           "mapping": {"type": "keyword"}
         }
+      },
+      {
+        "unmapped_integers_as_double": {
+          "match_mapping_type": "long",
+          "mapping": {"type": "double"}
+        }
+      },
+      {
+        "unmapped_strings_as_keyword": {
+          "match_mapping_type": "string",
+          "mapping": {"type": "keyword"}
+        }
       }
     ],
     "properties": {
@@ -42,9 +54,16 @@
         "properties": {
           "name": {"type": "keyword"},
           "class": {"type": "keyword"},
-          "parameters": {"type": "object"}
+          "parameters": {"type": "flattened"}
         }
       },
+      "git_sha": {"type": "keyword"},
+      "git_dirty": {"type": "boolean"},
+      "data_sha256": {"type": "keyword"},
+      "best_parameters": {"type": "flattened"},
+      "analysis_parameters": {"type": "flattened"},
+      "stages": {"type": "flattened"},
+      "results_truncated": {"type": "boolean"},
       "total_commission": {"type": "double"},
       "total_slippage": {"type": "double"},
       "benchmark_name": {"type": "keyword"},

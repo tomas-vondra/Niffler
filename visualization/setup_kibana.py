@@ -85,6 +85,10 @@ class KibanaSetup:
         """Create all Niffler data views."""
         data_views = [
             {"title": "Niffler Runs", "pattern": "niffler-runs", "time_field": "created_at"},
+            {"title": "Niffler Trials", "pattern": "niffler-trials", "time_field": "created_at"},
+            {"title": "Niffler Folds", "pattern": "niffler-folds", "time_field": "created_at"},
+            {"title": "Niffler Simulations", "pattern": "niffler-simulations", "time_field": "created_at"},
+            {"title": "Niffler Comparisons", "pattern": "niffler-comparisons", "time_field": "created_at"},
             {"title": "Niffler Portfolio Values", "pattern": "niffler-portfolio-values", "time_field": "timestamp"},
             {"title": "Niffler Trades", "pattern": "niffler-trades", "time_field": "timestamp"}
         ]

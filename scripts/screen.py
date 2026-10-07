@@ -91,7 +91,13 @@ from scripts.common import (
     report_run_config,
     report_run_identity,
 )
-from scripts.compare import FoldSchedule, evaluate, render, symbol_from_path
+from scripts.compare import (
+    FoldSchedule,
+    comparison_details,
+    evaluate,
+    render,
+    symbol_from_path,
+)
 from scripts.config_file import (
     add_config_arguments,
     apply_config,
@@ -676,6 +682,9 @@ def main() -> int:
     # a gate stopped the funnel before reaching would claim it was part of the
     # evidence.
     screened: List[str] = []
+    # The walk-forward rows, one per dataset the funnel reached. Empty when a
+    # gate stopped it before stage 3.
+    walk_forward_rows: List[Dict[str, Any]] = []
 
     def record(stage: StageResult) -> bool:
         """Report a stage and say whether the funnel should continue."""
@@ -703,6 +712,7 @@ def main() -> int:
                     min_grid_beat=args.min_grid_beat)):
 
                 rows = [evaluate(args.data, args.strategy, run_config, schedule)]
+                walk_forward_rows = rows
                 if record(run_walk_forward_stage(rows[0], args.min_efficiency)):
                     if args.compare_data:
                         print(f"\nwalking forward {len(args.compare_data)} further "
@@ -747,6 +757,10 @@ def main() -> int:
             print("(--force ran the remaining stages anyway; the verdict stands.)")
     print(_SEPARATOR)
 
+    # One record per dataset the run actually read: a single block would hash one
+    # file and imply it covered the whole screen, and a block for a dataset the
+    # funnel stopped short of would claim evidence that was never gathered.
+    provenance = {path: collect_provenance(path) for path in screened}
     record = exporter_manager.create_run_record(
         identity, args.strategy,
         {
@@ -787,11 +801,23 @@ def main() -> int:
             ],
             'stopped_at': stopped_at.describe() if stopped_at is not None else None,
         },
-        # One record per dataset the run actually read: a single block would hash
-        # one file and imply it covered the whole screen, and a block for a
-        # dataset the funnel stopped short of would claim evidence that was
-        # never gathered.
-        provenance={path: collect_provenance(path) for path in screened},
+        provenance=provenance,
+        settings=run_config.to_metadata(),
+        symbol=symbol,
+        summary={
+            'passed': stopped_at is None,
+            'stopped_at': stopped_at.describe() if stopped_at is not None else None,
+            'stopped_at_quantity': stopped_at.quantity if stopped_at is not None else None,
+            'forced': bool(args.force),
+            'n_stages': len(stages),
+            # One entry per gate: which stage, what was measured, against what.
+            'stages': [
+                {'stage': stage.name, 'quantity': gate.quantity, 'value': gate.value,
+                 'threshold': gate.threshold, 'passed': gate.passed}
+                for stage in stages for gate in stage.gates
+            ],
+        },
+        details=comparison_details(walk_forward_rows, provenance),
     )
     # A screen whose record could not be written has failed, whatever the gates said.
     if report_export_outcome(exporter_manager.export_run(record), what='Screen'):

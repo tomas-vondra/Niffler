@@ -300,7 +300,7 @@ class TestElasticsearchBacktestsMapping(unittest.TestCase):
         templates = self.mapping['mappings']['dynamic_templates']
         matching = [
             template for entry in templates for template in entry.values()
-            if template['path_match'] == 'provenance.environment.packages.*'
+            if template.get('path_match') == 'provenance.environment.packages.*'
         ]
 
         self.assertEqual(len(matching), 1)

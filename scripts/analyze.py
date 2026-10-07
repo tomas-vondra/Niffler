@@ -33,6 +33,7 @@ from niffler.optimization.optimizer_factory import (
 )
 from niffler.strategies.registry import get_available_strategies, get_strategy_class
 from niffler.exporters import ExporterManager
+from niffler.exporters.run_record import DETAIL_FOLD, DETAIL_SIMULATION
 from niffler.utils.provenance import collect_provenance
 from niffler.utils.run_identity import RUN_KIND_MONTE_CARLO, RUN_KIND_WALK_FORWARD
 from scripts.common import (
@@ -52,6 +53,7 @@ from scripts.common import (
     report_run_config,
     report_run_identity,
     resolve_strategy_parameters,
+    symbol_from_data_path,
 )
 from scripts.config_file import (
     add_config_arguments,
@@ -242,8 +244,8 @@ Examples:
     
     parser.add_argument(
         '--symbol',
-        default='UNKNOWN',
-        help='Symbol identifier for the data (default: UNKNOWN)'
+        default=None,
+        help='Symbol identifier for the data (default: extracted from the file name)'
     )
     
     # Logging
@@ -562,6 +564,43 @@ def build_results_document(result) -> dict:
     return output_data
 
 
+#: The parts of the result document that describe the run as a whole.
+_SUMMARY_FIELDS = (
+    'analysis_type', 'strategy_name', 'analysis_start_date', 'analysis_end_date',
+    'n_periods', 'combined_metrics', 'stability_metrics', 'analysis_parameters',
+    'performance_consistency',
+)
+
+
+def build_export_views(result, document: dict):
+    """Shape an analysis for a document store: one summary, one row per fold or simulation.
+
+    A walk-forward keeps its richest per-fold record on ``result.metadata['folds']``
+    (in-sample against out-of-sample return, the efficiency ratio, the fitted
+    parameters); that is what a fold row carries when it exists, because the
+    in-sample/out-of-sample pair is the whole point of looking at a fold.
+
+    Args:
+        result: The analysis result.
+        document: The value :func:`build_results_document` returned.
+
+    Returns:
+        ``(summary, details)`` for ``ExporterManager.create_run_record``.
+    """
+    summary = {name: document.get(name) for name in _SUMMARY_FIELDS}
+    summary['attempted_runs'] = getattr(result, 'attempted_runs', None)
+    summary['failed_runs'] = getattr(result, 'failed_runs', None)
+    summary['failure_rate'] = getattr(result, 'failure_rate', None)
+
+    if document.get('analysis_type') == 'walk_forward':
+        metadata = result.metadata if isinstance(result.metadata, dict) else {}
+        folds = metadata.get('folds')
+        rows = folds if isinstance(folds, list) and folds else document.get('period_results')
+        return summary, {DETAIL_FOLD: list(rows or [])}
+
+    return summary, {DETAIL_SIMULATION: list(document.get('simulation_results') or [])}
+
+
 def main() -> int:
     """Run the requested analysis.
 
@@ -581,6 +620,11 @@ def main() -> int:
     log_level = "DEBUG" if args.verbose else args.log_level
     setup_logging(level=log_level)
     report_config(config)
+
+    # 'UNKNOWN' used to be the default, which is what every exported analysis
+    # was then filed under. Derived from the file name, as backtest.py does.
+    if args.symbol is None:
+        args.symbol = symbol_from_data_path(args.data)
 
     try:
         # Load data
@@ -635,9 +679,15 @@ def main() -> int:
             raise ValueError(f"Unknown analysis type: {args.analysis}")
         
         # Export the result through every configured exporter.
-        record =exporter_manager.create_run_record(
-            identity, args.strategy, build_results_document(result),
-            provenance=collect_provenance(args.data)
+        document = build_results_document(result)
+        summary, details = build_export_views(result, document)
+        record = exporter_manager.create_run_record(
+            identity, args.strategy, document,
+            provenance=collect_provenance(args.data),
+            settings=run_config.to_metadata(),
+            symbol=args.symbol,
+            summary=summary,
+            details=details,
         )
         # A failed export is a failed run: it must not be reported as a
         # successful analysis while no file was written.

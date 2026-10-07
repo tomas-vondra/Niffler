@@ -1,0 +1,44 @@
+{
+  "mappings": {
+    "dynamic_templates": [
+      {
+        "unmapped_integers_as_double": {
+          "match_mapping_type": "long",
+          "mapping": {"type": "double"}
+        }
+      },
+      {
+        "unmapped_strings_as_keyword": {
+          "match_mapping_type": "string",
+          "mapping": {"type": "keyword"}
+        }
+      }
+    ],
+    "properties": {
+      "run_id": {"type": "keyword"},
+      "kind": {"type": "keyword"},
+      "experiment": {"type": "keyword"},
+      "parent_run_id": {"type": "keyword"},
+      "profile": {"type": "keyword"},
+      "strategy_key": {"type": "keyword"},
+      "symbol": {"type": "keyword"},
+      "doc_type": {"type": "keyword"},
+      "row_index": {"type": "integer"},
+      "created_at": {"type": "date"},
+      "git_sha": {"type": "keyword"},
+      "git_dirty": {"type": "boolean"},
+      "data_sha256": {"type": "keyword"},
+      "cost_model": {"type": "keyword"},
+      "risk_manager": {
+        "properties": {
+          "name": {"type": "keyword"},
+          "class": {"type": "keyword"},
+          "parameters": {"type": "flattened"}
+        }
+      },
+      "parameters": {"type": "flattened"},
+      "optimal_parameters": {"type": "flattened"},
+      "error": {"type": "text"}
+    }
+  }
+}

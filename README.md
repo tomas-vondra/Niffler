@@ -222,7 +222,10 @@ library or by `compare.py`.
 **Export** backtest results to multiple formats for analysis and monitoring:
 - **Console**: Immediate human-readable feedback
 - **CSV Files**: Structured data for external analysis tools
-- **Elasticsearch**: Database integration for visualization dashboards
+- **Elasticsearch**: Database integration for visualization dashboards. Every script
+  exports to it: one summary per run in `niffler-runs`, and every optimizer trial,
+  walk-forward fold, Monte Carlo simulation and comparison row in its own index, each
+  stamped with the run's experiment so one filter shows everything that belongs together
 - **JSON**: One document per run, for every script; the file `--params-file` reads
 
 Every script takes the same `--exporters` / `--exporter-params` flags, and `--output PATH`
@@ -865,7 +868,7 @@ The suite is the source of truth for its own size. Run it:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-At the time of writing this reports **1436 tests, 0 failures, 0 errors**. Treat that as a
+At the time of writing this reports **1469 tests, 0 failures, 0 errors**. Treat that as a
 sanity check, not a spec — if the command disagrees with this paragraph, believe the
 command. It is the only place in the documentation that quotes a count.
 
