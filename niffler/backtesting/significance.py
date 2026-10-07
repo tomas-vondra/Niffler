@@ -27,8 +27,9 @@ A small p-value here is weak evidence, and the docs and the console say so:
 * If the parameters were fitted on this same data, the p-value is **not**
   corrected for that. Searching a grid of 200 parameter sets and reporting the
   best one's p-value at the 5% level finds "significance" by construction.
-  Multiple-testing correction and the deflated Sharpe ratio are deliberately out
-  of scope here.
+  The correction is a property of the search, not of one backtest, so it lives
+  with the optimizer: :mod:`niffler.optimization.deflated_sharpe` deflates the
+  winner of a search by the number of trials. Nothing here is deflated.
 * Round trips are treated as i.i.d. Overlapping positions, regime persistence
   and volatility clustering all violate that to some degree.
 * The t-test assumes an approximately normal *mean*. Trade returns are skewed

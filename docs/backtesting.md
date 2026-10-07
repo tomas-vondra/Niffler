@@ -379,8 +379,9 @@ Read the number narrowly. It is:
 - **one asset over one window.** Nothing here is a claim about another market or period.
 - **not corrected for multiple testing.** If the parameters came from optimising on this
   same data, the p-value overstates the evidence — a grid of 200 parameter sets contains
-  about ten "significant at 5%" results by chance alone. Multiple-testing correction and
-  the deflated Sharpe ratio are **not implemented**.
+  about ten "significant at 5%" results by chance alone. A backtest cannot know how many
+  sets were tried; the search can, and `optimize.py` prints a
+  [selection-corrected figure](optimization.md#search-luck) for its winner.
 - **assuming i.i.d. round trips.** Overlapping positions, regime persistence and
   volatility clustering all violate that to some degree.
 - **assuming an approximately normal mean.** Trade returns are skewed and fat-tailed; the
@@ -494,8 +495,10 @@ Be aware of these before trusting a backtest figure:
 - **No funding, borrow, or overnight financing costs.** Commission only
 - **Intra-bar ordering is unknown.** When a bar both triggers a stop and carries a signal,
   the stop is processed first; and the entry bar's stop is checked before the entry fills
-- **No multiple-testing correction and no deflated Sharpe ratio.** The significance test
-  knows nothing about how many parameter sets were tried to find the one being tested
+- **The significance test is not corrected for multiple testing.** It knows nothing about
+  how many parameter sets were tried to find the one being tested. The
+  [`SEARCH LUCK` block](optimization.md#search-luck) that corrects for one search is
+  reported by `optimize.py`, not here
 - **One benchmark only: buy-and-hold of the traded asset.** No index, no risk-free rate,
   no multi-asset comparison, and therefore no CAPM alpha or beta
 

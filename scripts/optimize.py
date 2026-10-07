@@ -27,7 +27,7 @@ import sys
 import pandas as pd
 import logging
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from pathlib import Path
 
 # Running "python scripts/optimize.py" puts scripts/ on sys.path but not the
@@ -36,10 +36,12 @@ from pathlib import Path
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from niffler.backtesting.backtest_engine import BacktestEngine
 from niffler.config.logging import setup_logging
 from niffler.exporters import ExporterManager
 from niffler.exporters.run_record import DETAIL_TRIAL
 from niffler.utils.provenance import collect_provenance
+from niffler.optimization import deflated_sharpe as deflated_sharpe_analysis
 from niffler.optimization import plateau as plateau_analysis
 from niffler.optimization.base_optimizer import BaseOptimizer
 from niffler.optimization.optimizer_factory import (
@@ -209,8 +211,55 @@ def plateau_summary(results, args, selection: str) -> Dict[str, Any]:
     }
 
 
+def add_deflated_sharpe_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add the deflated-Sharpe flag to the optimizer's parser.
+
+    Args:
+        parser: Parser to extend.
+    """
+    group = parser.add_argument_group('deflated Sharpe')
+    group.add_argument('--effective-trials', '--effective_trials', dest='effective_trials',
+                       type=float, default=None,
+                       help=('Number of INDEPENDENT trials to deflate the winner by '
+                             '(default: every combination evaluated, which over-counts '
+                             'because neighbouring parameter sets are near-duplicates, '
+                             'and so over-corrects rather than under-corrects)'))
+
+
+def analyse_deflated_sharpe(results, args, selection: str,
+                            run_config) -> Optional[deflated_sharpe_analysis.DeflatedSharpe]:
+    """Deflate the winner's Sharpe by the search that selected it.
+
+    It reads equity curves the run already produced, so a failure here must
+    cost neither the export nor the report.
+
+    Args:
+        results: The optimisation results, as returned by the optimizer.
+        args: Parsed command line carrying ``effective_trials``.
+        selection: One of the ``plateau.SELECTION_*`` constants.
+        run_config: The engine settings the search ran under, which decide the
+            annualisation the figures are shown in.
+
+    Returns:
+        The analysis, or None when it could not be run.
+    """
+    try:
+        engine = BacktestEngine.from_config(run_config)
+        periods_per_year = engine.resolve_periods_per_year(
+            results[0].backtest_result.portfolio_values.index)
+        return deflated_sharpe_analysis.analyse_results(
+            results, selection,
+            effective_trials=getattr(args, 'effective_trials', None),
+            periods_per_year=periods_per_year,
+        )
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Deflated Sharpe left out: {e}")
+        return None
+
+
 def build_export_views(document: Dict[str, Any], args, selection: str,
-                       truncated: bool, plateau: Dict[str, Any]):
+                       truncated: bool, plateau: Dict[str, Any],
+                       deflated: Optional[Dict[str, Any]] = None):
     """Shape an optimization for a document store: one summary, one row per trial.
 
     Args:
@@ -219,6 +268,8 @@ def build_export_views(document: Dict[str, Any], args, selection: str,
         selection: One of the ``plateau.SELECTION_*`` constants.
         truncated: Whether the optimizer discarded results to cap memory.
         plateau: The value :func:`plateau_summary` returned.
+        deflated: The value ``deflated_sharpe.summary_fields`` returned; all
+            None when omitted.
 
     Returns:
         ``(summary, details)`` for ``ExporterManager.create_run_record``.
@@ -255,6 +306,8 @@ def build_export_views(document: Dict[str, Any], args, selection: str,
         # one table can hold both. `kind` says which is which.
         **(winner.get('metrics') or {}),
         **plateau,
+        **(deflated if deflated is not None
+           else deflated_sharpe_analysis.summary_fields(None)),
     }
     return summary, {DETAIL_TRIAL: rows}
 
@@ -410,6 +463,7 @@ def main() -> int:
 
     # Parameter plateau / surface analysis
     add_plateau_arguments(parser)
+    add_deflated_sharpe_arguments(parser)
 
     # Logging
     parser.add_argument('--log-level', default='INFO',
@@ -423,6 +477,8 @@ def main() -> int:
     config = apply_config(parser, 'optimize', tables=('parameter_space',))
 
     args = parser.parse_args()
+    if args.effective_trials is not None and not args.effective_trials >= 1:
+        parser.error(f"--effective-trials must be at least 1, got {args.effective_trials:g}")
     experiment_typed = typed_on_command_line(parser, 'experiment')
 
     # Setup logging
@@ -574,10 +630,12 @@ def main() -> int:
         else:
             selection = plateau_analysis.SELECTION_EXHAUSTIVE
 
+        deflated = analyse_deflated_sharpe(results, args, selection, run_config)
         document = optimizer.results_document(results)
         summary, details = build_export_views(
             document, args, selection, bool(optimizer.results_truncated),
-            plateau_summary(results, args, selection)
+            plateau_summary(results, args, selection),
+            deflated_sharpe_analysis.summary_fields(deflated)
         )
         record = exporter_manager.create_run_record(
             identity, args.strategy, document,
@@ -598,6 +656,12 @@ def main() -> int:
                 report_plateau(results, args, selection)
             except Exception as e:
                 logger.warning(f"Could not run plateau analysis: {e}")
+
+        # After the plateau block: that one says how typical the winner is of
+        # its grid, this one how far above a lucky winner it sits.
+        if deflated is not None:
+            print()
+            print(deflated_sharpe_analysis.render_report(deflated))
 
         return exit_code
         

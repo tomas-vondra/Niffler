@@ -624,11 +624,15 @@ Being explicit, so nobody discovers these the expensive way:
   but `--step` below `--test-window` still overlaps them. Repeated out-of-sample bars are
   then counted once for the combined Sharpe, and the per-fold counters are labelled as
   counting non-independent folds - labelled, not corrected.
-- **No multiple-testing correction, and no deflated Sharpe ratio.** The significance test
-  answers "is this one strategy's mean trade return distinguishable from zero on this one
-  sample". It knows nothing about how many parameter sets were tried to find it. If you
-  optimised on the same data, the p-value overstates the evidence and there is currently
-  nothing in the framework that corrects for it.
+- **A backtest's p-value is not corrected for the search that found its parameters.** The
+  significance test answers "is this one strategy's mean trade return distinguishable from
+  zero on this one sample". It knows nothing about how many parameter sets were tried to
+  find it, so if you optimised on the same data it overstates the evidence. The correction
+  exists in one place only: `optimize.py` prints a `SEARCH LUCK` block for the winner of
+  the search it just ran - a grid-relative probability and the published deflated Sharpe
+  ratio (see [Search luck](docs/optimization.md#search-luck)). It
+  counts that one search - not the other strategies or grids tried before it - and it
+  counts every combination as an independent trial.
 - **Only one benchmark: buy-and-hold of the traded asset.** No index, no risk-free rate, no
   multi-asset comparison. Nothing here is a CAPM alpha or beta.
 - **Docker images are unverified at runtime.** The compose file validates and the Dockerfile
@@ -742,10 +746,10 @@ buy-and-hold benchmark, charged the same commission and cost model; when no benc
 available the fallback is labelled for exactly what it is and is never called
 buy-and-hold.
 
-This is **not** a multiple-testing correction and not a deflated Sharpe ratio - see
-[What Niffler does *not* do](#what-niffler-does-not-do), which still applies. It is a way
-of seeing whether the winner sits on a hill or on a needle, plus the honest counterweight
-to a report that otherwise shows only its best row.
+This is **not** a multiple-testing correction - that is the separate `SEARCH LUCK` block
+`optimize.py` prints after it (see [Search luck](docs/optimization.md#search-luck)).
+It is a way of seeing whether the winner sits on a hill or on a needle, plus the honest
+counterweight to a report that otherwise shows only its best row.
 
 ## Adding a strategy
 
@@ -918,7 +922,7 @@ The suite is the source of truth for its own size. Run it:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-At the time of writing this reports **1512 tests, 0 failures, 0 errors**. Treat that as a
+At the time of writing this reports **1639 tests, 0 failures, 0 errors**. Treat that as a
 sanity check, not a spec — if the command disagrees with this paragraph, believe the
 command. It is the only place in the documentation that quotes a count.
 

@@ -158,7 +158,8 @@ class ConsoleExporter(BaseExporter):
 
         print("  Caveat: one asset, one window. If these parameters were chosen by")
         print("  optimising on this same data, this p-value is not corrected for that")
-        print("  search and overstates the evidence.")
+        print("  search and overstates the evidence. The corrected figures are in the")
+        print("  SEARCH LUCK block optimize.py printed for the search that chose them.")
 
     def _print_backtest_results(self, result: BacktestResult, run_id: str,
                                 metadata: Dict[str, Any] = None) -> None:
