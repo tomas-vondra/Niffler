@@ -182,6 +182,34 @@ it, because a correction that is read as complete is worse than none.
   Explicit overlap is still allowed; its per-fold figures are then labelled as
   non-independent - labelled, not corrected - and the run exports `folds_independent`.
 
+## A system for new strategies
+
+Recorded as a direction on 2026-10-07. Nothing is built and the design is not agreed.
+
+The goal: a scheduled agent finds strategies published on the internet, writes each one as
+a Niffler strategy, runs the whole experiment on it, and the results appear somewhere they
+can be compared - a leaderboard, with the detail behind each row. That needs a way to
+document a strategy first, by hand or by the agent, because today a strategy is only a class
+and a registry line: where the idea came from, what its rules are and what has already been
+tried on it are written down nowhere.
+
+What a design has to answer before any of it is built:
+
+- **A strategy catalog.** One reviewed record per strategy - source, rules, parameters,
+  status - that survives independently of Elasticsearch, and tells a new idea from one
+  already tested under another name.
+- **One fixed test protocol.** The same datasets, costs, folds and gates for every strategy,
+  pinned and versioned, or the leaderboard compares runs that were never comparable.
+- **Selection across strategies.** Testing fifty strategies and reading the top of the list
+  is the grid-search problem one level up (see **Research rigor**); the leaderboard has to
+  show "best of N" beside the winner.
+- **Who spends the holdout.** An agent that screens every night would use the holdout up in
+  a week. It should stop before that stage and leave the look to a person.
+- **Generated code is untrusted.** Rules read from a web page are reimplemented and
+  reviewed, never executed as found, and nothing merges itself.
+- **Where it shows.** This is the cross-strategy dashboard under **Experiment tracking**,
+  which therefore comes first, as does the first run against a live Elasticsearch.
+
 ## Longer term
 
 These are the genuinely large items, and none of them is started.
