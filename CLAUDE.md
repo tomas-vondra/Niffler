@@ -38,7 +38,7 @@ The short version, because these are easy to "helpfully" undo:
 | `niffler/strategies/` imports **nothing** from `niffler/optimization/`; a strategy declares `PARAMETER_SPEC` as a plain dict | Import `ParameterSpace` into a strategy module - `niffler/optimization/__init__` imports `optimizer_factory`, which imports the registry, so it is a circular import |
 | Engine settings travel as **one** `RunConfig`, built once by `scripts/common.build_run_config` | Add an eleventh knob to `BacktestEngine.__init__` without a field on `RunConfig`, hand an analyzer or a worker a loose `initial_capital`/`commission`/`cost_model` triple, or re-check a range that `RunConfig.__post_init__` already checks |
 | A screening gate with **no** measurable value stops the run | Treat a `None` retention / efficiency / BEAT% as a pass, or as a 0.0 |
-| The holdout is scored by **one backtest**, on bars strictly after the research data, and its path is **typed** | Optimise or walk-forward on the holdout file, accept `holdout_data` from `niffler.toml`, or run the stage after a gate stopped the funnel (outside `--force`) |
+| The holdout is scored by **one backtest**, on bars strictly after the research data, and its path is **typed** | Optimise or walk-forward on the holdout file, accept `holdout_data` from `niffler.toml`, run the stage after any earlier gate failed (`--force` included), or let a holdout with no completed round trip pass on its excess |
 | A cross-asset comparison pairs each fold with buy-and-hold over the **same bars** | Compare a fold return against a benchmark computed over the whole file, or against a fixed number - the window length would drive the verdict |
 | A strategy parameter the chosen strategy does not accept is an **error** | Silently drop an unknown `--params` key or a foreign flag, which runs the strategy with defaults while the user thinks it was configured |
 | There is **one** registry per extension point - strategies, exporters (`niffler/exporters/registry.py`), data sources (`niffler/data/downloaders/registry.py`) - and what each accepts is derived with `inspect.signature` | Hand-write a per-name kwargs filter or an `--source`/`--exporters` `choices=[...]` list; a forgotten branch builds the exporter on **defaults**, reports success and exits 0 |
@@ -256,8 +256,9 @@ python scripts/screen.py --data data/SPY_research.csv --strategy simple_ma \
 python scripts/screen.py --data data/SPY_research.csv --strategy rsi --force
 
 # Finish with ONE look at bars no decision has seen: a single backtest of the stage-2
-# winner, gated on excess over buy-and-hold. Looking spends the holdout - a strategy
-# adjusted afterwards and screened again has been fitted to it
+# winner, gated on completed round trips and on excess over buy-and-hold. Looking spends
+# the holdout - a strategy adjusted afterwards and screened again has been fitted to it -
+# so it only runs once every earlier gate passed, and --force does not override that
 python scripts/screen.py --data data/SPY_research.csv --strategy breakout \
   --compare-data data/QQQ_research.csv --holdout-data data/SPY_holdout.csv
 ```
@@ -471,7 +472,9 @@ Exit codes: `0` every gate passed, `3` a gate stopped the run, `1` the run faile
     gate that fails with a line that names the stage, the measurement, the threshold and
     the flag that set it. The holdout stage is one backtest of the stage-2 winner, never
     a search; the file must start strictly after `--data` ends (else exit 1), must be
-    typed rather than read from `niffler.toml`, and is exported as a `niffler-comparisons`
+    typed rather than read from `niffler.toml`, is skipped - not spent - when an earlier
+    gate failed even under `--force`, cannot pass below `--min-holdout-trades` completed
+    round trips (default 1), and is exported as a `niffler-comparisons`
     row with `stage: holdout` and its own `data_sha256` (also `holdout_data_sha256` on the
     run summary), so the number of looks at one holdout file is a count. It computes
     nothing itself - every gated number comes from the library or from

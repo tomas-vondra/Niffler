@@ -59,6 +59,22 @@ def make_data(start='2020-01-01', n_bars=600):
     }, index=index)
 
 
+def make_flat_data(start='2022-01-01', n_bars=200):
+    """A constant price: no moving-average cross, so no trade at all."""
+    index = pd.date_range(start, periods=n_bars, freq='D')
+    return pd.DataFrame({
+        'open': [100.0] * n_bars,
+        'high': [100.0] * n_bars,
+        'low': [100.0] * n_bars,
+        'close': [100.0] * n_bars,
+        'volume': [1_000_000.0] * n_bars,
+    }, index=index)
+
+
+def gate_for(stage, flag):
+    return next(gate for gate in stage.gates if gate.flag == flag)
+
+
 def fold_row(**overrides):
     row = {
         'symbol': 'TEST', 'strategy': 'simple_ma', 'error': None,
@@ -104,15 +120,16 @@ class TestHoldoutMustFollowResearch(unittest.TestCase):
 
 
 class TestHoldoutStage(unittest.TestCase):
-    """One backtest with the parameters it is handed, gated on excess return."""
+    """One backtest with the parameters it is handed, gated on trades and excess."""
 
     def setUp(self):
         self.holdout = make_data('2022-01-01', 400)
         self.config = RunConfig()
 
-    def _stage(self, min_excess=0.0, config=None):
-        return run_holdout_stage(self.holdout, 'TEST', 'simple_ma', WINNER,
-                                 config or self.config, min_excess)
+    def _stage(self, min_excess=0.0, config=None, min_trades=1, holdout=None):
+        return run_holdout_stage(self.holdout if holdout is None else holdout,
+                                 'TEST', 'simple_ma', WINNER,
+                                 config or self.config, min_excess, min_trades)
 
     def test_it_backtests_the_parameters_it_is_given(self):
         with patch('scripts.screen.create_strategy',
@@ -132,23 +149,23 @@ class TestHoldoutStage(unittest.TestCase):
 
     def test_the_gate_is_excess_over_buy_and_hold(self):
         stage = self._stage()
-        gate = stage.gates[0]
+        gate = gate_for(stage, '--min-holdout-excess')
 
         self.assertEqual(stage.name, STAGE_HOLDOUT)
-        self.assertEqual(gate.flag, '--min-holdout-excess')
         self.assertIsNotNone(gate.value)
         self.assertAlmostEqual(
             gate.value,
             stage.payload['total_return_pct'] - stage.payload['benchmark_return_pct'])
 
     def test_it_fires_below_the_threshold_and_passes_at_it(self):
-        excess = self._stage().gates[0].value
+        flag = '--min-holdout-excess'
+        excess = gate_for(self._stage(), flag).value
 
-        self.assertTrue(self._stage(min_excess=excess).gates[0].passed)
-        failed = self._stage(min_excess=excess + 1.0)
-        self.assertFalse(failed.gates[0].passed)
-        self.assertIn('STOPPED at holdout', failed.gates[0].describe())
-        self.assertIn('--min-holdout-excess', failed.gates[0].describe())
+        self.assertTrue(gate_for(self._stage(min_excess=excess), flag).passed)
+        failed = gate_for(self._stage(min_excess=excess + 1.0), flag)
+        self.assertFalse(failed.passed)
+        self.assertIn('STOPPED at holdout', failed.describe())
+        self.assertIn('--min-holdout-excess', failed.describe())
 
     def test_a_refused_significance_verdict_is_printed_not_gated_on(self):
         """A short holdout cannot support a p-value; that is reported as itself."""
@@ -161,8 +178,38 @@ class TestHoldoutStage(unittest.TestCase):
         self.assertTrue(any(stage.payload['significance_verdict'] in line
                             for line in stage.detail))
         self.assertFalse(any('p-value' in line for line in stage.detail))
-        self.assertEqual(len(stage.gates), 1)
-        self.assertTrue(stage.gates[0].passed)
+        self.assertEqual([gate.flag for gate in stage.gates],
+                         ['--min-holdout-trades', '--min-holdout-excess'])
+        self.assertEqual(stage.failed_gates, [])
+
+    def test_a_holdout_the_strategy_never_traded_on_cannot_pass(self):
+        """Flat while buy-and-hold pays commission is positive excess for nothing."""
+        stage = self._stage(holdout=make_flat_data())
+        trades = gate_for(stage, '--min-holdout-trades')
+
+        self.assertEqual(stage.payload['round_trips'], 0)
+        self.assertTrue(gate_for(stage, '--min-holdout-excess').passed)
+        self.assertFalse(trades.passed)
+        self.assertEqual(stage.failed_gates[0], trades)
+        self.assertEqual(trades.describe(),
+                         'STOPPED at holdout: round trips 0 < 1 (--min-holdout-trades)')
+        self.assertTrue(any('did not trade enough' in line for line in stage.detail))
+
+    def test_the_trade_threshold_is_printed_when_it_passes_too(self):
+        stage = self._stage()
+        trades = gate_for(stage, '--min-holdout-trades')
+
+        self.assertTrue(trades.passed)
+        self.assertIn('>= 1 (--min-holdout-trades)', trades.describe())
+        self.assertFalse(any('did not trade enough' in line for line in stage.detail))
+
+    def test_the_trade_threshold_is_the_one_it_is_given(self):
+        traded = self._stage().payload['round_trips']
+
+        self.assertFalse(
+            gate_for(self._stage(min_trades=traded + 1), '--min-holdout-trades').passed)
+        self.assertTrue(gate_for(self._stage(holdout=make_flat_data(), min_trades=0),
+                                 '--min-holdout-trades').passed)
 
     def test_the_bars_it_ran_on_are_recorded(self):
         stage = self._stage()
@@ -278,6 +325,34 @@ class TestHoldoutInTheFunnel(unittest.TestCase):
 
         self.assertEqual(run['holdout_arguments']['args'][5], 2.5)
 
+    def test_it_is_handed_the_typed_trade_threshold(self):
+        run = self._run(self._with_holdout('--min-holdout-trades', '7'))
+
+        self.assertEqual(run['holdout_arguments']['args'][6], 7)
+        self.assertEqual(self._document()['thresholds']['min_holdout_trades'], 7)
+
+    def test_the_trade_threshold_defaults_to_one_round_trip(self):
+        run = self._run(self._with_holdout())
+
+        self.assertEqual(run['holdout_arguments']['args'][6], 1)
+        self.assertEqual(self._document()['thresholds']['min_holdout_trades'], 1)
+
+    def test_the_trade_threshold_may_come_from_the_config_file(self):
+        run = self._run(self._with_holdout(),
+                        config_text='[screen]\nmin_holdout_trades = 4\n')
+
+        self.assertEqual(run['holdout_arguments']['args'][6], 4)
+
+    def test_a_holdout_without_a_trade_stops_the_run(self):
+        flat = self._write('TEST_flat.csv', make_flat_data('2021-01-01', 200))
+
+        run = self._run(['--holdout-data', flat], stub_holdout=False)
+
+        self.assertEqual(run['exit'], EXIT_STOPPED)
+        self.assertIn('STOPPED at holdout: round trips 0 < 1 (--min-holdout-trades)',
+                      run['stdout'])
+        self.assertIn('did not trade enough', run['stdout'])
+
     def test_a_failed_earlier_gate_leaves_the_holdout_unread(self):
         run = self._run(self._with_holdout(), compare_passes=False)
 
@@ -287,11 +362,26 @@ class TestHoldoutInTheFunnel(unittest.TestCase):
         self.assertIsNone(run['record'].summary['holdout_data_sha256'])
         self.assertEqual(len(run['record'].details[DETAIL_COMPARISON]), 2)
 
-    def test_force_runs_it_after_a_failed_gate_and_still_exits_stopped(self):
+    def test_force_does_not_spend_the_holdout_after_a_failed_gate(self):
+        """A strategy that already failed has its verdict; a look would be lost."""
         run = self._run(self._with_holdout('--force'), compare_passes=False)
 
-        self.assertEqual(run['calls'][-1], 'holdout')
+        self.assertNotIn('holdout', run['calls'])
         self.assertEqual(run['exit'], EXIT_STOPPED)
+        self.assertIn('--- holdout ---', run['stdout'])
+        self.assertIn('SKIPPED: an earlier gate failed', run['stdout'])
+        self.assertIn('not spent', run['stdout'])
+        last = self._document()['stages'][-1]
+        self.assertEqual(last['name'], STAGE_HOLDOUT)
+        self.assertIn('earlier gate failed', last['skipped_reason'])
+        self.assertNotIn(self.holdout_path, self._document()['provenance'])
+        self.assertIsNone(run['record'].summary['holdout_data_sha256'])
+
+    def test_force_does_not_block_the_holdout_when_every_gate_passed(self):
+        run = self._run(self._with_holdout('--force'))
+
+        self.assertEqual(run['calls'][-1], 'holdout')
+        self.assertEqual(run['exit'], EXIT_OK)
 
     def test_a_failed_holdout_gate_stops_the_run(self):
         run = self._run(self._with_holdout(), holdout_passes=False)
@@ -388,6 +478,8 @@ class TestHoldoutInTheFunnel(unittest.TestCase):
 
         self.assertEqual(run['exit'], EXIT_OK)
         self.assertIn('passed holdout: excess over buy-and-hold (pp)', run['stdout'])
+        self.assertIn('passed holdout: round trips', run['stdout'])
+        self.assertIn('(--min-holdout-trades)', run['stdout'])
         self.assertIn('(--min-holdout-excess)', run['stdout'])
         row = run['record'].details[DETAIL_COMPARISON][-1]
         self.assertEqual(row['parameters'], WINNER)
@@ -405,7 +497,9 @@ class TestHoldoutFlagsAreDocumented(unittest.TestCase):
 
         self.assertIn('--holdout-data', help_text)
         self.assertIn('--min-holdout-excess', help_text)
+        self.assertIn('--min-holdout-trades', help_text)
         self.assertIn('spends it', help_text)
+        self.assertIn('--force does not spend it', help_text)
 
 
 if __name__ == '__main__':

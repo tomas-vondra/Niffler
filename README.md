@@ -212,8 +212,10 @@ first gate that fails, saying exactly why**:
 
 Every threshold is a flag and is printed whether or not it fires. Three of the four
 defaults are judgment calls and say so in `--help`; the fourth reuses the framework's own
-`DEFAULT_MIN_TRADES` (the optional holdout gate, below, defaults to break-even). A stop exits **3** — it is a normal outcome, not an error (1 is a
-real failure, and argparse owns 2). `--force` runs every stage anyway and still exits 3.
+`DEFAULT_MIN_TRADES` (the optional holdout gates, below, default to one round trip and
+to break-even). A stop exits **3** — it is a normal outcome, not an error (1 is a
+real failure, and argparse owns 2). `--force` runs every stage anyway - except the
+holdout, below - and still exits 3.
 
 The script implements no analysis of its own: every number it gates on is computed by the
 library or by `compare.py`.
@@ -231,10 +233,13 @@ python scripts/screen.py --data data/SPY_research.csv --strategy breakout \
 
 - Nothing is fitted on the holdout: one backtest, the parameters stage 2 already chose.
 - The holdout must start strictly after `--data` ends, or the run exits 1 naming both dates.
-- The gate is excess return over buy-and-hold, `--min-holdout-excess` (default 0). The
-  significance verdict is printed as the engine gives it; on a short holdout it will often
-  refuse one, and that refusal is not worked around.
-- It only runs once every earlier gate passed (or under `--force`).
+- The gates are completed round trips, `--min-holdout-trades` (default 1), and excess
+  return over buy-and-hold, `--min-holdout-excess` (default 0). The first exists because a
+  strategy that stays flat while the asset falls has positive excess without having done
+  anything. The significance verdict is printed as the engine gives it; on a short holdout
+  it will often refuse one, and that refusal is not worked around.
+- It only runs once every earlier gate passed. `--force` does not override that: after a
+  failed gate the stage is reported as skipped and the holdout is not spent.
 - **Looking spends it.** Adjust the strategy after a holdout run and screen again, and the
   same file is research data. So the path must be typed - `holdout_data` in `niffler.toml`
   is an error - and every holdout run exports the file's hash (`stage: holdout` in

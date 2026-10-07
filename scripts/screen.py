@@ -26,8 +26,8 @@ The stages and the question each one answers
    over every asset screened.
 5. **Holdout** (only with ``--holdout-data``) - *does it hold on bars no
    decision has seen?* One backtest of the stage-2 winner on a file that starts
-   after the primary dataset ends. Nothing is fitted on it. The gate is excess
-   return over buy-and-hold.
+   after the primary dataset ends. Nothing is fitted on it. The gates are a
+   minimum number of completed round trips and excess return over buy-and-hold.
 
 The holdout is spent by looking at it
 -------------------------------------
@@ -37,6 +37,8 @@ such decision has touched, and that is true exactly once: a strategy adjusted
 after a holdout run and screened again has been fitted to the holdout. So the
 path cannot come from ``niffler.toml`` - it has to be typed - and every holdout
 run exports the file's hash, so the number of looks can be counted afterwards.
+For the same reason ``--force`` does not reach it: a strategy that already
+failed a gate has its verdict, and a look spent confirming it is a look lost.
 
 Thresholds
 ----------
@@ -46,8 +48,9 @@ gate fires - a gate you cannot see is not a gate. Three of the four defaults are
 efficiency ratio of 0.30 is the line between a real edge and a fitted one. They
 are set where a reasonable person would want to look again, and they are meant
 to be argued with. The exception is the trade-count gate, which reuses the
-framework's existing ``DEFAULT_MIN_TRADES``. The holdout gate defaults to zero
-excess over buy-and-hold, which is a break-even line rather than a judgment.
+framework's existing ``DEFAULT_MIN_TRADES``. The holdout gates default to one
+completed round trip and to zero excess over buy-and-hold: the least that counts
+as having traded, and a break-even line, rather than judgments.
 
 Exit codes
 ----------
@@ -55,7 +58,8 @@ Exit codes
 expected outcome and emphatically not an error, which is why it is not ``1``.
 ``1`` is reserved for a genuine failure (unreadable data, a broken run) and
 argparse owns ``2`` for a usage error, so a stop needs a code of its own.
-``--force`` runs every stage regardless, but a run whose gates failed still
+``--force`` runs every stage regardless (except the holdout, which a failed
+gate leaves unspent), but a run whose gates failed still
 exits ``3``: the exit code reports the verdict, ``--force`` only controls how
 much work is done before the verdict is printed.
 
@@ -164,6 +168,11 @@ STAGE_HOLDOUT = 'holdout'
 #: beating the passive alternative and losing to it on bars nothing was fitted
 #: on. It is still a flag, because how much excess is enough is arguable.
 DEFAULT_MIN_HOLDOUT_EXCESS = 0.0
+
+#: A strategy that stays flat while the asset falls has positive excess over
+#: buy-and-hold without having done anything. One completed round trip is the
+#: least that separates "beat holding" from "did not trade".
+DEFAULT_MIN_HOLDOUT_TRADES = 1
 
 _SEPARATOR = '=' * 78
 
@@ -529,7 +538,8 @@ def check_holdout_follows_research(research, holdout) -> None:
 
 def run_holdout_stage(holdout, symbol: str, strategy_name: str,
                       parameters: Dict[str, Any], run_config: RunConfig,
-                      min_excess: float) -> StageResult:
+                      min_excess: float,
+                      min_trades: int = DEFAULT_MIN_HOLDOUT_TRADES) -> StageResult:
     """Stage 5: does the fitted strategy beat holding on bars nothing has seen?
 
     One backtest, with the parameters stage 2 chose on the research data.
@@ -548,9 +558,12 @@ def run_holdout_stage(holdout, symbol: str, strategy_name: str,
         parameters: The winning parameters from the optimize stage.
         run_config: Engine settings, the same ones every earlier stage ran under.
         min_excess: Gate on excess return over buy-and-hold, in percentage points.
+        min_trades: Gate on completed round trips. Reported first, because
+            below it the excess is not a measurement of the strategy.
 
     Returns:
-        The stage result, gated on excess return over buy-and-hold.
+        The stage result, gated on round trips and on excess return over
+        buy-and-hold.
     """
     engine = BacktestEngine.from_config(run_config)
     result = engine.run_backtest(create_strategy(strategy_name, parameters),
@@ -571,14 +584,30 @@ def run_holdout_stage(holdout, symbol: str, strategy_name: str,
             f"t-statistic {_number(result.t_statistic, 3)}  "
             f"p-value {result.p_value:.4f} (two-sided)")
 
-    stage.gates = [Gate(
-        stage=STAGE_HOLDOUT,
-        quantity='excess over buy-and-hold (pp)',
-        value=result.excess_return_pct,
-        threshold=min_excess,
-        flag='--min-holdout-excess',
-        unknown_reason='no benchmark could be established on the holdout',
-    )]
+    if result.round_trip_count < min_trades:
+        stage.detail.append(
+            f"the strategy completed {result.round_trip_count} round trip(s) on "
+            f"the holdout: it did not trade enough for its excess over "
+            f"buy-and-hold to show anything about it")
+
+    stage.gates = [
+        Gate(
+            stage=STAGE_HOLDOUT,
+            quantity='round trips',
+            value=float(result.round_trip_count),
+            threshold=float(min_trades),
+            flag='--min-holdout-trades',
+            precision=0,
+        ),
+        Gate(
+            stage=STAGE_HOLDOUT,
+            quantity='excess over buy-and-hold (pp)',
+            value=result.excess_return_pct,
+            threshold=min_excess,
+            flag='--min-holdout-excess',
+            unknown_reason='no benchmark could be established on the holdout',
+        ),
+    ]
     stage.payload = {
         'symbol': symbol,
         'parameters': parameters,
@@ -660,8 +689,9 @@ outcome), 1 = the run failed.
                         help='Holdout OHLCV CSV for a final stage: one backtest of '
                              'the stage-2 winner, nothing fitted. It must start '
                              'after --data ends. Looking at it spends it, so it '
-                             'must be typed here and cannot come from niffler.toml; '
-                             '--force runs it even after an earlier gate failed')
+                             'must be typed here and cannot come from niffler.toml, '
+                             'and it only runs once every earlier gate has passed: '
+                             '--force does not spend it on a strategy that failed')
     parser.add_argument('--clean', action='store_true',
                         help='Run the preprocessing pipeline on each dataset first')
     add_exporter_arguments(parser, default='console')
@@ -681,7 +711,8 @@ outcome), 1 = the run failed.
     gates = parser.add_argument_group(
         'gate thresholds',
         'Judgment calls, not results. --min-trades-for-significance reuses the '
-        'framework constant and --min-holdout-excess defaults to break-even; '
+        'framework constant, --min-holdout-excess defaults to break-even and '
+        '--min-holdout-trades to one round trip; '
         'the other three are set where a reasonable person would want to look '
         'again, and are meant to be argued with.')
     gates.add_argument('--min-retention', type=float, default=DEFAULT_MIN_RETENTION,
@@ -709,6 +740,12 @@ outcome), 1 = the run failed.
                             f"percentage points (default: "
                             f"{DEFAULT_MIN_HOLDOUT_EXCESS:g} - the line between "
                             f"beating the passive alternative and losing to it)")
+    gates.add_argument('--min-holdout-trades', type=int,
+                       default=DEFAULT_MIN_HOLDOUT_TRADES,
+                       help=f"Stage 5: completed round trips on the holdout "
+                            f"(default: {DEFAULT_MIN_HOLDOUT_TRADES} - a strategy "
+                            f"that never traded has an excess over buy-and-hold "
+                            f"that shows nothing)")
 
     search = parser.add_argument_group('search and folds')
     search.add_argument('--optimization-method', '--optimization_method', default='grid',
@@ -885,12 +922,24 @@ def main() -> int:
                         report_stage(skipped)
                         reached_holdout = True
 
-                    if reached_holdout and holdout is not None:
+                    if reached_holdout and holdout is not None \
+                            and stopped_at is not None:
+                        # Only --force gets here with a failed gate behind it.
+                        skipped = StageResult(
+                            name=STAGE_HOLDOUT,
+                            skipped_reason='an earlier gate failed; the holdout '
+                                           'was not spent on a strategy that '
+                                           'already has its verdict (--force '
+                                           'does not override this)')
+                        stages.append(skipped)
+                        report_stage(skipped)
+                    elif reached_holdout and holdout is not None:
                         holdout_stage = run_holdout_stage(
                             holdout, symbol_from_path(args.holdout_data),
                             args.strategy,
                             optimize_stage.payload['winner_parameters'],
-                            run_config, args.min_holdout_excess)
+                            run_config, args.min_holdout_excess,
+                            args.min_holdout_trades)
                         screened.append(args.holdout_data)
                         record(holdout_stage)
                     elif reached_holdout:
@@ -973,6 +1022,7 @@ def main() -> int:
                 'min_efficiency': args.min_efficiency,
                 'min_beat_pct': args.min_beat_pct,
                 'min_holdout_excess': args.min_holdout_excess,
+                'min_holdout_trades': args.min_holdout_trades,
             },
             'stages': [
                 {
