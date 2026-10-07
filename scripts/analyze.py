@@ -97,7 +97,7 @@ Examples:
     parser.add_argument(
         '--analysis',
         required=True,
-        choices=['walk_forward', 'monte_carlo'],
+        choices=[RUN_KIND_WALK_FORWARD, RUN_KIND_MONTE_CARLO],
         help='Type of analysis to perform'
     )
     
@@ -552,7 +552,7 @@ def build_results_document(result) -> dict:
 
     # Add period/simulation results
     df = result.to_dataframe()
-    if result.analysis_type == 'walk_forward':
+    if result.analysis_type == RUN_KIND_WALK_FORWARD:
         output_data['period_results'] = df.to_dict('records')
     else:  # monte_carlo
         output_data['simulation_results'] = df.to_dict('records')
@@ -592,11 +592,18 @@ def build_export_views(result, document: dict):
     summary['failed_runs'] = getattr(result, 'failed_runs', None)
     summary['failure_rate'] = getattr(result, 'failure_rate', None)
 
-    if document.get('analysis_type') == 'walk_forward':
+    if document.get('analysis_type') == RUN_KIND_WALK_FORWARD:
         metadata = result.metadata if isinstance(result.metadata, dict) else {}
         folds = metadata.get('folds')
-        rows = folds if isinstance(folds, list) and folds else document.get('period_results')
-        return summary, {DETAIL_FOLD: list(rows or [])}
+        periods = list(document.get('period_results') or [])
+        if not (isinstance(folds, list) and folds):
+            return summary, {DETAIL_FOLD: periods}
+        if len(folds) != len(periods):
+            return summary, {DETAIL_FOLD: list(folds)}
+        # One shape, not two: the period row has Sharpe and drawdown, the fold
+        # record has the in-sample/out-of-sample pair. A fold row needs both.
+        return summary, {DETAIL_FOLD: [
+            {**period, **fold} for period, fold in zip(periods, folds)]}
 
     return summary, {DETAIL_SIMULATION: list(document.get('simulation_results') or [])}
 
@@ -633,12 +640,12 @@ def main() -> int:
         # Load parameters. A fixed parameter set is only meaningful for Monte Carlo and
         # for the segmented in-sample mode; real walk-forward refits them per fold.
         resolved = load_parameters(args, config)
-        uses_fixed_parameters = (args.analysis == 'monte_carlo'
+        uses_fixed_parameters = (args.analysis == RUN_KIND_MONTE_CARLO
                                  or args.mode == MODE_SEGMENTED_IN_SAMPLE)
         if resolved.supplied:
             parameters = resolved.values
             logging.info(f"Strategy parameters: {parameters}")
-        elif args.analysis == 'monte_carlo':
+        elif args.analysis == RUN_KIND_MONTE_CARLO:
             raise ValueError(
                 "--params or --params-file is required for --analysis monte_carlo"
             )
@@ -658,7 +665,8 @@ def main() -> int:
         # given alongside it fed nothing and is not this run's parent.
         identity, identity_note = build_run_identity(
             args,
-            RUN_KIND_MONTE_CARLO if args.analysis == 'monte_carlo' else RUN_KIND_WALK_FORWARD,
+            # --analysis takes the run kinds themselves, so it is the kind.
+            args.analysis,
             config=config,
             parent=resolved.parent if uses_fixed_parameters else None,
             experiment_typed=experiment_typed,
@@ -671,9 +679,9 @@ def main() -> int:
         configure_exporters(exporter_manager, args, identity.kind)
 
         # Run analysis
-        if args.analysis == 'walk_forward':
+        if args.analysis == RUN_KIND_WALK_FORWARD:
             result = run_walk_forward_analysis(args, data, parameters, run_config)
-        elif args.analysis == 'monte_carlo':
+        elif args.analysis == RUN_KIND_MONTE_CARLO:
             result = run_monte_carlo_analysis(args, data, parameters, run_config)
         else:
             raise ValueError(f"Unknown analysis type: {args.analysis}")

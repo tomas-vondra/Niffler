@@ -101,10 +101,12 @@ uv run python visualization/clean_elasticsearch.py --force
 
 **What gets deleted:** everything matching `niffler-*`, which today means
 
-- `niffler-runs` - Backtest metadata
+- `niffler-runs` - One summary per run of any kind
 - `niffler-portfolio-values` - Portfolio time-series
 - `niffler-trades` - Trade records (now including a `commission` field)
 - `niffler-positions` - Completed round trips
+- `niffler-trials`, `niffler-folds`, `niffler-simulations`, `niffler-comparisons` -
+  optimizer trials, walk-forward folds, Monte Carlo simulations and comparison rows
 
 **Note:** Indices auto-recreate on next backtest run.
 
@@ -338,7 +340,11 @@ Grafana  Kibana
 
 ### Elasticsearch Indices
 
-- **niffler-runs** - One document per backtest with metadata and metrics
+- **niffler-runs** - One summary document per run of any kind (`kind` says which)
+- **niffler-trials / -folds / -simulations / -comparisons** - One document per optimizer
+  trial, walk-forward fold, Monte Carlo simulation or comparison row. The full list, with
+  time fields, comes from `ElasticsearchExporter.index_catalog()`, which
+  `setup_kibana.py` reads to create one data view per index
 - **niffler-portfolio-values** - Time-series data of portfolio value evolution
 - **niffler-trades** - Individual trade records with timestamps and `commission`
 - **niffler-positions** - One document per completed round trip (`quantity`, `entry_price`,

@@ -424,6 +424,10 @@ class TestExporterManager(unittest.TestCase):
         
         expected_metadata = {
             'strategy_key': None,
+            # The header is present even when nothing is known: null, not absent.
+            'git_sha': None,
+            'git_dirty': None,
+            'data_sha256': None,
             'cost_model': None,
             'risk_manager': None,
             'total_commission': 30.0,

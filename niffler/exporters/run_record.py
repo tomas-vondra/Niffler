@@ -34,6 +34,23 @@ DETAIL_TYPES: Tuple[str, ...] = (
 )
 
 
+#: The part of the header that identifies a run and what produced it. Every
+#: exported document carries these, whatever its kind and whichever index it
+#: lands in; a non-backtest run adds the engine settings on top.
+HEADER_FIELDS: Tuple[str, ...] = (
+    'run_id',
+    'kind',
+    'experiment',
+    'parent_run_id',
+    'profile',
+    'strategy_key',
+    'symbol',
+    'git_sha',
+    'git_dirty',
+    'data_sha256',
+)
+
+
 @dataclass(frozen=True)
 class RunRecord:
     """One run's exportable result.

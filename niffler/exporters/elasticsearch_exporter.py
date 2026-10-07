@@ -18,6 +18,7 @@ from .run_record import (
     DETAIL_FOLD,
     DETAIL_SIMULATION,
     DETAIL_TRIAL,
+    HEADER_FIELDS,
     RunRecord,
 )
 from ..utils.json_utils import sanitize_numeric_values
@@ -267,17 +268,21 @@ class ElasticsearchExporter(BaseExporter):
             # Create indices if they don't exist
             self._create_indices()
             
+            # The header a backtest's detail documents share with its summary,
+            # so an equity curve or a trade can be filtered by experiment too.
+            header = {name: metadata.get(name) for name in HEADER_FIELDS}
+
             # Export backtest metadata
             self._export_backtest_metadata(metadata, run_id)
             
             # Export portfolio values
-            self._export_portfolio_values(result, run_id)
+            self._export_portfolio_values(result, run_id, header)
             
             # Export trades
-            self._export_trades(result, run_id)
+            self._export_trades(result, run_id, header)
 
             # Export positions (paired trades with P&L)
-            self._export_positions(result, run_id)
+            self._export_positions(result, run_id, header)
 
             self.logger.info(f"Successfully exported backtest {run_id} to Elasticsearch")
             
@@ -285,6 +290,36 @@ class ElasticsearchExporter(BaseExporter):
             self.logger.error(f"Failed to export to Elasticsearch: {e}")
             raise
     
+    def index_catalog(self) -> List[Dict[str, str]]:
+        """
+        Describe every index this exporter writes.
+
+        The one list of index names, so anything that has to name them - the
+        Kibana data views, a test over the Grafana dashboard - reads it here
+        instead of keeping a copy that drifts. The Kibana setup script had
+        already lost an index and ignored the configured prefix.
+
+        Returns:
+            One entry per index: ``name``, the ``mapping`` file it is created
+            from, the ``time_field`` a data view should use, and a ``title``
+        """
+        catalog = [
+            {'name': self.runs_index, 'mapping': 'runs',
+             'time_field': 'created_at', 'title': 'Runs'},
+            {'name': self.portfolio_index, 'mapping': 'portfolio',
+             'time_field': 'timestamp', 'title': 'Portfolio Values'},
+            {'name': self.trades_index, 'mapping': 'trades',
+             'time_field': 'timestamp', 'title': 'Trades'},
+            {'name': self.positions_index, 'mapping': 'positions',
+             'time_field': 'entry_timestamp', 'title': 'Positions'},
+        ]
+        for detail_type, (suffix, mapping_name) in self._DETAIL_INDICES.items():
+            catalog.append({
+                'name': self.detail_index(detail_type), 'mapping': mapping_name,
+                'time_field': 'created_at', 'title': suffix.title(),
+            })
+        return catalog
+
     def detail_index(self, detail_type: str) -> str:
         """Return the index a detail type is written to.
 
@@ -442,7 +477,8 @@ class ElasticsearchExporter(BaseExporter):
         )
         self.logger.debug(f"Exported backtest metadata for {run_id}")
     
-    def _export_portfolio_values(self, result: BacktestResult, run_id: str) -> None:
+    def _export_portfolio_values(self, result: BacktestResult, run_id: str,
+                                 header: Optional[Dict[str, Any]] = None) -> None:
         """Export portfolio values with drawdown, rolling Sharpe ratio, and volatility to Elasticsearch using bulk API."""
         if result.portfolio_values.empty:
             self.logger.warning("No portfolio values to export")
@@ -478,10 +514,13 @@ class ElasticsearchExporter(BaseExporter):
         # Prepare bulk data
         actions = []
         created_at = datetime.now(UTC).isoformat()
-        for timestamp, row in df.iterrows():
+        for row_index, (timestamp, row) in enumerate(df.iterrows()):
             action = {
                 "_index": self.portfolio_index,
+                # Deterministic, so re-exporting a run overwrites its curve.
+                "_id": f"{run_id}:portfolio:{row_index}",
                 "_source": {
+                    **(header or {}),
                     "run_id": run_id,
                     "timestamp": timestamp.isoformat(),
                     "portfolio_value": float(row['portfolio_value']),
@@ -497,7 +536,8 @@ class ElasticsearchExporter(BaseExporter):
         self._bulk_index(actions)
         self.logger.debug(f"Exported {len(actions)} portfolio values with metrics for {run_id}")
     
-    def _export_trades(self, result: BacktestResult, run_id: str) -> None:
+    def _export_trades(self, result: BacktestResult, run_id: str,
+                       header: Optional[Dict[str, Any]] = None) -> None:
         """Export trades to Elasticsearch using bulk API."""
         if not result.trades:
             self.logger.info("No trades to export")
@@ -506,10 +546,12 @@ class ElasticsearchExporter(BaseExporter):
         # Prepare bulk data
         actions = []
         created_at = datetime.now(UTC).isoformat()
-        for trade in result.trades:
+        for row_index, trade in enumerate(result.trades):
             action = {
                 "_index": self.trades_index,
+                "_id": f"{run_id}:trade:{row_index}",
                 "_source": {
+                    **(header or {}),
                     "run_id": run_id,
                     "timestamp": trade.timestamp.isoformat(),
                     "symbol": trade.symbol,
@@ -529,7 +571,8 @@ class ElasticsearchExporter(BaseExporter):
         self._bulk_index(actions)
         self.logger.debug(f"Exported {len(actions)} trades for {run_id}")
 
-    def _export_positions(self, result: BacktestResult, run_id: str) -> None:
+    def _export_positions(self, result: BacktestResult, run_id: str,
+                          header: Optional[Dict[str, Any]] = None) -> None:
         """
         Export realised round trips (positions) with P&L calculations to Elasticsearch.
 
@@ -571,6 +614,7 @@ class ElasticsearchExporter(BaseExporter):
             duration_hours = duration.total_seconds() / 3600
 
             positions.append({
+                **(header or {}),
                 "run_id": run_id,
                 "position_id": f"{run_id}-pos-{counter}",
                 "symbol": rt.symbol,
@@ -597,6 +641,7 @@ class ElasticsearchExporter(BaseExporter):
         for position in positions:
             action = {
                 "_index": self.positions_index,
+                "_id": position["position_id"],
                 "_source": position
             }
             actions.append(action)

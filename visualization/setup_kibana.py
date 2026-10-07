@@ -9,6 +9,7 @@ Usage:
 """
 
 import sys
+from pathlib import Path
 
 try:
     import requests
@@ -16,6 +17,25 @@ except ImportError:
     print("Error: requests package not installed.")
     print("Install it with: uv sync")
     sys.exit(1)
+
+
+def niffler_data_views() -> list:
+    """Return one data view per index the Elasticsearch exporter writes.
+
+    Read from the exporter rather than listed here: a hand-kept copy had already
+    lost the positions index and ignored ELASTICSEARCH_INDEX_PREFIX.
+
+    Returns:
+        Dicts with ``title``, ``pattern`` and ``time_field``.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from niffler.exporters.elasticsearch_exporter import ElasticsearchExporter
+
+    return [
+        {"title": f"Niffler {index['title']}", "pattern": index["name"],
+         "time_field": index["time_field"]}
+        for index in ElasticsearchExporter().index_catalog()
+    ]
 
 
 class KibanaSetup:
@@ -83,15 +103,7 @@ class KibanaSetup:
 
     def setup(self) -> bool:
         """Create all Niffler data views."""
-        data_views = [
-            {"title": "Niffler Runs", "pattern": "niffler-runs", "time_field": "created_at"},
-            {"title": "Niffler Trials", "pattern": "niffler-trials", "time_field": "created_at"},
-            {"title": "Niffler Folds", "pattern": "niffler-folds", "time_field": "created_at"},
-            {"title": "Niffler Simulations", "pattern": "niffler-simulations", "time_field": "created_at"},
-            {"title": "Niffler Comparisons", "pattern": "niffler-comparisons", "time_field": "created_at"},
-            {"title": "Niffler Portfolio Values", "pattern": "niffler-portfolio-values", "time_field": "timestamp"},
-            {"title": "Niffler Trades", "pattern": "niffler-trades", "time_field": "timestamp"}
-        ]
+        data_views = niffler_data_views()
 
         print("=" * 80)
         print("Kibana Data Views Setup")
