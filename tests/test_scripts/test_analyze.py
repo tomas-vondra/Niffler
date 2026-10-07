@@ -764,5 +764,109 @@ class TestAnalyzeIntegration(unittest.TestCase):
         self.assertIn('Percentile Analysis', output)
 
 
+def parse_analyze_args(argv):
+    """Parse a command line with analyze.py's own parser."""
+    return analyze.create_parser().parse_args(argv)
+
+
+class TestWalkForwardStepAndOverlapLabels(unittest.TestCase):
+    """--step defaults to the test window, and overlapping folds are labelled."""
+
+    BASE_ARGV = ['--data', 'x.csv', '--analysis', 'walk_forward', '--strategy', 'simple_ma']
+
+    def _result(self, overlap_pct):
+        result = Mock()
+        result.analysis_type = 'walk_forward'
+        result.strategy_name = 'SimpleMAStrategy'
+        result.symbol = 'TEST'
+        result.analysis_start_date = datetime(2023, 1, 1)
+        result.analysis_end_date = datetime(2023, 12, 31)
+        result.n_periods = 8
+        result.combined_metrics = {
+            'oos_overlap_pct': overlap_pct,
+            'combined_sharpe_ratio': 1.25,
+            'profitable_periods_pct': 87.5,
+        }
+        result.stability_metrics = {'return_consistency': 0.8}
+        result.analysis_parameters = {'test_window_months': 6}
+        result.metadata = {}
+        result.get_summary_statistics.return_value = {}
+        result.get_performance_consistency.return_value = {'positive_periods_pct': 87.5}
+        result.to_dataframe.return_value = pd.DataFrame({'total_return': [1.0, 2.0]})
+        return result
+
+    def _run(self, overlap_pct, step):
+        args = parse_analyze_args(
+            self.BASE_ARGV + ([] if step is None else ['--step', str(step)]))
+        with patch('analyze.WalkForwardAnalyzer') as analyzer_class:
+            analyzer = analyzer_class.return_value
+            analyzer.step_months = step if step is not None else args.test_window
+            analyzer.analyze.return_value = self._result(overlap_pct)
+            with patch('sys.stdout', new_callable=StringIO) as stdout:
+                analyze.run_walk_forward_analysis(args, pd.DataFrame(), None)
+        return analyzer_class, stdout.getvalue()
+
+    def test_step_is_unset_by_default(self):
+        self.assertIsNone(parse_analyze_args(self.BASE_ARGV).step)
+
+    def test_unset_step_reaches_the_analyzer_unset(self):
+        analyzer_class, _ = self._run(overlap_pct=0.0, step=None)
+
+        self.assertIsNone(analyzer_class.call_args.kwargs['step_months'])
+
+    def test_the_step_actually_used_is_printed(self):
+        _, output = self._run(overlap_pct=0.0, step=None)
+        self.assertIn('Step Size: 6 months (default: equal to the test window)', output)
+
+        _, output = self._run(overlap_pct=50.0, step=3)
+        self.assertIn('Step Size: 3 months\n', output)
+
+    def test_independent_folds_carry_no_label(self):
+        _, output = self._run(overlap_pct=0.0, step=None)
+
+        self.assertNotIn(analyze.OVERLAP_TAG, output)
+        self.assertNotIn('FOLDS OVERLAP', output)
+        self.assertIn('  profitable_periods_pct: 87.5000\n', output)
+
+    def test_overlapping_folds_label_every_per_fold_number(self):
+        _, output = self._run(overlap_pct=50.0, step=3)
+
+        self.assertIn('FOLDS OVERLAP: 50.0% of pooled', output)
+        self.assertIn(f'  profitable_periods_pct: 87.5000  {analyze.OVERLAP_TAG}\n', output)
+        self.assertIn(f'  return_consistency: 0.8000  {analyze.OVERLAP_TAG}\n', output)
+
+    def test_pooled_numbers_are_not_labelled(self):
+        _, output = self._run(overlap_pct=50.0, step=3)
+
+        self.assertIn('  combined_sharpe_ratio: 1.2500\n', output)
+        self.assertIn('  oos_overlap_pct: 50.0000\n', output)
+
+    def test_the_document_says_whether_folds_are_independent(self):
+        overlapping = analyze.build_results_document(self._result(50.0))
+        independent = analyze.build_results_document(self._result(0.0))
+
+        self.assertIs(overlapping['fold_independence']['folds_independent'], False)
+        self.assertEqual(overlapping['fold_independence']['per_fold_metrics'],
+                         ['profitable_periods_pct'])
+        self.assertIs(independent['fold_independence']['folds_independent'], True)
+
+    def test_the_exported_summary_carries_the_label(self):
+        result = self._result(50.0)
+
+        summary, _ = analyze.build_export_views(result, analyze.build_results_document(result))
+
+        self.assertIs(summary['fold_independence']['folds_independent'], False)
+
+    def test_monte_carlo_has_no_fold_label(self):
+        result = self._result(0.0)
+        result.analysis_type = 'monte_carlo'
+        document = analyze.build_results_document(result)
+
+        summary, _ = analyze.build_export_views(result, document)
+
+        self.assertNotIn('fold_independence', document)
+        self.assertNotIn('fold_independence', summary)
+
+
 if __name__ == '__main__':
     unittest.main()

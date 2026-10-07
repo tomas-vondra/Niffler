@@ -8,6 +8,9 @@ from .walk_forward_analyzer import (
     WalkForwardWindow,
     MODE_WALK_FORWARD,
     MODE_SEGMENTED_IN_SAMPLE,
+    OVERLAP_TAG,
+    POOLED_METRICS,
+    describe_fold_independence,
 )
 from .monte_carlo_analyzer import MonteCarloAnalyzer
 from .analysis_result import AnalysisResult, FAILURE_RATE_WARNING_THRESHOLD, log_failure_rate
@@ -18,6 +21,9 @@ __all__ = [
     'WalkForwardWindow',
     'MODE_WALK_FORWARD',
     'MODE_SEGMENTED_IN_SAMPLE',
+    'OVERLAP_TAG',
+    'POOLED_METRICS',
+    'describe_fold_independence',
     'MonteCarloAnalyzer',
     'AnalysisResult',
     'FAILURE_RATE_WARNING_THRESHOLD',

@@ -13,9 +13,9 @@ an asset that went sideways, without carrying any information about the strategy
 row is therefore reported against a buy-and-hold benchmark computed over the *same*
 out-of-sample span and charged the *same* commission and cost model.
 
-**Non-overlapping folds by default.** ``analyze.py`` defaults to ``step_months=3`` with
-``test_window_months=6``, so consecutive out-of-sample windows share half their bars and
-N folds are not N independent observations. Here ``--step`` defaults to ``--test-window``,
+**Non-overlapping folds by default.** With a step smaller than the test window,
+consecutive out-of-sample windows share bars and N folds are not N independent
+observations. ``--step`` defaults to ``--test-window``, as it does in ``analyze.py``,
 because the whole point of this script is counting independent evidence.
 """
 

@@ -540,6 +540,26 @@ $50 of cash could not buy a share priced at $100. The engine trades fractional u
 always could — the test was pinning the rounding bug, not a rule, and now asserts the half
 share it really buys.
 
+### 11. Walk-forward folds no longer overlap by default
+
+`analyze.py --step` used to default to 3 months against a 6-month `--test-window`, so
+consecutive out-of-sample windows shared half their bars and every fold-counting figure
+treated the same quarter as two observations. `--step` now defaults to `--test-window`,
+the rule `compare.py` and `screen.py` already followed, and `WalkForwardAnalyzer` does the
+same when `step_months` is left unset.
+
+**A walk-forward run without `--step` now produces fewer folds and different per-fold
+figures.** On five years of daily data the default schedule goes from 15 folds to 8. Pooled
+figures move too, because the folds are fitted on different training windows.
+
+- Pass `--step 3` to reproduce an old schedule. Overlap is still allowed and still warned
+  about.
+- The step actually used is printed, marked `(default: equal to the test window)` when the
+  flag was not given.
+- When folds do overlap, every number that counts a fold as one sample is tagged
+  `[overlapping folds - not independent]` on the console, and the saved document carries
+  `fold_independence.folds_independent: false`. No effective fold count is estimated.
+
 ## What Niffler does *not* do
 
 Being explicit, so nobody discovers these the expensive way:
@@ -571,9 +591,10 @@ Being explicit, so nobody discovers these the expensive way:
   optimisation result records the risk manager it ran under, but `--params-file` reads only
   the parameters, so the flags have to be repeated on the validation run — exactly as they
   do for `--cost-model`.
-- **Walk-forward folds still overlap by default** (`test_window=6`, `step=3`). Repeated
-  out-of-sample bars are counted once for the combined Sharpe and the overlap is reported
-  and warned about, but per-fold counters still treat each fold as one sample.
+- **No correction for overlapping walk-forward folds.** Folds no longer overlap by default,
+  but `--step` below `--test-window` still overlaps them. Repeated out-of-sample bars are
+  then counted once for the combined Sharpe, and the per-fold counters are labelled as
+  counting non-independent folds - labelled, not corrected.
 - **No multiple-testing correction, and no deflated Sharpe ratio.** The significance test
   answers "is this one strategy's mean trade return distinguishable from zero on this one
   sample". It knows nothing about how many parameter sets were tried to find it. If you
