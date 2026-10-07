@@ -132,9 +132,9 @@ def main() -> int:
                         help='Trading pair (e.g., BTC/USDT for ccxt, BTC-USD for yahoo).')
     parser.add_argument('--timeframe', type=str, default='1d',
                         help='Timeframe/interval (e.g., 1m, 5m, 1h, 1d for ccxt; 1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo for yahoo).')
-    parser.add_argument('--start_date', type=str, required=True,
+    parser.add_argument('--start-date', '--start_date', type=str, required=True,
                         help='Start date for data download (YYYY-MM-DD). Required for ccxt and yahoo.')
-    parser.add_argument('--end_date', type=str,
+    parser.add_argument('--end-date', '--end_date', type=str,
                         help='End date for data download (YYYY-MM-DD). Optional. Defaults to todays date if not provided.')
     parser.add_argument('--exchange', type=str, default=None,
                         help='Exchange ID (e.g., binance, bybit). Default is "binance". Only required for ccxt source.')

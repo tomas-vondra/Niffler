@@ -14,7 +14,7 @@ python scripts/optimize.py --data <data_file> --strategy <strategy_name> [--meth
 - `--sort-by`: Metric to sort results by, default: `total_return` (see
   [sorting](#sorting-by-total_return-rediscovers-buy-and-hold))
 - `--initial-capital`: Starting capital, default: 10000. (Spelled `--capital` in
-  `backtest.py` and `--initial_capital` in `analyze.py`; the three CLIs have not been
+  `backtest.py` and `--initial-capital` in `analyze.py`; the three CLIs have not been
   harmonised.)
 - `--commission`: Commission rate per trade, default: 0.001
 - `--clean`: Apply the data cleaning pipeline before optimization
@@ -162,7 +162,7 @@ is a decision for the repository owner.
 `max_drawdown` is expressed as a **negative** percentage (`-5.0` is a 5% drawdown), but it
 was configured as "lower is better". Sorting `-5 / -40 / -12` therefore put `-40` first, so
 `--sort-by max_drawdown` — and any walk-forward fold using
-`--optimization_metric max_drawdown`, which takes `results[0]` — selected the **worst**
+`--optimization-metric max_drawdown`, which takes `results[0]` — selected the **worst**
 drawdown every time.
 
 It is now sorted highest-first, so the **shallowest** drawdown ranks first. Sorting by any
@@ -187,7 +187,7 @@ metrics are emitted as **`null`** rather than the non-standard `Infinity` / `NaN
 that most JSON parsers reject. This matters here in particular: degenerate parameter
 combinations legitimately produce an infinite profit factor (no losing trades) or a NaN
 Sharpe ratio (zero variance), and the resulting file used to be unparseable by anything
-strict — including the `--params_file` path in `analyze.py`.
+strict — including the `--params-file` path in `analyze.py`.
 
 #### Console Output
 Real-time optimization progress including:
@@ -211,7 +211,7 @@ Real-time optimization progress including:
 
 #### Analysis Pipeline Integration
 - Optimization results compatible with analysis scripts (`analyze.py`)
-- JSON output can be used as `--params_file` input for robustness testing
+- JSON output can be used as `--params-file` input for robustness testing
 - Seamless workflow from optimization to validation
 
 ### Parameter Space Configuration

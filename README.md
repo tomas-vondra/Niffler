@@ -53,7 +53,7 @@ python -m unittest discover -s tests -p "test_*.py"
 
 ```bash
 # 1. Download market data
-python scripts/download_data.py --source ccxt --symbol BTC/USDT --timeframe 1d --start_date 2024-01-01 --end_date 2024-12-31 --exchange binance
+python scripts/download_data.py --source ccxt --symbol BTC/USDT --timeframe 1d --start-date 2024-01-01 --end-date 2024-12-31 --exchange binance
 
 # 2. Clean the data
 python scripts/preprocessor.py --input data/BTCUSDT_binance_1d_20240101_20241231.csv
@@ -187,7 +187,7 @@ python scripts/compare.py --data data/BTCUSDT_research.csv data/SPY_research.csv
 
 Each out-of-sample fold is measured against buy-and-hold **over the same bars** and the
 same costs — an absolute return says more about the asset than the strategy — and the
-folds do not overlap by default (`--step` defaults to `--test_window`), so the rows count
+folds do not overlap by default (`--step` defaults to `--test-window`), so the rows count
 independent evidence. The headline column is `BEAT%`: the share of folds where the
 strategy actually beat holding the asset.
 
@@ -396,9 +396,9 @@ untouched test window** (`train_end == test_start`, so no bar is ever both train
 tested on), and reports a per-fold walk-forward efficiency ratio.
 
 - New parameters: `parameter_space`, `train_window_months`, `anchored`, `mode`,
-  `optimization_method`, `optimization_metric`. New CLI flags: `--mode`, `--train_window`,
-  `--anchored`, `--optimization_method`, `--optimization_metric`.
-- `--params` / `--params_file` is **no longer required** for walk-forward; parameters are
+  `optimization_method`, `optimization_metric`. New CLI flags: `--mode`, `--train-window`,
+  `--anchored`, `--optimization-method`, `--optimization-metric`.
+- `--params` / `--params-file` is **no longer required** for walk-forward; parameters are
   refit per fold, so any value passed is ignored with a warning.
 - The old behaviour is still reachable as `--mode segmented_in_sample`, which requires
   `--params`, logs a warning that its results are not out-of-sample, and marks every fold
@@ -567,8 +567,8 @@ Being explicit, so nobody discovers these the expensive way:
   all three blockers.
 - **Single-asset backtests.** The engine runs one symbol at a time, so `max_positions` only
   bites at 1 and total exposure is a single position's own weight.
-- **`analyze.py` does not inherit the risk configuration from a `--params_file`.** An
-  optimisation result records the risk manager it ran under, but `--params_file` reads only
+- **`analyze.py` does not inherit the risk configuration from a `--params-file`.** An
+  optimisation result records the risk manager it ran under, but `--params-file` reads only
   the parameters, so the flags have to be repeated on the validation run — exactly as they
   do for `--cost-model`.
 - **Walk-forward folds still overlap by default** (`test_window=6`, `step=3`). Repeated
@@ -868,7 +868,7 @@ The suite is the source of truth for its own size. Run it:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-At the time of writing this reports **1469 tests, 0 failures, 0 errors**. Treat that as a
+At the time of writing this reports **1473 tests, 0 failures, 0 errors**. Treat that as a
 sanity check, not a spec — if the command disagrees with this paragraph, believe the
 command. It is the only place in the documentation that quotes a count.
 

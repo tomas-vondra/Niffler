@@ -580,10 +580,10 @@ outcome), 1 = the run failed.
                             f"and the coin-toss line against doing nothing)")
 
     search = parser.add_argument_group('search and folds')
-    search.add_argument('--optimization_method', default='grid',
+    search.add_argument('--optimization-method', '--optimization_method', default='grid',
                         choices=get_available_optimizers(),
                         help='Optimizer used in stage 2 and per fold (default: grid)')
-    search.add_argument('--optimization_metric', default='total_return',
+    search.add_argument('--optimization-metric', '--optimization_metric', default='total_return',
                         help='Metric the optimizer selects by, and the metric the '
                              'plateau surface is built from (default: total_return)')
     search.add_argument('--trials', type=int, default=100,
@@ -591,16 +591,16 @@ outcome), 1 = the run failed.
     search.add_argument('--seed', type=int, default=None,
                         help='Random-search seed, so a screening verdict can be '
                              'reproduced (default: none)')
-    search.add_argument('--train_window', type=int, default=12,
+    search.add_argument('--train-window', '--train_window', type=int, default=12,
                         help='Training window in months (default: 12)')
-    search.add_argument('--test_window', type=int, default=6,
+    search.add_argument('--test-window', '--test_window', type=int, default=6,
                         help='Test window in months (default: 6)')
     search.add_argument('--step', type=int, default=None,
-                        help='Months between folds (default: --test_window, which '
+                        help='Months between folds (default: --test-window, which '
                              'keeps out-of-sample windows non-overlapping)')
     search.add_argument('--anchored', action='store_true',
                         help='Anchor every training window at the first bar')
-    search.add_argument('--n_jobs', '--jobs', dest='n_jobs', type=int, default=None,
+    search.add_argument('--jobs', '--n-jobs', '--n_jobs', dest='n_jobs', type=int, default=None,
                         help='Parallel jobs (default: auto)')
 
     add_cost_model_arguments(parser)
