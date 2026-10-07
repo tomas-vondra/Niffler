@@ -5,7 +5,6 @@ Defines the interface that all exporters must implement for backtesting results.
 """
 
 from abc import ABC, abstractmethod
-import uuid
 from typing import Dict, Any, Optional
 import logging
 
@@ -36,7 +35,7 @@ class BaseExporter(ABC):
         self.logger = logging.getLogger(self.__class__.__name__)
     
     @abstractmethod
-    def export_backtest_result(self, result: BacktestResult, backtest_id: str,
+    def export_backtest_result(self, result: BacktestResult, run_id: str,
                               metadata: Dict[str, Any]) -> None:
         """
         Export a complete backtest result.
@@ -47,7 +46,7 @@ class BaseExporter(ABC):
 
         Args:
             result: BacktestResult object containing all backtest data
-            backtest_id: Unique identifier for this backtest run
+            run_id: Unique identifier for this backtest run
             metadata: Additional metadata about the backtest (strategy params, config, etc.)
 
         Raises:
@@ -73,10 +72,9 @@ class BaseExporter(ABC):
             raise ExportError(message)
 
 
-    def generate_backtest_id(self) -> str:
-        """Generate a unique backtest ID."""
-        return str(uuid.uuid4())
-    
+    # No run-id generator here: niffler.utils.run_identity.mint_run_id is the
+    # only mint site, and the id is minted by the caller that owns the run.
+
     # No create_metadata here on purpose. The document is built once, by
     # ExporterManager.create_metadata, and handed to every exporter: a second
     # builder on the base class silently produced a document missing the trade

@@ -24,10 +24,10 @@ class _RecordingExporter(BaseExporter):
         super().__init__()
         self.exported = []
 
-    def export_backtest_result(self, result: BacktestResult, backtest_id: str,
+    def export_backtest_result(self, result: BacktestResult, run_id: str,
                                metadata: Dict[str, Any]) -> None:
         self.require_valid_result(result, "recorder")
-        self.exported.append(backtest_id)
+        self.exported.append(run_id)
 
 
 class TestRequireValidResult(unittest.TestCase):

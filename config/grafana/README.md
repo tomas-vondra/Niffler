@@ -83,7 +83,7 @@ Backtest → Elasticsearch → Grafana Dashboards
 ```
 
 **Elasticsearch Indices:**
-- `niffler-backtests` - Backtest metadata and metrics
+- `niffler-runs` - Backtest metadata and metrics
 - `niffler-portfolio-values` - Time-series portfolio data
 - `niffler-trades` - Individual trade records
 
@@ -169,7 +169,7 @@ Dashboards are automatically loaded from `/var/lib/grafana/dashboards` on startu
 2. Click **Add** → **Visualization**
 3. Select **Niffler Elasticsearch** datasource
 4. Configure query:
-   - **Index**: niffler-backtests, niffler-portfolio-values, or niffler-trades
+   - **Index**: niffler-runs, niffler-portfolio-values, or niffler-trades
    - **Metrics**: avg, sum, count, min, max
    - **Group by**: Date histogram, Terms
 5. Choose visualization type (Time series, Bar chart, Stat, etc.)
@@ -186,7 +186,7 @@ Group by: Terms(strategy_name.keyword)
 **Portfolio Evolution:**
 ```
 Metric: Avg(portfolio_value)
-Group by: Terms(backtest_id.keyword), Date histogram(timestamp)
+Group by: Terms(run_id.keyword), Date histogram(timestamp)
 ```
 
 **Trade Count Over Time:**

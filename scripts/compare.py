@@ -42,15 +42,25 @@ from niffler.optimization.optimizer_factory import (
 from niffler.strategies.registry import get_available_strategies, get_strategy_class
 from niffler.utils.json_utils import safe_json_dump
 from niffler.utils.provenance import collect_provenance
+from niffler.utils.run_identity import RUN_KIND_COMPARE
 from scripts.common import (
     add_cost_model_arguments,
     add_engine_arguments,
+    add_experiment_arguments,
     add_risk_manager_arguments,
     build_run_config,
+    build_run_identity,
     load_ohlcv_csv,
     report_run_config,
+    report_run_identity,
+    run_metadata,
 )
-from scripts.config_file import add_config_arguments, apply_config, report_config
+from scripts.config_file import (
+    add_config_arguments,
+    apply_config,
+    report_config,
+    typed_on_command_line,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -317,10 +327,12 @@ Examples:
 
     # Persisted defaults, folded in before parsing so a flag still wins. Last,
     # so [risk] keys resolve against dests the parser has already declared.
+    add_experiment_arguments(parser)
     add_config_arguments(parser)
     config = apply_config(parser, 'compare')
 
     args = parser.parse_args()
+    experiment_typed = typed_on_command_line(parser, 'experiment')
 
     setup_logging(level=args.log_level)
     report_config(config)
@@ -347,6 +359,16 @@ Examples:
     run_config = build_run_config(args)
     report_run_config(run_config)
 
+    # One run for the whole table: the datasets are its rows, not runs of their own.
+    try:
+        identity, identity_note = build_run_identity(
+            args, RUN_KIND_COMPARE, config=config, experiment_typed=experiment_typed
+        )
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    report_run_identity(identity, identity_note)
+
     print(f"Comparing {len(strategies)} strategy(ies) across {len(args.data)} dataset(s) "
           f"= {len(strategies) * len(args.data)} walk-forward runs")
     print(f"Folds: train {args.train_window}m / test {args.test_window}m / "
@@ -363,6 +385,10 @@ Examples:
 
     if args.output:
         payload = {
+            # A table over several strategies has no single registry key; each
+            # row names its own.
+            'run': run_metadata(identity,
+                                strategies[0] if len(strategies) == 1 else None),
             # One record per dataset: a single provenance block would hash one
             # file and imply it covered every row in the table.
             'provenance': {p: collect_provenance(p) for p in args.data},

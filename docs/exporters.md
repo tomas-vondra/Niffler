@@ -37,12 +37,12 @@ summary = manager.export_backtest_result(result)
 
 summary.successes    # List[str]             - exporter class names that succeeded
 summary.failures     # List[Tuple[str, str]] - (exporter class name, error message)
-summary.backtest_id  # str                   - the id used for this run
+summary.run_id  # str                   - the id used for this run
 summary.ok           # bool                  - True when failures is empty
 ```
 
 - It returns an `ExportSummary`, **not** a bare backtest id string. Consumers must use
-  `summary.backtest_id`.
+  `summary.run_id`.
 - Exporters raise `ExportError` (from `niffler.exporters`) on a precondition failure — an
   invalid result, or an unreachable Elasticsearch cluster (the message carries the URL).
 - Exporters whose **constructor** is rejected (for example an invalid
@@ -108,7 +108,7 @@ backtest id.
 Provenance is condensed into a single line under the backtest id:
 
 ```
-Backtest ID: 76d666a5-e4be-4d85-a2d7-7cb2f105fdf5
+Run ID: 76d666a5-e4be-4d85-a2d7-7cb2f105fdf5
 Provenance: code ff71eba19999 (feat/provenance, DIRTY) | data a9e9a1efe089
 ```
 
@@ -124,11 +124,11 @@ Writes four files per backtest into `--csv-output-dir`:
 | `<base>_portfolio.csv` | Portfolio value time series |
 | `<base>_trades.csv` | One row per executed trade |
 | `<base>_metadata.json` | Strategy parameters, metrics and run metadata |
-| `<base>_provenance.json` | Run provenance plus the `backtest_id` |
+| `<base>_provenance.json` | Run provenance plus the `run_id` |
 
 ### Filename sanitisation
 
-The base name is `{symbol}_{strategy}_{start}_{end}_{short_backtest_id}`, and each
+The base name is `{symbol}_{strategy}_{start}_{end}_{short_run_id}`, and each
 user-derived component is slugified by `sanitize_path_component()` before it reaches the
 filesystem:
 
@@ -146,7 +146,7 @@ Already-safe names such as `BTC-USD` and `Simple_MA_Strategy` are unchanged.
 
 ### Trade columns
 
-The trades CSV carries a **`commission`** column (between `value` and `backtest_id`),
+The trades CSV carries a **`commission`** column (between `value` and `run_id`),
 populated from the `Trade.commission` field the engine now fills in on both buys and sells.
 
 ### JSON metadata
@@ -181,7 +181,7 @@ Bulk-indexes results into four indices (prefix configurable, default `niffler`):
 
 | Index | One document per |
 |-------|------------------|
-| `niffler-backtests` | Backtest, with metadata and metrics |
+| `niffler-runs` | Backtest, with metadata and metrics |
 | `niffler-portfolio-values` | Portfolio value observation |
 | `niffler-trades` | Executed trade (includes `commission`) |
 | `niffler-positions` | Completed **round trip** |
@@ -190,7 +190,7 @@ Mappings live in `config/elasticsearch/mappings/`.
 
 ### The provenance mapping
 
-`niffler-backtests` maps the `provenance` object explicitly, because a mapping is the one
+`niffler-runs` maps the `provenance` object explicitly, because a mapping is the one
 thing that cannot be fixed after the fact — once documents are indexed, correcting a field
 type requires a reindex:
 
@@ -235,7 +235,7 @@ Two nulls carry meaning and must not be filtered away as missing data:
 `niffler-positions` used to be built by a second, hand-rolled pairing loop that matched one
 buy to exactly one sell (dropping later sells), computed P&L as a partial exit's notional
 against the full entry's, and ignored commission. Its documents contradicted the `win_rate`
-and `total_return` reported for the same `backtest_id`.
+and `total_return` reported for the same `run_id`.
 
 It now emits one document per `RoundTrip` from the shared `pair_trades()` routine, carrying
 `quantity`, `entry_price`, `exit_price`, `pnl`, `is_win`, plus `gross_pnl`,
@@ -279,7 +279,7 @@ package installed raises a clear `RuntimeError`.
 
 ## Adding an Exporter
 
-1. Subclass `BaseExporter` and implement `export_backtest_result(result, backtest_id, ...)`.
+1. Subclass `BaseExporter` and implement `export_backtest_result(result, run_id, ...)`.
    Give **every** constructor parameter a default, and do not take `**kwargs`:
    `ExporterManager` reads the options an exporter accepts off its `__init__` with
    `inspect.signature`, and `**kwargs` would make that "everything".

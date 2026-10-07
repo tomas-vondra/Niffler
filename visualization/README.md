@@ -101,7 +101,7 @@ uv run python visualization/clean_elasticsearch.py --force
 
 **What gets deleted:** everything matching `niffler-*`, which today means
 
-- `niffler-backtests` - Backtest metadata
+- `niffler-runs` - Backtest metadata
 - `niffler-portfolio-values` - Portfolio time-series
 - `niffler-trades` - Trade records (now including a `commission` field)
 - `niffler-positions` - Completed round trips
@@ -124,7 +124,7 @@ uv run python visualization/setup_kibana.py
 ```
 
 **What gets created:**
-- `Niffler Backtests` (niffler-backtests, time: created_at)
+- `Niffler Runs` (niffler-runs, time: created_at)
 - `Niffler Portfolio Values` (niffler-portfolio-values, time: timestamp)
 - `Niffler Trades` (niffler-trades, time: timestamp)
 
@@ -338,13 +338,13 @@ Grafana  Kibana
 
 ### Elasticsearch Indices
 
-- **niffler-backtests** - One document per backtest with metadata and metrics
+- **niffler-runs** - One document per backtest with metadata and metrics
 - **niffler-portfolio-values** - Time-series data of portfolio value evolution
 - **niffler-trades** - Individual trade records with timestamps and `commission`
 - **niffler-positions** - One document per completed round trip (`quantity`, `entry_price`,
   `exit_price`, `pnl`, `gross_pnl`, `entry_commission`, `exit_commission`, `is_win`).
   These now reconcile with the `win_rate` and `total_return` reported for the same
-  `backtest_id`; a previous hand-rolled pairing loop made them disagree
+  `run_id`; a previous hand-rolled pairing loop made them disagree
 
 Mappings live in `config/elasticsearch/mappings/`.
 

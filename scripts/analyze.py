@@ -34,15 +34,29 @@ from niffler.optimization.optimizer_factory import (
 from niffler.strategies.registry import get_available_strategies, get_strategy_class
 from niffler.utils.json_utils import safe_json_dump
 from niffler.utils.provenance import collect_provenance
+from niffler.utils.run_identity import RUN_KIND_MONTE_CARLO, RUN_KIND_WALK_FORWARD
 from scripts.common import (
+    PARAMS_TABLE,
+    StrategyParameters,
     add_cost_model_arguments,
     add_engine_arguments,
+    add_experiment_arguments,
     add_risk_manager_arguments,
+    add_strategy_parameter_arguments,
     build_run_config,
+    build_run_identity,
     load_ohlcv_csv,
     report_run_config,
+    report_run_identity,
+    resolve_strategy_parameters,
+    run_metadata,
 )
-from scripts.config_file import add_config_arguments, apply_config, report_config
+from scripts.config_file import (
+    add_config_arguments,
+    apply_config,
+    report_config,
+    typed_on_command_line,
+)
 
 
 def create_parser():
@@ -95,17 +109,11 @@ Examples:
     # Required for monte_carlo and for walk-forward's segmented_in_sample mode. Real
     # walk-forward re-optimises the parameters on every training window, so a fixed
     # parameter set is meaningless there and must not be demanded from the user.
-    param_group = parser.add_mutually_exclusive_group(required=False)
-    param_group.add_argument(
-        '--params',
-        help='Strategy parameters as JSON string (e.g., \'{"short_window": 10, "long_window": 30}\'). '
-             'Required for --analysis monte_carlo and for --mode segmented_in_sample.'
-    )
-    param_group.add_argument(
-        '--params_file',
-        help='Path to JSON file containing optimization results or parameters'
-    )
-    
+    # A fixed set is required for --analysis monte_carlo and for
+    # --mode segmented_in_sample; the two flags combine, --params winning.
+    add_strategy_parameter_arguments(parser)
+    add_experiment_arguments(parser)
+
     # Analysis configuration
     parser.add_argument(
         '--initial_capital', '--capital', '--initial-capital',
@@ -279,47 +287,20 @@ def load_data(file_path: str) -> pd.DataFrame:
     return data
 
 
-def load_parameters(args) -> dict:
-    """Load strategy parameters from command line arguments."""
-    if args.params:
-        # Parse JSON string
-        try:
-            params = json.loads(args.params)
-            logging.info(f"Loaded parameters from command line: {params}")
-            return params
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON in --params: {e}")
-    
-    elif args.params_file:
-        # Load from file
-        try:
-            with open(args.params_file, 'r') as f:
-                data = json.load(f)
-            
-            # Handle different file formats
-            if 'results' in data and len(data['results']) > 0:
-                # Optimization results file - use best result
-                best_result = data['results'][0]
-                params = best_result['parameters']
-                logging.info(f"Loaded best parameters from optimization file: {params}")
-                return params
-            elif 'parameters' in data:
-                # Direct parameters file
-                params = data['parameters']
-                logging.info(f"Loaded parameters from file: {params}")
-                return params
-            else:
-                # Assume the file itself contains the parameters
-                logging.info(f"Loaded parameters from file: {data}")
-                return data
-                
-        except FileNotFoundError:
-            raise ValueError(f"Parameters file not found: {args.params_file}")
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON in parameters file: {e}")
-    
-    else:
-        raise ValueError("Either --params or --params_file must be specified")
+def load_parameters(args, config=None) -> StrategyParameters:
+    """Resolve strategy parameters and the run that produced them.
+
+    The work is :func:`scripts.common.resolve_strategy_parameters`, shared with
+    ``backtest.py``.
+
+    Args:
+        args: Parsed command line arguments.
+        config: The value ``apply_config`` returned, or None.
+
+    Returns:
+        The resolved parameters, their parent run and whether any were supplied.
+    """
+    return resolve_strategy_parameters(args, args.strategy, config=config)
 
 
 def validate_parameters(strategy_class, parameters: dict):
@@ -538,7 +519,8 @@ def run_monte_carlo_analysis(args, data: pd.DataFrame, parameters: dict,
 
 
 
-def save_results(result, output_file: str, provenance: dict = None) -> None:
+def save_results(result, output_file: str, provenance: dict = None,
+                 run: dict = None) -> None:
     """Save analysis results to a JSON file.
 
     Args:
@@ -548,6 +530,7 @@ def save_results(result, output_file: str, provenance: dict = None) -> None:
             ``niffler.utils.provenance.collect_provenance``), written under a
             top-level ``provenance`` key so a walk-forward or Monte Carlo verdict
             can be tied back to the code and data that produced it.
+        run: Optional run identity block, written under a top-level ``run`` key.
 
     Raises:
         OSError: If the file cannot be written.
@@ -583,6 +566,9 @@ def save_results(result, output_file: str, provenance: dict = None) -> None:
         if provenance is not None:
             output_data['provenance'] = provenance
 
+        if run is not None:
+            output_data['run'] = run
+
         # Save to file
         with open(output_file, 'w') as f:
             safe_json_dump(output_data, f, indent=2, default=str)
@@ -605,9 +591,10 @@ def main() -> int:
     parser = create_parser()
 
     # Persisted defaults, folded in before parsing so a flag still wins.
-    config = apply_config(parser, 'analyze')
+    config = apply_config(parser, 'analyze', tables=(PARAMS_TABLE,))
 
     args = parser.parse_args()
+    experiment_typed = typed_on_command_line(parser, 'experiment')
 
     # Setup logging. --verbose stays a shorthand for the level, so the two
     # spellings cannot disagree.
@@ -621,8 +608,12 @@ def main() -> int:
 
         # Load parameters. A fixed parameter set is only meaningful for Monte Carlo and
         # for the segmented in-sample mode; real walk-forward refits them per fold.
-        if args.params or args.params_file:
-            parameters = load_parameters(args)
+        resolved = load_parameters(args, config)
+        uses_fixed_parameters = (args.analysis == 'monte_carlo'
+                                 or args.mode == MODE_SEGMENTED_IN_SAMPLE)
+        if resolved.supplied:
+            parameters = resolved.values
+            logging.info(f"Strategy parameters: {parameters}")
         elif args.analysis == 'monte_carlo':
             raise ValueError(
                 "--params or --params_file is required for --analysis monte_carlo"
@@ -639,6 +630,17 @@ def main() -> int:
         run_config = build_run_config(args)
         report_run_config(run_config)
 
+        # Real walk-forward refits its parameters per fold, so a params file
+        # given alongside it fed nothing and is not this run's parent.
+        identity, identity_note = build_run_identity(
+            args,
+            RUN_KIND_MONTE_CARLO if args.analysis == 'monte_carlo' else RUN_KIND_WALK_FORWARD,
+            config=config,
+            parent=resolved.parent if uses_fixed_parameters else None,
+            experiment_typed=experiment_typed,
+        )
+        report_run_identity(identity, identity_note)
+
         # Run analysis
         if args.analysis == 'walk_forward':
             result = run_walk_forward_analysis(args, data, parameters, run_config)
@@ -649,7 +651,8 @@ def main() -> int:
         
         # Save results if output file specified
         if args.output:
-            save_results(result, args.output, provenance=collect_provenance(args.data))
+            save_results(result, args.output, provenance=collect_provenance(args.data),
+                         run=run_metadata(identity, args.strategy))
         
         print(f"\nAnalysis completed successfully!")
         return 0

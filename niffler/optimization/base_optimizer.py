@@ -404,7 +404,8 @@ class BaseOptimizer(ABC):
             return None
     
     def save_results(self, results: List[OptimizationResult], filename: str,
-                     provenance: Optional[Dict[str, Any]] = None) -> None:
+                     provenance: Optional[Dict[str, Any]] = None,
+                     run: Optional[Dict[str, Any]] = None) -> None:
         """
         Save optimization results to a JSON file.
 
@@ -420,6 +421,9 @@ class BaseOptimizer(ABC):
                 :func:`niffler.utils.provenance.collect_provenance`), written under a
                 top-level ``provenance`` key. An optimisation run whose code and input
                 data cannot be identified is exactly as unreproducible as a backtest's
+            run: Optional run identity block (run_id, kind, experiment, ...), written
+                under a top-level ``run`` key. It is what lets a later
+                ``--params-file`` step record this optimisation as its parent
         """
         output_data = {
             'metadata': {
@@ -438,7 +442,10 @@ class BaseOptimizer(ABC):
 
         if provenance is not None:
             output_data['provenance'] = provenance
-        
+
+        if run is not None:
+            output_data['run'] = run
+
         for result in results:
             result_data = {
                 'parameters': result.parameters,

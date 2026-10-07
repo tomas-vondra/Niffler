@@ -17,6 +17,7 @@ from niffler.exporters.elasticsearch_exporter import ElasticsearchExporter
 from niffler.exporters.registry import EXPORTER_CLASSES
 from tests.test_exporters.test_registry import _ProbeExporter
 from niffler.backtesting.backtest_result import BacktestResult
+from niffler.utils.run_identity import RunIdentity
 
 
 class TestExporterManager(unittest.TestCase):
@@ -211,11 +212,11 @@ class TestExporterManager(unittest.TestCase):
             self.mock_result, strategy_params, symbol, initial_capital, commission
         )
 
-        # Check that a summary with a generated backtest_id is returned
+        # Check that a summary with a generated run_id is returned
         self.assertIsInstance(summary, ExportSummary)
-        backtest_id = summary.backtest_id
-        self.assertIsInstance(backtest_id, str)
-        self.assertEqual(len(backtest_id), 36)  # UUID length
+        run_id = summary.run_id
+        self.assertIsInstance(run_id, str)
+        self.assertEqual(len(run_id), 36)  # UUID length
         self.assertTrue(summary.ok)
         self.assertEqual(summary.failures, [])
         self.assertEqual(len(summary.successes), 2)
@@ -229,11 +230,11 @@ class TestExporterManager(unittest.TestCase):
         args2 = mock_exporter2.export_backtest_result.call_args
         
         self.assertEqual(args1[0][0], self.mock_result)  # result
-        self.assertEqual(args1[0][1], backtest_id)      # backtest_id
+        self.assertEqual(args1[0][1], run_id)      # run_id
         self.assertIsInstance(args1[0][2], dict)        # metadata
         
         self.assertEqual(args2[0][0], self.mock_result)
-        self.assertEqual(args2[0][1], backtest_id)
+        self.assertEqual(args2[0][1], run_id)
         self.assertIsInstance(args2[0][2], dict)
     
     def test_export_backtest_result_with_custom_id(self):
@@ -249,10 +250,10 @@ class TestExporterManager(unittest.TestCase):
         
         summary = self.manager.export_backtest_result(
             self.mock_result, strategy_params, symbol, initial_capital, commission,
-            backtest_id=custom_id
+            identity=RunIdentity(run_id=custom_id, kind='backtest')
         )
 
-        self.assertEqual(summary.backtest_id, custom_id)
+        self.assertEqual(summary.run_id, custom_id)
         self.assertTrue(summary.ok)
 
 
@@ -297,11 +298,11 @@ class TestExporterManager(unittest.TestCase):
     def test_export_backtest_result_summary_reports_exporter_names(self):
         """Summary uses the exporter class names for successes and failures."""
         class FailingExporter(BaseExporter):
-            def export_backtest_result(self, result, backtest_id, metadata):
+            def export_backtest_result(self, result, run_id, metadata):
                 raise RuntimeError("disk full")
 
         class WorkingExporter(BaseExporter):
-            def export_backtest_result(self, result, backtest_id, metadata):
+            def export_backtest_result(self, result, run_id, metadata):
                 return None
 
         self.manager.add_exporter(WorkingExporter())
@@ -368,9 +369,9 @@ class TestExporterManager(unittest.TestCase):
 
     def test_export_summary_ok_property(self):
         """ExportSummary.ok is driven purely by the failure list."""
-        self.assertTrue(ExportSummary(successes=['A'], failures=[], backtest_id='id').ok)
+        self.assertTrue(ExportSummary(successes=['A'], failures=[], run_id='id').ok)
         self.assertFalse(
-            ExportSummary(successes=[], failures=[('A', 'err')], backtest_id='id').ok
+            ExportSummary(successes=[], failures=[('A', 'err')], run_id='id').ok
         )
 
     def test_create_exporter_by_name_elasticsearch_auth_params(self):
@@ -391,11 +392,14 @@ class TestExporterManager(unittest.TestCase):
         self.assertEqual(exporter._auth_mode(), 'api_key')
 
 
-    def test_generate_backtest_id(self):
-        """Test backtest ID generation."""
-        id1 = self.manager._generate_backtest_id()
-        id2 = self.manager._generate_backtest_id()
-        
+    def test_a_run_id_is_minted_when_no_identity_is_given(self):
+        """A library caller with no identity still gets a unique run id."""
+        self.manager.add_exporter(Mock(spec=BaseExporter))
+        export = lambda: self.manager.export_backtest_result(  # noqa: E731
+            self.mock_result, {}, 'BTC-USD', 10000.0, 0.001).run_id
+        id1 = export()
+        id2 = export()
+
         # IDs should be strings and unique
         self.assertIsInstance(id1, str)
         self.assertIsInstance(id2, str)
@@ -417,6 +421,7 @@ class TestExporterManager(unittest.TestCase):
         )
         
         expected_metadata = {
+            'strategy_key': None,
             'cost_model': None,
             'risk_manager': None,
             'total_commission': 30.0,
@@ -482,8 +487,10 @@ class TestExporterManager(unittest.TestCase):
         )
 
         metadata = recorder.export_backtest_result.call_args[0][2]
+        identity_fields = {'run_id', 'kind', 'experiment', 'parent_run_id', 'profile'}
+        self.assertLessEqual(identity_fields, set(metadata))
         self.assertEqual(
-            set(metadata),
+            set(metadata) - identity_fields,
             set(self.manager.create_metadata(
                 self.mock_result, {}, 'BTC-USD', 10000.0, 0.001
             ))

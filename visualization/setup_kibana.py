@@ -84,7 +84,7 @@ class KibanaSetup:
     def setup(self) -> bool:
         """Create all Niffler data views."""
         data_views = [
-            {"title": "Niffler Backtests", "pattern": "niffler-backtests", "time_field": "created_at"},
+            {"title": "Niffler Runs", "pattern": "niffler-runs", "time_field": "created_at"},
             {"title": "Niffler Portfolio Values", "pattern": "niffler-portfolio-values", "time_field": "timestamp"},
             {"title": "Niffler Trades", "pattern": "niffler-trades", "time_field": "timestamp"}
         ]

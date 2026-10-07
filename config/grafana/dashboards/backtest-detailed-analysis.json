@@ -235,7 +235,7 @@
             "type": "elasticsearch",
             "uid": "niffler-elasticsearch"
           },
-          "index": "niffler-backtests",
+          "index": "niffler-runs",
           "metrics": [
             {
               "id": "1",
@@ -245,12 +245,12 @@
               "type": "raw_data"
             }
           ],
-          "query": "_index:niffler-backtests",
+          "query": "_index:niffler-runs",
           "refId": "A",
           "timeField": "created_at"
         }
       ],
-      "title": "Backtest Results - Click backtest_id to select for detailed analysis below",
+      "title": "Backtest Results - Click run_id to select for detailed analysis below",
       "transformations": [
         {
           "id": "organize",
@@ -279,7 +279,7 @@
               "_type": 17,
               "average_loss": 18,
               "average_win": 19,
-              "backtest_id": 0,
+              "run_id": 0,
               "commission": 20,
               "created_at": 1,
               "end_date": 5,
@@ -306,7 +306,7 @@
               "win_rate": 9
             },
             "renameByName": {
-              "backtest_id": "Backtest ID",
+              "run_id": "Run ID",
               "created_at": "Created At",
               "end_date": "End Date",
               "final_capital": "Final Capital",
@@ -411,7 +411,7 @@
             "type": "elasticsearch",
             "uid": "niffler-elasticsearch"
           },
-          "index": "niffler-backtests",
+          "index": "niffler-runs",
           "metrics": [
             {
               "field": "total_return_pct",
@@ -419,7 +419,7 @@
               "type": "avg"
             }
           ],
-          "query": "_index:niffler-backtests AND backtest_id:$backtest_id",
+          "query": "_index:niffler-runs AND run_id:$run_id",
           "refId": "A",
           "timeField": "created_at"
         }
@@ -501,7 +501,7 @@
             "type": "elasticsearch",
             "uid": "niffler-elasticsearch"
           },
-          "index": "niffler-backtests",
+          "index": "niffler-runs",
           "metrics": [
             {
               "field": "sharpe_ratio",
@@ -509,7 +509,7 @@
               "type": "avg"
             }
           ],
-          "query": "_index:niffler-backtests AND backtest_id:$backtest_id",
+          "query": "_index:niffler-runs AND run_id:$run_id",
           "refId": "A",
           "timeField": "created_at"
         }
@@ -591,7 +591,7 @@
             "type": "elasticsearch",
             "uid": "niffler-elasticsearch"
           },
-          "index": "niffler-backtests",
+          "index": "niffler-runs",
           "metrics": [
             {
               "field": "max_drawdown",
@@ -599,7 +599,7 @@
               "type": "avg"
             }
           ],
-          "query": "_index:niffler-backtests AND backtest_id:$backtest_id",
+          "query": "_index:niffler-runs AND run_id:$run_id",
           "refId": "A",
           "timeField": "created_at"
         }
@@ -681,7 +681,7 @@
             "type": "elasticsearch",
             "uid": "niffler-elasticsearch"
           },
-          "index": "niffler-backtests",
+          "index": "niffler-runs",
           "metrics": [
             {
               "field": "win_rate",
@@ -689,7 +689,7 @@
               "type": "avg"
             }
           ],
-          "query": "_index:niffler-backtests AND backtest_id:$backtest_id",
+          "query": "_index:niffler-runs AND run_id:$run_id",
           "refId": "A",
           "timeField": "created_at"
         }
@@ -771,7 +771,7 @@
             "type": "elasticsearch",
             "uid": "niffler-elasticsearch"
           },
-          "index": "niffler-backtests",
+          "index": "niffler-runs",
           "metrics": [
             {
               "field": "profit_factor",
@@ -779,7 +779,7 @@
               "type": "avg"
             }
           ],
-          "query": "_index:niffler-backtests AND backtest_id:$backtest_id",
+          "query": "_index:niffler-runs AND run_id:$run_id",
           "refId": "A",
           "timeField": "created_at"
         }
@@ -853,7 +853,7 @@
             "type": "elasticsearch",
             "uid": "niffler-elasticsearch"
           },
-          "index": "niffler-backtests",
+          "index": "niffler-runs",
           "metrics": [
             {
               "field": "commission",
@@ -861,7 +861,7 @@
               "type": "max"
             }
           ],
-          "query": "_index:niffler-backtests AND backtest_id:$backtest_id",
+          "query": "_index:niffler-runs AND run_id:$run_id",
           "refId": "A",
           "timeField": "created_at"
         }
@@ -934,14 +934,14 @@
             "type": "elasticsearch",
             "uid": "niffler-elasticsearch"
           },
-          "index": "niffler-backtests",
+          "index": "niffler-runs",
           "metrics": [
             {
               "id": "1",
               "type": "count"
             }
           ],
-          "query": "_index:niffler-positions AND backtest_id:$backtest_id",
+          "query": "_index:niffler-positions AND run_id:$run_id",
           "refId": "A",
           "timeField": "created_at"
         }
@@ -1014,7 +1014,7 @@
             "type": "elasticsearch",
             "uid": "niffler-elasticsearch"
           },
-          "index": "niffler-backtests",
+          "index": "niffler-runs",
           "metrics": [
             {
               "field": "num_winning_trades",
@@ -1022,7 +1022,7 @@
               "type": "max"
             }
           ],
-          "query": "_index:niffler-backtests AND backtest_id:$backtest_id",
+          "query": "_index:niffler-runs AND run_id:$run_id",
           "refId": "A",
           "timeField": "created_at"
         }
@@ -1095,7 +1095,7 @@
             "type": "elasticsearch",
             "uid": "niffler-elasticsearch"
           },
-          "index": "niffler-backtests",
+          "index": "niffler-runs",
           "metrics": [
             {
               "field": "num_losing_trades",
@@ -1103,7 +1103,7 @@
               "type": "max"
             }
           ],
-          "query": "_index:niffler-backtests AND backtest_id:$backtest_id",
+          "query": "_index:niffler-runs AND run_id:$run_id",
           "refId": "A",
           "timeField": "created_at"
         }
@@ -1176,7 +1176,7 @@
             "type": "elasticsearch",
             "uid": "niffler-elasticsearch"
           },
-          "index": "niffler-backtests",
+          "index": "niffler-runs",
           "metrics": [
             {
               "field": "largest_win",
@@ -1184,7 +1184,7 @@
               "type": "max"
             }
           ],
-          "query": "_index:niffler-backtests AND backtest_id:$backtest_id",
+          "query": "_index:niffler-runs AND run_id:$run_id",
           "refId": "A",
           "timeField": "created_at"
         }
@@ -1257,7 +1257,7 @@
             "type": "elasticsearch",
             "uid": "niffler-elasticsearch"
           },
-          "index": "niffler-backtests",
+          "index": "niffler-runs",
           "metrics": [
             {
               "field": "largest_loss",
@@ -1265,7 +1265,7 @@
               "type": "max"
             }
           ],
-          "query": "_index:niffler-backtests AND backtest_id:$backtest_id",
+          "query": "_index:niffler-runs AND run_id:$run_id",
           "refId": "A",
           "timeField": "created_at"
         }
@@ -1338,7 +1338,7 @@
             "type": "elasticsearch",
             "uid": "niffler-elasticsearch"
           },
-          "index": "niffler-backtests",
+          "index": "niffler-runs",
           "metrics": [
             {
               "field": "total_return",
@@ -1346,7 +1346,7 @@
               "type": "max"
             }
           ],
-          "query": "_index:niffler-backtests AND backtest_id:$backtest_id",
+          "query": "_index:niffler-runs AND run_id:$run_id",
           "refId": "A",
           "timeField": "created_at"
         }
@@ -1463,7 +1463,7 @@
               "type": "avg"
             }
           ],
-          "query": "_index:niffler-portfolio-values AND backtest_id:$backtest_id",
+          "query": "_index:niffler-portfolio-values AND run_id:$run_id",
           "refId": "A",
           "timeField": "timestamp"
         }
@@ -1595,7 +1595,7 @@
               "type": "avg"
             }
           ],
-          "query": "_index:niffler-portfolio-values AND backtest_id:$backtest_id",
+          "query": "_index:niffler-portfolio-values AND run_id:$run_id",
           "refId": "A",
           "timeField": "timestamp"
         }
@@ -1712,7 +1712,7 @@
               "type": "avg"
             }
           ],
-          "query": "_index:niffler-portfolio-values AND backtest_id:$backtest_id",
+          "query": "_index:niffler-portfolio-values AND run_id:$run_id",
           "refId": "A",
           "timeField": "timestamp"
         }
@@ -1841,7 +1841,7 @@
               "type": "avg"
             }
           ],
-          "query": "_index:niffler-portfolio-values AND backtest_id:$backtest_id",
+          "query": "_index:niffler-portfolio-values AND run_id:$run_id",
           "refId": "A",
           "timeField": "timestamp"
         }
@@ -1993,7 +1993,7 @@
               "type": "raw_document"
             }
           ],
-          "query": "_index:niffler-positions AND backtest_id:$backtest_id",
+          "query": "_index:niffler-positions AND run_id:$run_id",
           "refId": "A",
           "timeField": "entry_timestamp"
         }
@@ -2007,7 +2007,7 @@
               "_id": true,
               "_index": true,
               "_type": true,
-              "backtest_id": true,
+              "run_id": true,
               "created_at": true,
               "highlight": true,
               "position_id": true,
@@ -2063,12 +2063,12 @@
           "type": "elasticsearch",
           "uid": "niffler-elasticsearch"
         },
-        "definition": "{\"find\": \"terms\", \"field\": \"backtest_id\", \"query\": \"_index:niffler-backtests\"}",
+        "definition": "{\"find\": \"terms\", \"field\": \"run_id\", \"query\": \"_index:niffler-runs\"}",
         "includeAll": false,
-        "label": "Backtest ID",
-        "name": "backtest_id",
+        "label": "Run ID",
+        "name": "run_id",
         "options": [],
-        "query": "{\"find\": \"terms\", \"field\": \"backtest_id\", \"query\": \"_index:niffler-backtests\"}",
+        "query": "{\"find\": \"terms\", \"field\": \"run_id\", \"query\": \"_index:niffler-runs\"}",
         "refresh": 1,
         "regex": "",
         "sort": 1,

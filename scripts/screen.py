@@ -76,16 +76,26 @@ from niffler.strategies.registry import (
 )
 from niffler.utils.json_utils import safe_json_dump
 from niffler.utils.provenance import collect_provenance
+from niffler.utils.run_identity import RUN_KIND_SCREEN
 from scripts.common import (
     add_cost_model_arguments,
     add_engine_arguments,
+    add_experiment_arguments,
     add_risk_manager_arguments,
     build_run_config,
+    build_run_identity,
     load_ohlcv_csv,
     report_run_config,
+    report_run_identity,
+    run_metadata,
 )
 from scripts.compare import FoldSchedule, evaluate, render, symbol_from_path
-from scripts.config_file import add_config_arguments, apply_config, report_config
+from scripts.config_file import (
+    add_config_arguments,
+    apply_config,
+    report_config,
+    typed_on_command_line,
+)
 from scripts.optimize import CLI_MAX_RESULTS_IN_MEMORY
 
 logger = logging.getLogger(__name__)
@@ -590,6 +600,7 @@ outcome), 1 = the run failed.
     # All four stages run under one risk configuration, so a funnel cannot pass
     # a strategy on numbers the configured risk layer would never have produced.
     add_risk_manager_arguments(parser)
+    add_experiment_arguments(parser)
 
     parser.add_argument('--log-level', default='WARNING',
                         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
@@ -613,6 +624,7 @@ def main() -> int:
     config = apply_config(parser, 'screen')
 
     args = parser.parse_args()
+    experiment_typed = typed_on_command_line(parser, 'experiment')
     setup_logging(level=args.log_level)
     report_config(config)
 
@@ -624,6 +636,10 @@ def main() -> int:
 
     try:
         run_config = build_run_config(args)
+        # The funnel is one run in one process; its stages are rows of it.
+        identity, identity_note = build_run_identity(
+            args, RUN_KIND_SCREEN, config=config, experiment_typed=experiment_typed
+        )
     except (ValueError, TypeError) as e:
         print(f"Error: {e}", file=sys.stderr)
         return EXIT_ERROR
@@ -644,6 +660,7 @@ def main() -> int:
     print(f"SCREENING {args.strategy} on {symbol} ({len(datasets)} dataset(s))")
     print(_SEPARATOR)
     report_run_config(run_config)
+    report_run_identity(identity, identity_note)
 
     stages: List[StageResult] = []
     stopped_at: Optional[Gate] = None
@@ -724,6 +741,7 @@ def main() -> int:
 
     if args.output:
         payload = {
+            'run': run_metadata(identity, args.strategy),
             # One record per dataset the run actually read: a single block would
             # hash one file and imply it covered the whole screen, and a block
             # for a dataset the funnel stopped short of would claim evidence

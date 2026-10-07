@@ -88,16 +88,19 @@ Today only `scripts/backtest.py` exports to Elasticsearch. `optimize.py` and `an
 write local JSON, so the 396-1632 trials of a grid search and every walk-forward fold and
 Monte Carlo simulation — the actual research record — never reach Kibana or Grafana. The
 single provisioned dashboard (`config/grafana/dashboards/backtest-detailed-analysis.json`)
-is a one-run drill-down: pick a `backtest_id`, read eleven gauges. There is no
+is a one-run drill-down: pick a `run_id`, read eleven gauges. There is no
 cross-strategy comparison, and nothing joins an optimization to the validation and the
 final backtest that came out of it.
 
 In dependency order:
 
-- **An experiment id.** Minted once at the CLI beside provenance — same invariant:
-  collected once per run, never raises — threaded through `optimize.py`, `analyze.py` and
-  `backtest.py`, stamped on every exported document. This is the join key that does not
-  exist today.
+- ~~**An experiment id.**~~ — shipped, in a different shape than first written. Every run
+  of every script gets a minted `run_id`; a run fed by `--params-file` records the run that
+  produced the file as `parent_run_id`; and the **experiment is a name the user chooses**
+  (`--experiment`, or `experiment` in a `[profile.<name>]`), never a minted id — a minted
+  one would make a forgotten flag look like a deliberate one-run experiment. A file-fed run
+  inherits an unset experiment and a different one is an error. The identity is written
+  into every saved JSON result and onto the `niffler-runs` summary document.
 - **Export optimization and analysis results.** Two indices (`optimizations`: one document
   per trial plus a run summary; `analyses`: per-fold / per-simulation plus a summary),
   reusing `ExporterManager` and the existing provenance block. The `SELECTION_TRUNCATED`
@@ -109,13 +112,10 @@ In dependency order:
 Two traps found while scoping this, both worth handling in the export work rather than
 discovering later:
 
-- `strategy_name` is `strategy.name`, the **display** string ("RSI Mean Reversion"), not
-  the registry key (`rsi`). A Kibana group-by therefore keys on prose, and editing a
-  display name silently splits a strategy's history into two buckets. Stamp the registry
-  key alongside it.
-- `strategy_params` is dynamic-mapped `{"type": "object"}`, so the first document to
-  arrive locks each field's type — and RSI's `oversold` is an `int` in `PARAMETER_SPEC`
-  but a `float` from the constructor default. Use `flattened`, or a JSON keyword sidecar.
+- ~~`strategy_name` is `strategy.name`, the **display** string ("RSI Mean Reversion"), not
+  the registry key (`rsi`).~~ — handled: `strategy_key` is recorded beside it.
+- ~~`strategy_params` is dynamic-mapped `{"type": "object"}`, so the first document to
+  arrive locks each field's type.~~ — handled: the `niffler-runs` mapping uses `flattened`.
 
 ## Research rigor
 

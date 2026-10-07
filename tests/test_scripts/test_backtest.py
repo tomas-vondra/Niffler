@@ -400,7 +400,7 @@ class TestBacktestExportReporting(unittest.TestCase):
 
     def test_report_export_outcome_all_successful(self):
         """A summary without failures reports success and exits zero."""
-        summary = ExportSummary(successes=['CSVExporter'], failures=[], backtest_id='abc')
+        summary = ExportSummary(successes=['CSVExporter'], failures=[], run_id='abc')
 
         with patch('builtins.print') as mock_print:
             exit_code = report_export_outcome(summary, ['CSVExporter'])
@@ -415,7 +415,7 @@ class TestBacktestExportReporting(unittest.TestCase):
         summary = ExportSummary(
             successes=['ConsoleExporter'],
             failures=[('CSVExporter', 'disk full')],
-            backtest_id='abc'
+            run_id='abc'
         )
 
         with patch('builtins.print') as mock_print:
@@ -431,22 +431,13 @@ class TestBacktestExportReporting(unittest.TestCase):
         summary = ExportSummary(
             successes=[],
             failures=[('CSVExporter', 'boom'), ('ConsoleExporter', 'boom')],
-            backtest_id='abc'
+            run_id='abc'
         )
 
         with patch('builtins.print'):
             exit_code = report_export_outcome(summary, ['CSVExporter', 'ConsoleExporter'])
 
         self.assertEqual(exit_code, 1)
-
-    def test_report_export_outcome_legacy_string_result(self):
-        """A manager that only returns a backtest id still works."""
-        with patch('builtins.print') as mock_print:
-            exit_code = report_export_outcome('legacy-id', ['CSVExporter'])
-
-        self.assertEqual(exit_code, 0)
-        printed = ' '.join(str(call_args) for call_args in mock_print.call_args_list)
-        self.assertIn('legacy-id', printed)
 
     @patch('scripts.backtest.setup_logging')
     @patch('scripts.backtest.ExporterManager')
@@ -480,7 +471,7 @@ class TestBacktestExportReporting(unittest.TestCase):
         mock_manager.export_backtest_result.return_value = ExportSummary(
             successes=[],
             failures=[('CSVExporter', 'permission denied')],
-            backtest_id='abc'
+            run_id='abc'
         )
         mock_manager_class.return_value = mock_manager
 
@@ -518,7 +509,7 @@ class TestBacktestExportReporting(unittest.TestCase):
         mock_manager.get_exporter_count.return_value = 1
         mock_manager.get_exporter_names.return_value = ['CSVExporter']
         mock_manager.export_backtest_result.return_value = ExportSummary(
-            successes=['CSVExporter'], failures=[], backtest_id='abc'
+            successes=['CSVExporter'], failures=[], run_id='abc'
         )
         mock_manager_class.return_value = mock_manager
 
@@ -598,7 +589,7 @@ class TestBacktestExportReporting(unittest.TestCase):
         mock_manager.get_exporter_count.return_value = 1
         mock_manager.get_exporter_names.return_value = ['CSVExporter']
         mock_manager.export_backtest_result.return_value = ExportSummary(
-            successes=['CSVExporter'], failures=[], backtest_id='abc'
+            successes=['CSVExporter'], failures=[], run_id='abc'
         )
         mock_manager_class.return_value = mock_manager
 
@@ -650,7 +641,7 @@ class TestBenchmarkCommandLine(unittest.TestCase):
             manager = MagicMock()
             manager.get_exporter_count.return_value = 1
             manager.export_backtest_result.return_value = ExportSummary(
-                successes=['ConsoleExporter'], failures=[], backtest_id='abc'
+                successes=['ConsoleExporter'], failures=[], run_id='abc'
             )
             manager_class.return_value = manager
 

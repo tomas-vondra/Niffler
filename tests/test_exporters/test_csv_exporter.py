@@ -88,8 +88,8 @@ class TestCSVExporter(unittest.TestCase):
     
     def test_generate_filename(self):
         """Test filename generation."""
-        backtest_id = "12345678-1234-1234-1234-123456789abc"
-        filename = self.exporter._generate_filename(self.mock_result, backtest_id)
+        run_id = "12345678-1234-1234-1234-123456789abc"
+        filename = self.exporter._generate_filename(self.mock_result, run_id)
         
         expected = "BTC-USD_Simple_MA_Strategy_20240101_20240331_12345678"
         self.assertEqual(filename, expected)
@@ -101,10 +101,10 @@ class TestCSVExporter(unittest.TestCase):
             'symbol': 'BTC-USD',
             'total_return': 1500.0
         }
-        backtest_id = "test-id-123"
+        run_id = "test-id-123"
         base_filename = "test_filename"
         
-        result_file = self.exporter._export_metadata(metadata, backtest_id, base_filename)
+        result_file = self.exporter._export_metadata(metadata, run_id, base_filename)
         
         # Check file was created
         expected_file = os.path.join(self.temp_dir, f"{base_filename}_metadata.json")
@@ -115,15 +115,15 @@ class TestCSVExporter(unittest.TestCase):
         with open(expected_file, 'r') as f:
             saved_metadata = json.load(f)
         
-        expected_metadata = {**metadata, 'backtest_id': backtest_id}
+        expected_metadata = {**metadata, 'run_id': run_id}
         self.assertEqual(saved_metadata, expected_metadata)
     
     def test_export_portfolio_values(self):
         """Test portfolio values export to CSV."""
-        backtest_id = "test-id-123"
+        run_id = "test-id-123"
         base_filename = "test_filename"
         
-        result_file = self.exporter._export_portfolio_values(self.mock_result, backtest_id, base_filename)
+        result_file = self.exporter._export_portfolio_values(self.mock_result, run_id, base_filename)
         
         # Check file was created
         expected_file = os.path.join(self.temp_dir, f"{base_filename}_portfolio.csv")
@@ -133,16 +133,16 @@ class TestCSVExporter(unittest.TestCase):
         # Check file contents
         df = pd.read_csv(expected_file)
         self.assertEqual(len(df), 3)
-        self.assertListEqual(list(df.columns), ['timestamp', 'portfolio_value', 'backtest_id'])
-        self.assertTrue(all(df['backtest_id'] == backtest_id))
+        self.assertListEqual(list(df.columns), ['timestamp', 'portfolio_value', 'run_id'])
+        self.assertTrue(all(df['run_id'] == run_id))
         self.assertListEqual(list(df['portfolio_value']), [10000.0, 10100.0, 10200.0])
     
     def test_export_trades_with_trades(self):
         """Test trades export with existing trades."""
-        backtest_id = "test-id-123"
+        run_id = "test-id-123"
         base_filename = "test_filename"
         
-        result_file = self.exporter._export_trades(self.mock_result, backtest_id, base_filename)
+        result_file = self.exporter._export_trades(self.mock_result, run_id, base_filename)
         
         # Check file was created
         expected_file = os.path.join(self.temp_dir, f"{base_filename}_trades.csv")
@@ -153,7 +153,7 @@ class TestCSVExporter(unittest.TestCase):
         df = pd.read_csv(expected_file)
         self.assertEqual(len(df), 2)
         expected_columns = ['timestamp', 'symbol', 'side', 'price', 'quantity', 'value',
-                            'commission', 'slippage_cost', 'backtest_id']
+                            'commission', 'slippage_cost', 'run_id']
         self.assertListEqual(list(df.columns), expected_columns)
         
         # Check first trade
@@ -166,29 +166,29 @@ class TestCSVExporter(unittest.TestCase):
     def test_export_trades_no_trades(self):
         """Test trades export with no trades."""
         self.mock_result.trades = []
-        backtest_id = "test-id-123"
+        run_id = "test-id-123"
         base_filename = "test_filename"
         
         with patch.object(self.exporter.logger, 'info') as mock_logger:
-            result_file = self.exporter._export_trades(self.mock_result, backtest_id, base_filename)
+            result_file = self.exporter._export_trades(self.mock_result, run_id, base_filename)
             
             self.assertEqual(result_file, "")
             mock_logger.assert_called_once_with("No trades to export")
     
     def test_export_backtest_result_success(self):
         """Test full backtest result export."""
-        backtest_id = "test-backtest-123"
+        run_id = "test-backtest-123"
         metadata = {'strategy_name': 'Simple MA', 'total_return': 1500.0}
         
         with patch.object(self.exporter, 'validate_result', return_value=True):
             with patch.object(self.exporter.logger, 'info') as mock_logger:
-                self.exporter.export_backtest_result(self.mock_result, backtest_id, metadata)
+                self.exporter.export_backtest_result(self.mock_result, run_id, metadata)
         
         # Check that info logs were called
         self.assertTrue(mock_logger.called)
         
         # Check that files were created
-        base_filename = self.exporter._generate_filename(self.mock_result, backtest_id)
+        base_filename = self.exporter._generate_filename(self.mock_result, run_id)
         
         metadata_file = os.path.join(self.temp_dir, f"{base_filename}_metadata.json")
         portfolio_file = os.path.join(self.temp_dir, f"{base_filename}_portfolio.csv")
@@ -200,13 +200,13 @@ class TestCSVExporter(unittest.TestCase):
     
     def test_export_backtest_result_invalid_result(self):
         """An unexportable result raises instead of reporting a silent success."""
-        backtest_id = "test-backtest-123"
+        run_id = "test-backtest-123"
         metadata = {'test': 'metadata'}
 
         with patch.object(self.exporter, 'validate_result', return_value=False):
             with patch.object(self.exporter.logger, 'error') as mock_logger:
                 with self.assertRaises(ExportError) as context:
-                    self.exporter.export_backtest_result(self.mock_result, backtest_id, metadata)
+                    self.exporter.export_backtest_result(self.mock_result, run_id, metadata)
                 self.assertIn("CSV", str(context.exception))
                 mock_logger.assert_called_once_with(
                     "Invalid backtest result, cannot export to CSV"
@@ -214,25 +214,25 @@ class TestCSVExporter(unittest.TestCase):
 
     def test_export_backtest_result_invalid_result_writes_nothing(self):
         """A refused export must not leave partial files behind."""
-        backtest_id = "test-backtest-123"
+        run_id = "test-backtest-123"
         metadata = {'test': 'metadata'}
 
         with patch.object(self.exporter, 'validate_result', return_value=False):
             with self.assertRaises(ExportError):
-                self.exporter.export_backtest_result(self.mock_result, backtest_id, metadata)
+                self.exporter.export_backtest_result(self.mock_result, run_id, metadata)
 
         self.assertEqual(list(Path(self.temp_dir).glob("*")), [])
     
     def test_export_backtest_result_exception(self):
         """Test export with exception during processing."""
-        backtest_id = "test-backtest-123"
+        run_id = "test-backtest-123"
         metadata = {'test': 'metadata'}
         
         with patch.object(self.exporter, 'validate_result', return_value=True):
             with patch.object(self.exporter, '_export_metadata', side_effect=Exception("Test error")):
                 with patch.object(self.exporter.logger, 'error') as mock_logger:
                     with self.assertRaises(Exception):
-                        self.exporter.export_backtest_result(self.mock_result, backtest_id, metadata)
+                        self.exporter.export_backtest_result(self.mock_result, run_id, metadata)
                     mock_logger.assert_called_once_with("Failed to export CSV files: Test error")
     
     def test_set_output_directory(self):
@@ -388,12 +388,12 @@ class TestCSVExporterUnsafeNames(unittest.TestCase):
 
     def test_export_writes_files_for_symbol_with_slash(self):
         """Exporting 'BTC/USDT' actually writes files to disk (F12 regression)."""
-        backtest_id = "12345678-1234-1234-1234-123456789abc"
+        run_id = "12345678-1234-1234-1234-123456789abc"
         metadata = {'strategy_name': 'Simple MA Crossover', 'symbol': 'BTC/USDT'}
 
-        self.exporter.export_backtest_result(self.mock_result, backtest_id, metadata)
+        self.exporter.export_backtest_result(self.mock_result, run_id, metadata)
 
-        base_filename = self.exporter._generate_filename(self.mock_result, backtest_id)
+        base_filename = self.exporter._generate_filename(self.mock_result, run_id)
         for suffix in ('_metadata.json', '_portfolio.csv', '_trades.csv'):
             expected_file = Path(self.temp_dir) / f"{base_filename}{suffix}"
             self.assertTrue(expected_file.exists(), f"Missing export file: {expected_file}")

@@ -1,7 +1,7 @@
 {
   "mappings": {
     "properties": {
-      "backtest_id": {
+      "run_id": {
         "type": "keyword"
       },
       "position_id": {

@@ -5,7 +5,6 @@ Coordinates multiple exporters for backtesting results with unique identificatio
 """
 
 import logging
-import uuid
 from dataclasses import dataclass
 from typing import Dict, Any, List, Optional, Set, Tuple
 from .base_exporter import BaseExporter
@@ -16,6 +15,7 @@ from .registry import (
     get_exporter_option_names,
 )
 from ..backtesting.backtest_result import BacktestResult
+from ..utils.run_identity import RUN_KIND_BACKTEST, RunIdentity, new_run_identity
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +28,12 @@ class ExportSummary:
     Attributes:
         successes: Class names of the exporters that completed successfully
         failures: (exporter class name, error message) pairs for exporters that failed
-        backtest_id: The backtest ID that was used for this export run
+        run_id: The run ID that was used for this export run
     """
 
     successes: List[str]
     failures: List[Tuple[str, str]]
-    backtest_id: str
+    run_id: str
 
     @property
     def ok(self) -> bool:
@@ -175,10 +175,11 @@ class ExporterManager:
 
     def export_backtest_result(self, result: BacktestResult, strategy_params: Dict[str, Any],
                               symbol: str, initial_capital: float, commission: float,
-                              backtest_id: str = None,
                               provenance: Optional[Dict[str, Any]] = None,
                               cost_model: str = None,
-                              risk_manager: Optional[Dict[str, Any]] = None) -> ExportSummary:
+                              risk_manager: Optional[Dict[str, Any]] = None,
+                              identity: Optional[RunIdentity] = None,
+                              strategy_key: Optional[str] = None) -> ExportSummary:
         """
         Export backtest results using all configured exporters.
 
@@ -194,7 +195,6 @@ class ExporterManager:
             symbol: Trading symbol
             initial_capital: Initial capital amount
             commission: Commission rate
-            backtest_id: Optional custom backtest ID (generates one if not provided)
             provenance: Optional run provenance record (see
                 :func:`niffler.utils.provenance.collect_provenance`). It is collected
                 **once** by the caller that owns the run and shared by every exporter:
@@ -207,19 +207,24 @@ class ExporterManager:
                 the export says which position sizing and stops produced these
                 numbers rather than leaving "no risk management" indistinguishable
                 from "risk management not recorded"
+            identity: The run's identity, minted once by the caller that owns the
+                run (see :mod:`niffler.utils.run_identity`). A library caller that
+                passes none gets a fresh, unnamed backtest identity
+            strategy_key: Registry name of the strategy (``'rsi'``), recorded
+                beside the display name so grouping does not key on prose
 
         Returns:
             ExportSummary describing which exporters succeeded, which failed and the
-            backtest ID that was used
+            run ID that was used
         """
-        # Generate backtest ID if not provided
-        if backtest_id is None:
-            backtest_id = self._generate_backtest_id()
+        if identity is None:
+            identity = new_run_identity(RUN_KIND_BACKTEST)
+        run_id = identity.run_id
 
         # Create metadata
         metadata = self.create_metadata(
             result, strategy_params, symbol, initial_capital, commission, provenance,
-            cost_model, risk_manager
+            cost_model, risk_manager, identity=identity, strategy_key=strategy_key
         )
 
         successes: List[str] = []
@@ -231,7 +236,7 @@ class ExporterManager:
         for exporter in self.exporters:
             exporter_name = exporter.__class__.__name__
             try:
-                exporter.export_backtest_result(result, backtest_id, metadata)
+                exporter.export_backtest_result(result, run_id, metadata)
                 successes.append(exporter_name)
             except Exception as e:
                 # Continue with other exporters even if one fails, but record the failure
@@ -240,28 +245,26 @@ class ExporterManager:
                 failures.append((exporter_name, str(e)))
 
         summary = ExportSummary(
-            successes=successes, failures=failures, backtest_id=backtest_id
+            successes=successes, failures=failures, run_id=run_id
         )
 
         if not summary.ok:
             requested = len(self.exporters) + len(self.creation_failures)
             logger.error(
                 f"{len(failures)} of {requested} exporter(s) failed for "
-                f"backtest {backtest_id}: "
+                f"backtest {run_id}: "
                 f"{', '.join(name for name, _ in failures)}"
             )
 
         return summary
     
-    def _generate_backtest_id(self) -> str:
-        """Generate a unique backtest ID."""
-        return str(uuid.uuid4())
-    
     def create_metadata(self, result: BacktestResult, strategy_params: Dict[str, Any],
                         symbol: str, initial_capital: float, commission: float,
                         provenance: Optional[Dict[str, Any]] = None,
                         cost_model: str = None,
-                        risk_manager: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                        risk_manager: Optional[Dict[str, Any]] = None,
+                        identity: Optional[RunIdentity] = None,
+                        strategy_key: Optional[str] = None) -> Dict[str, Any]:
         """
         Create standardized metadata for a backtest.
 
@@ -276,11 +279,16 @@ class ExporterManager:
             cost_model: Description of the transaction cost model in force
             risk_manager: The run's risk configuration, as
                 :func:`niffler.risk.registry.describe_risk_manager` renders it
+            identity: The run's identity; its fields are included when supplied
+            strategy_key: Registry name of the strategy
 
         Returns:
             Dictionary containing standardized metadata
         """
         metadata = {
+            # Identity first: run_id, kind, experiment, parent_run_id, profile.
+            **(identity.to_metadata() if identity is not None else {}),
+            'strategy_key': strategy_key,
             'cost_model': cost_model,
             'risk_manager': risk_manager,
             'total_commission': getattr(result, 'total_commission', 0.0),

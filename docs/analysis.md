@@ -3,7 +3,7 @@
 ## Analysis Script Usage
 
 ```bash
-python scripts/analyze.py --data <data_file> --analysis <analysis_type> --strategy <strategy_name> (--params <parameters_json> | --params_file <params_file>) [additional_options]
+python scripts/analyze.py --data <data_file> --analysis <analysis_type> --strategy <strategy_name> [--params-file <params_file>] [--params <parameters_json>] [additional_options]
 ```
 
 **Required Arguments:**
@@ -11,9 +11,13 @@ python scripts/analyze.py --data <data_file> --analysis <analysis_type> --strate
 - `--analysis`: Analysis type (`walk_forward` or `monte_carlo`)
 - `--strategy`: Strategy to analyze (currently supports `simple_ma`)
 
-**Parameter Arguments** (`--params` or `--params_file`):
+**Parameter Arguments** (`--params-file` and/or `--params`; they combine, `--params` winning):
+- `--params-file` (also `--params_file`): Path to a JSON file containing parameters. An
+  optimization results file works directly, and the run that wrote it is recorded as this
+  run's **parent**; an unset experiment is inherited from it (see
+  [Run identity](../README.md#run-identity-which-runs-belong-together))
 - `--params`: Strategy parameters as JSON string (e.g., `'{"short_window": 10, "long_window": 30}'`)
-- `--params_file`: Path to JSON file containing parameters (can use optimization results file)
+- A `[analyze.params]` table in `niffler.toml` supplies defaults below both
 
 Required for `--analysis monte_carlo` and for `--mode segmented_in_sample`. **Not** required
 for walk-forward analysis: it re-optimises the parameters on every training window, so a

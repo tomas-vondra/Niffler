@@ -45,6 +45,12 @@ The short version, because these are easy to "helpfully" undo:
 | Every strategy parameter has a **default** and every strategy accepts `position_size` / `risk_manager` | Add a required constructor argument - the library builds strategies as `strategy_class(**parameters)` |
 | There is **one** risk registry (`niffler/risk/registry.py`); `--risk-manager` choices derive from it, and `niffler/risk/` imports nothing from `niffler/backtesting/` or `niffler/strategies/` | Hardcode `choices=['none', 'fixed']`, or import the engine into a risk module - the engine imports the `RiskManager` protocol, so it closes an import cycle |
 | A risk manager holds **no position state**; it receives a `PortfolioSnapshot` per call, and `evaluate_trade` has **no default** for it | Put `self._positions` back, or default the snapshot to flat - which silently disables `max_positions` and re-breaks parallel walk-forward folds |
+| A run id has **one** mint site (`niffler/utils/run_identity.mint_run_id`), and the identity is built **once per run at the CLI** by `scripts/common.build_run_identity` | Mint a uuid in an exporter or a manager, or put the identity on `RunConfig` - it is not an engine knob and would make two equal configs unequal |
+| The **experiment is never minted**; unnamed is `None`, shown `(none)` | Generate an experiment id for an unlabelled run - a forgotten flag would then look like a deliberate one-run experiment |
+| A run fed by `--params-file` **inherits** an unset experiment, and a *different* one is an **error** unless `--experiment` was typed (`typed_on_command_line`) | Let the file silently win, let a profile value override the error, or compare values to decide "typed" - the user may type the name the file already holds |
+| `experiment` may be set only in `[profile.<name>]` or on the command line | Accept it in `[common]` or a per-script section, where it would apply to every run and collide with every params file from another experiment |
+| A params file is opened in **one** place (`scripts/common.read_params_file`), which returns the parameters *and* the parent run | Read the winner's parameters in a script and discard the rest - that is how the only link between an optimization and its validation used to be dropped |
+| Strategy parameters resolve as defaults < toml `params` table < `--params-file` < `--params` < per-strategy flags, validated **after** the merge | Put the toml table above the file - a default saved in a profile would silently override an optimized winner |
 
 Scope limits that are deliberate, not oversights: long-only, no live trading, three
 textbook strategies rather than an edge, Kelly risk manager is a stub. Slippage/spread/market impact **are** modelled now
@@ -96,6 +102,19 @@ need not be retyped on each run. Precedence: argparse defaults, then `[common]`/
 `[engine]`/`[risk]`, then the per-script section (`[backtest]`, `[optimize]`, ...), then
 `[profile.NAME]` via `--profile`, then the command line - which always wins. Keys are
 argparse dests. `niffler.toml.example` is the template; `niffler.toml` is gitignored.
+
+A profile is lenient about keys the current parser does not declare (one profile per
+research question is shared by several scripts) but **reports** them on the `Config:` line,
+because a misspelt `experiment` would otherwise file a run under no experiment silently.
+A profile's sub-table (`[profile.X.params]`) **replaces** the script section's table.
+
+### Run identity
+
+Every script mints a `RunIdentity` (`run_id`, `kind`, `experiment`, `parent_run_id`,
+`profile`) once, prints it, and writes it as a top-level `run` block (with `strategy_key`)
+into whatever it saves; `backtest.py` also exports it on the `niffler-runs` summary
+document. Provenance says what code and data ran; identity says which runs belong together.
+See [README.md → Run identity](README.md#run-identity-which-runs-belong-together).
 
 Set `NIFFLER_CONFIG=` (empty) to ignore config files entirely - `tests/test_scripts/__init__.py`
 does exactly that, so a local `niffler.toml` cannot change what the tests assert.
@@ -647,7 +666,7 @@ because `**kwargs` makes the derived option set "everything".
   the **only** metadata builder - adds the key only when a record is supplied. The
   console exporter prints a one-line summary with a `DIRTY` marker, the CSV exporter writes
   a `{base}_provenance.json` sidecar (named with the shared `sanitize_path_component`), and
-  `config/elasticsearch/mappings/backtests.json` maps the block explicitly - SHAs, versions
+  `config/elasticsearch/mappings/runs.json` maps the block explicitly - SHAs, versions
   and paths as `keyword`, `dirty` as `boolean`, timestamps as `date`, plus a
   `dynamic_templates` entry so a newly tracked package cannot land as analysed `text`
 - **Backtest Metadata**: Strategy details, parameters, performance metrics, execution info
@@ -671,7 +690,7 @@ because `**kwargs` makes the derived option set "everything".
   only what was passed is forwarded
 - **Mapping Files**: Elasticsearch schema definitions in `config/elasticsearch/mappings/`
 - **Failure Reporting**: `ExporterManager.export_backtest_result` returns an `ExportSummary`
-  (`successes`, `failures`, `backtest_id`, `ok`). Exporters raise rather than skipping
+  (`successes`, `failures`, `run_id`, `ok`). Exporters raise rather than skipping
   silently, and `scripts/backtest.py` prints a per-exporter report and exits 1 on any failure
 
 ### Testing Approach
