@@ -17,15 +17,50 @@ from .registry import (
 )
 from .run_record import DETAIL_TYPES, RunRecord
 from ..backtesting.backtest_result import BacktestResult
+from ..utils.provenance import is_provenance_record, provenance_fingerprint
 from ..utils.run_identity import RUN_KIND_BACKTEST, RunIdentity, new_run_identity
 
 logger = logging.getLogger(__name__)
 
 
-def _is_single_provenance(provenance: Optional[Dict[str, Any]]) -> bool:
-    """True for one provenance record, False for one-per-dataset keyed by path."""
-    return isinstance(provenance, dict) and (
-        'code' in provenance or 'data' in provenance or 'environment' in provenance)
+def build_run_header(identity: Optional[RunIdentity], strategy_key: Optional[str],
+                     symbol: Optional[str],
+                     settings: Optional[Dict[str, Any]],
+                     provenance: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Build the header every exported document of a run carries.
+
+    The one definition, used for a backtest's summary and for every other kind
+    of run alike. They used to be built separately, and a backtest summary then
+    had no top-level ``git_sha``: a filter on it missed every backtest in the
+    same index, without an error.
+
+    Args:
+        identity: The run's identity, or None for a library caller with none
+        strategy_key: Registry name of the strategy, or None
+        symbol: The instrument, or None for a run over several
+        settings: The engine settings (``RunConfig.to_metadata()``), or None
+        provenance: One provenance record, or one per dataset keyed by path
+
+    Returns:
+        The header. A run over several datasets gets the code fingerprint,
+        which is the same for all of them, and no ``data_sha256``
+    """
+    if is_provenance_record(provenance):
+        fingerprint = provenance_fingerprint(provenance)
+    else:
+        # One record per dataset: no single data fingerprint describes the run,
+        # so each detail row names its own.
+        any_record = next(iter((provenance or {}).values()), None)
+        fingerprint = {**provenance_fingerprint(any_record), 'data_sha256': None}
+
+    return {
+        **(identity.to_metadata() if identity is not None else {}),
+        'strategy_key': strategy_key,
+        'symbol': symbol,
+        **(settings or {}),
+        **fingerprint,
+    }
 
 
 @dataclass
@@ -204,7 +239,8 @@ class ExporterManager:
                               cost_model: str = None,
                               risk_manager: Optional[Dict[str, Any]] = None,
                               identity: Optional[RunIdentity] = None,
-                              strategy_key: Optional[str] = None) -> ExportSummary:
+                              strategy_key: Optional[str] = None,
+                              settings: Optional[Dict[str, Any]] = None) -> ExportSummary:
         """
         Export backtest results using all configured exporters.
 
@@ -237,6 +273,7 @@ class ExporterManager:
                 passes none gets a fresh, unnamed backtest identity
             strategy_key: Registry name of the strategy (``'rsi'``), recorded
                 beside the display name so grouping does not key on prose
+            settings: Every engine setting the run used (``RunConfig.to_metadata()``)
 
         Returns:
             ExportSummary describing which exporters succeeded, which failed and the
@@ -249,7 +286,8 @@ class ExporterManager:
         # Create metadata
         metadata = self.create_metadata(
             result, strategy_params, symbol, initial_capital, commission, provenance,
-            cost_model, risk_manager, identity=identity, strategy_key=strategy_key
+            cost_model, risk_manager, identity=identity, strategy_key=strategy_key,
+            settings=settings
         )
 
         return self._export_with_all(
@@ -364,26 +402,7 @@ class ExporterManager:
             document['provenance'] = provenance
         document['run'] = run_block
 
-        # A single record has 'code' and 'data' blocks. One record per dataset is
-        # keyed by path instead: the code is the same for all of them, and no
-        # single data fingerprint describes the run - each detail row names its own.
-        single = provenance if _is_single_provenance(provenance) else None
-        any_record = single or next(iter((provenance or {}).values()), None)
-        if not isinstance(any_record, dict):
-            any_record = {}
-        code = any_record.get('code') or {}
-        data = (single or {}).get('data') or {}
-
-        header = {
-            **run_block,
-            'symbol': symbol,
-            **(settings or {}),
-            'git_sha': code.get('git_sha'),
-            # None when it could not be determined: False would assert a
-            # cleanliness nobody checked.
-            'git_dirty': code.get('dirty'),
-            'data_sha256': data.get('sha256'),
-        }
+        header = build_run_header(identity, strategy_key, symbol, settings, provenance)
 
         return RunRecord(
             identity=identity,
@@ -392,7 +411,7 @@ class ExporterManager:
             header=header,
             summary=dict(summary or {}),
             details=details,
-            provenance=single,
+            provenance=provenance if is_provenance_record(provenance) else None,
         )
 
     def create_metadata(self, result: BacktestResult, strategy_params: Dict[str, Any],
@@ -401,9 +420,14 @@ class ExporterManager:
                         cost_model: str = None,
                         risk_manager: Optional[Dict[str, Any]] = None,
                         identity: Optional[RunIdentity] = None,
-                        strategy_key: Optional[str] = None) -> Dict[str, Any]:
+                        strategy_key: Optional[str] = None,
+                        settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Create standardized metadata for a backtest.
+
+        It starts from the same header every other kind of run carries
+        (:func:`build_run_header`), so a backtest summary and an optimization
+        summary in one index answer the same filters.
 
         Args:
             result: BacktestResult object
@@ -418,14 +442,15 @@ class ExporterManager:
                 :func:`niffler.risk.registry.describe_risk_manager` renders it
             identity: The run's identity; its fields are included when supplied
             strategy_key: Registry name of the strategy
+            settings: Every engine setting the run used
+                (``RunConfig.to_metadata()``), so the summary records them all
+                rather than the three passed individually
 
         Returns:
             Dictionary containing standardized metadata
         """
         metadata = {
-            # Identity first: run_id, kind, experiment, parent_run_id, profile.
-            **(identity.to_metadata() if identity is not None else {}),
-            'strategy_key': strategy_key,
+            **build_run_header(identity, strategy_key, symbol, settings, provenance),
             'cost_model': cost_model,
             'risk_manager': risk_manager,
             'total_commission': getattr(result, 'total_commission', 0.0),

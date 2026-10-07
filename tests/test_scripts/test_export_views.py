@@ -154,7 +154,9 @@ class TestAnalyzeExportViews(unittest.TestCase):
         summary, details = analyze.build_export_views(
             self.result({'folds': folds}), document)
 
-        self.assertEqual(details, {DETAIL_FOLD: folds})
+        # One row, both halves: the period's metrics and the fold's IS/OOS pair.
+        self.assertEqual(details, {DETAIL_FOLD: [
+            {'period': 1, 'total_return_pct': 10.0, **folds[0]}]})
         self.assertEqual(summary['n_periods'], 1)
         self.assertEqual(summary['failed_runs'], 1)
         self.assertEqual(summary['failure_rate'], 0.25)

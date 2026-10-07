@@ -12,6 +12,7 @@ from niffler.backtesting.backtest_engine import BacktestEngine
 from niffler.backtesting.backtest_result import BacktestResult
 from niffler.backtesting.run_config import RunConfig, resolve_run_config
 from niffler.optimization.parameter_space import ParameterSpace
+from niffler.utils.run_identity import RUN_KIND_WALK_FORWARD
 from niffler.optimization.optimizer_factory import create_optimizer, get_available_optimizers
 from .analysis_result import AnalysisResult, log_failure_rate
 
@@ -314,7 +315,7 @@ class WalkForwardAnalyzer:
         stability_metrics = self._calculate_stability_metrics(results)
 
         return AnalysisResult(
-            analysis_type='walk_forward',
+            analysis_type=RUN_KIND_WALK_FORWARD,
             strategy_name=self.strategy_class.__name__,
             symbol=symbol,
             analysis_start_date=data.index[0],

@@ -41,6 +41,7 @@ from niffler.exporters import ExporterManager
 from niffler.exporters.run_record import DETAIL_TRIAL
 from niffler.utils.provenance import collect_provenance
 from niffler.optimization import plateau as plateau_analysis
+from niffler.optimization.base_optimizer import BaseOptimizer
 from niffler.optimization.optimizer_factory import (
     create_optimizer,
     get_parameter_space,
@@ -103,8 +104,7 @@ def add_plateau_arguments(parser: argparse.ArgumentParser) -> None:
     """
     group = parser.add_argument_group('plateau analysis')
     group.add_argument('--plateau-metric', default=None,
-                       choices=['total_return', 'sharpe_ratio', 'max_drawdown',
-                                'win_rate', 'total_trades', 'excess_return_pct'],
+                       choices=list(BaseOptimizer.METRICS_CONFIG),
                        help='Metric the surface is built from (default: --sort-by)')
     group.add_argument('--plateau-tolerance', type=float, default=plateau_analysis.DEFAULT_TOLERANCE,
                        help=(f'Plateau band width as a fraction of the winner\'s edge over the '
@@ -363,8 +363,7 @@ def main() -> int:
     
     # Optimization parameters
     parser.add_argument('--sort-by', default='total_return',
-                       choices=['total_return', 'sharpe_ratio', 'max_drawdown', 'win_rate',
-                                'total_trades', 'excess_return_pct'],
+                       choices=list(BaseOptimizer.METRICS_CONFIG),
                        help=('Metric to sort top results by (default: total_return). '
                              'excess_return_pct ranks by return over buy-and-hold on the '
                              'same bars; over one dataset that is the same ORDER as '
@@ -513,7 +512,6 @@ def main() -> int:
         
         for i, result in enumerate(results[:args.top_n], 1):
             # Get the sort value for display using the optimizer's metrics config
-            from niffler.optimization.base_optimizer import BaseOptimizer
             _, accessor_func = BaseOptimizer.METRICS_CONFIG[args.sort_by]
             sort_value = accessor_func(result)
             

@@ -11,7 +11,7 @@ from .base_exporter import BaseExporter
 from .run_record import RunRecord
 from ..backtesting.backtest_result import BacktestResult
 from ..utils.json_utils import safe_json_dump
-from ..utils.run_identity import RUN_KINDS
+from ..utils.run_identity import RUN_KIND_BACKTEST, RUN_KINDS
 
 
 class JsonExporter(BaseExporter):
@@ -72,7 +72,7 @@ class JsonExporter(BaseExporter):
         """
         self.require_valid_result(result, "JSON")
         self._write(metadata, self._path_for(
-            metadata.get('kind') or 'backtest', metadata.get('strategy_key'), run_id))
+            metadata.get('kind') or RUN_KIND_BACKTEST, metadata.get('strategy_key'), run_id))
 
     def _path_for(self, kind: str, strategy_key: Optional[str], run_id: str) -> Path:
         """Return the configured path, or a name derived from the run."""

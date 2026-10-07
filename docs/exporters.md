@@ -240,6 +240,10 @@ Elasticsearch has no joins, so the run's header is copied onto every document it
 engine settings (`initial_capital`, `commission`, `cost_model`, `risk_manager`, ...),
 `git_sha`, `git_dirty` and `data_sha256`. Filtering trials, folds and summaries by
 experiment is therefore one clause, `experiment:"breakout-btc-5bps"`, in any index.
+A backtest's summary starts from the same header as every other kind, and its equity
+points, trades and positions carry the identifying part of it (everything but the engine
+settings), so an equity curve can be filtered by experiment too. One function builds the
+header, `build_run_header` in `exporter_manager.py`.
 
 `kind` tells the summaries apart in `niffler-runs`. What each carries beyond the header:
 
@@ -264,8 +268,17 @@ Rules the export keeps:
 - **A run over several files claims no single data fingerprint.** `data_sha256` is null on
   a comparison's header and set on each of its rows.
 - **Unknown is null.** `git_dirty` is null when it could not be determined.
-- **Ids are deterministic** (`run_id` for the summary, `run_id:type:index` for a row), so
-  exporting the same run twice overwrites rather than duplicates.
+- **Ids are deterministic** in every index (`run_id` for the summary, `run_id:type:index`
+  for a row, the position id for a round trip), so exporting the same run twice overwrites
+  rather than duplicates.
+- **A walk-forward fold row has one shape**: the period's metrics (Sharpe, drawdown,
+  trades) merged with the fold's in-sample/out-of-sample pair.
+
+Every mapping file sets `number_of_replicas: 0`, since a replica can never be assigned on
+a single node and would leave each index yellow. Index names are listed once, by
+`ElasticsearchExporter.index_catalog()`; `visualization/setup_kibana.py` creates its data
+views from it. Note that a mapping only applies when an index is created: after changing
+a mapping file, delete the index (or reindex) for it to take effect.
 
 The mappings map every parameter object as `flattened` and every otherwise unmapped integer
 as `double`. Without the second, the first document decides the type and a later `10.5` is
