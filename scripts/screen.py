@@ -27,9 +27,11 @@ The stages and the question each one answers
    share of out-of-sample folds that beat buy-and-hold on the same bars, pooled
    over every asset screened.
 5. **Holdout** (only with ``--holdout-data``) - *does it hold on bars no
-   decision has seen?* One backtest of the stage-2 winner on a file that starts
-   after the primary dataset ends. Nothing is fitted on it. The gates are a
-   minimum number of completed round trips and excess return over buy-and-hold.
+   decision has seen?* One backtest of the stage-2 winner per holdout file,
+   each starting after every research dataset in the run ends. Nothing is
+   fitted on any of them. The gates are a minimum number of completed round
+   trips and excess return over buy-and-hold; with several files both are
+   pooled, and each file is still reported and exported on its own.
 
 The holdout is spent by looking at it
 -------------------------------------
@@ -73,9 +75,10 @@ continue.
 import argparse
 import logging
 import os
+import statistics
 import sys
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 if __package__ in (None, ''):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -594,28 +597,39 @@ def run_compare_stage(rows: List[Dict[str, Any]], min_beat_pct: float) -> StageR
     return stage
 
 
-def check_holdout_follows_research(research, holdout) -> None:
-    """Refuse a holdout that overlaps the data the strategy was fitted on.
+def check_holdout_follows_research(research: Dict[str, Any],
+                                   holdouts: Dict[str, Any]) -> None:
+    """Refuse a holdout that overlaps any data the strategy was judged on.
+
+    The line is the latest last bar across every research file, not the last bar
+    of the file a holdout happens to share a symbol with: a walk-forward on one
+    asset over a period is a decision made with that period in view, whichever
+    asset the holdout then scores.
 
     Args:
-        research: The primary OHLCV dataset.
-        holdout: The holdout OHLCV dataset.
+        research: Every research dataset in the run, keyed by path.
+        holdouts: Every holdout dataset, keyed by path.
 
     Raises:
-        ValueError: If either frame is empty, or the holdout's first bar is not
-            strictly after the research data's last bar.
+        ValueError: If any frame is empty, or any holdout's first bar is not
+            strictly after the latest last research bar.
     """
-    if research.empty or holdout.empty:
-        raise ValueError("holdout check needs at least one bar in both the "
-                         "research and the holdout dataset")
+    empty = [path for path, frame in {**research, **holdouts}.items() if frame.empty]
+    if empty or not research or not holdouts:
+        raise ValueError("holdout check needs at least one bar in every research "
+                         "and holdout dataset" +
+                         (f"; empty: {', '.join(empty)}" if empty else ""))
 
-    research_end = research.index[-1]
-    holdout_start = holdout.index[0]
-    if holdout_start <= research_end:
-        raise ValueError(
-            f"holdout data starts {holdout_start} but the research data runs to "
-            f"{research_end}: the holdout must start strictly after it, or the "
-            f"parameters were fitted on bars the holdout then scores them on")
+    latest_path, latest = max(research.items(), key=lambda item: item[1].index[-1])
+    research_end = latest.index[-1]
+    for path, holdout in holdouts.items():
+        holdout_start = holdout.index[0]
+        if holdout_start <= research_end:
+            raise ValueError(
+                f"holdout data {path} starts {holdout_start} but the research data "
+                f"runs to {research_end} ({latest_path}): every holdout must start "
+                f"strictly after the last research bar, or the parameters were "
+                f"fitted on bars the holdout then scores them on")
 
 
 def run_holdout_stage(holdout, symbol: str, strategy_name: str,
@@ -708,6 +722,154 @@ def run_holdout_stage(holdout, symbol: str, strategy_name: str,
     return stage
 
 
+def run_pooled_holdout_stage(holdouts: List[Tuple[str, Any]], strategy_name: str,
+                             parameters: Dict[str, Any], run_config: RunConfig,
+                             min_excess: float,
+                             min_trades: int = DEFAULT_MIN_HOLDOUT_TRADES) -> StageResult:
+    """Stage 5 over several holdout files: one verdict from one backtest each.
+
+    One holdout file is one asset, and often too few round trips to say much.
+    Several are pooled the way ``compare.py`` pools folds: the unit of
+    observation is the file, the excess is the **median** of the per-file
+    figures so one exceptional file cannot carry the verdict, and the number of
+    files that beat buy-and-hold is reported beside it.
+
+    A file the strategy never traded on is left out of the excess pool and said
+    to be: flat while the asset fell is positive excess for nothing, and a
+    median would count it as a win.
+
+    Args:
+        holdouts: ``(symbol, frame)`` per holdout file, in the order given.
+        strategy_name: Registered strategy name.
+        parameters: The winning parameters from the optimize stage, used
+            unchanged on every file.
+        run_config: Engine settings, the same ones every earlier stage ran under.
+        min_excess: Gate on the pooled excess, in percentage points.
+        min_trades: Gate on completed round trips summed over the files.
+
+    Returns:
+        The stage result, gated on pooled round trips and pooled excess. Its
+        payload carries one entry per file under ``files``.
+    """
+    per_file = [run_holdout_stage(frame, symbol, strategy_name, parameters,
+                                  run_config, min_excess)
+                for symbol, frame in holdouts]
+    files = [single.payload for single in per_file]
+
+    round_trips = sum(payload['round_trips'] for payload in files)
+    traded = [payload for payload in files if payload['round_trips'] > 0]
+    idle = [payload['symbol'] for payload in files if payload['round_trips'] == 0]
+    unmeasured = [payload['symbol'] for payload in traded
+                  if payload['excess_return_pct'] is None]
+
+    pooled_excess: Optional[float] = None
+    beating: Optional[int] = None
+    if not traded:
+        excess_reason = 'no holdout file completed a round trip'
+    elif unmeasured:
+        excess_reason = (f"no benchmark could be established on "
+                         f"{', '.join(unmeasured)}")
+    else:
+        excess_reason = None
+        excesses = [payload['excess_return_pct'] for payload in traded]
+        pooled_excess = float(statistics.median(excesses))
+        beating = sum(1 for excess in excesses if excess > 0)
+
+    stage = StageResult(name=STAGE_HOLDOUT)
+    stage.detail = [
+        f"{len(files)} holdout file(s), one backtest each with parameters "
+        f"{parameters}; nothing fitted on any of them",
+    ]
+    for single in per_file:
+        stage.detail.extend(f"[{single.payload['symbol']}] {line}"
+                            for line in single.detail)
+    stage.detail.append(
+        f"pooled round trips {round_trips} = the sum over the {len(files)} file(s)")
+    if pooled_excess is not None:
+        stage.detail.append(
+            f"pooled excess {pooled_excess:.2f} pp = the median of the per-file "
+            f"excess over buy-and-hold across the {len(traded)} file(s) that traded "
+            f"(compare.py's convention for folds: one exceptional file cannot "
+            f"carry it)")
+        stage.detail.append(
+            f"{beating} of {len(traded)} file(s) that traded beat buy-and-hold")
+    if idle:
+        stage.detail.append(
+            f"left out of the excess pool, no completed round trip: "
+            f"{', '.join(idle)}")
+
+    stage.gates = [
+        Gate(
+            stage=STAGE_HOLDOUT,
+            quantity='pooled round trips',
+            value=float(round_trips),
+            threshold=float(min_trades),
+            flag='--min-holdout-trades',
+            precision=0,
+        ),
+        Gate(
+            stage=STAGE_HOLDOUT,
+            quantity='pooled excess over buy-and-hold (pp)',
+            value=pooled_excess,
+            threshold=min_excess,
+            flag='--min-holdout-excess',
+            unknown_reason=excess_reason,
+        ),
+    ]
+    stage.payload = {
+        'parameters': parameters,
+        'n_files': len(files),
+        'files_traded': len(traded),
+        'files_beating_buy_and_hold': beating,
+        'pooled_round_trips': round_trips,
+        'pooled_excess_pct': pooled_excess,
+        'files': files,
+    }
+    return stage
+
+
+def holdout_files(stage: StageResult) -> List[Dict[str, Any]]:
+    """The per-file records of a holdout stage, whether it pooled or not."""
+    return stage.payload.get('files', [stage.payload])
+
+
+def holdout_summary(stage: Optional[StageResult]) -> Dict[str, Any]:
+    """The holdout figures a run summary carries, for one file or several.
+
+    Args:
+        stage: The holdout stage, or None when no holdout backtest ran.
+
+    Returns:
+        ``holdout_files``, ``holdout_files_beating``, ``holdout_round_trips``,
+        ``holdout_excess_pct`` and ``holdout_data_sha256``. All None when the
+        holdout was not looked at. The hash is set for exactly one file: a run
+        over several has no single fingerprint, and each exported row names its
+        own.
+    """
+    if stage is None:
+        return {'holdout_files': None, 'holdout_files_beating': None,
+                'holdout_round_trips': None, 'holdout_excess_pct': None,
+                'holdout_data_sha256': None}
+
+    files = holdout_files(stage)
+    if 'files' in stage.payload:
+        beating = stage.payload['files_beating_buy_and_hold']
+        round_trips = stage.payload['pooled_round_trips']
+        excess = stage.payload['pooled_excess_pct']
+    else:
+        excess = stage.payload.get('excess_return_pct')
+        round_trips = stage.payload.get('round_trips')
+        beating = None if excess is None or not round_trips else int(excess > 0)
+    return {
+        'holdout_files': len(files),
+        'holdout_files_beating': beating,
+        'holdout_round_trips': round_trips,
+        'holdout_excess_pct': excess,
+        'holdout_data_sha256': (files[0].get('data_sha256') if len(files) == 1
+                                else None),
+    }
+
+
 def _number(value: Optional[float], precision: int = 2) -> str:
     """Render a metric that may legitimately be absent."""
     return 'n/a' if value is None else f"{value:.{precision}f}"
@@ -753,6 +915,11 @@ Examples:
   python scripts/screen.py --data data/SPY_research.csv --strategy breakout \\
     --compare-data data/QQQ_research.csv --holdout-data data/SPY_holdout.csv
 
+  # The same look pooled over several instruments: one backtest per file
+  python scripts/screen.py --data data/SPY_research.csv --strategy breakout \\
+    --compare-data data/QQQ_research.csv \\
+    --holdout-data data/SPY_holdout.csv data/QQQ_holdout.csv
+
 Exit codes: 0 = every gate passed, 3 = a gate stopped the run (a normal
 outcome), 1 = the run failed.
         """
@@ -767,10 +934,13 @@ outcome), 1 = the run failed.
                         help='Further datasets for the cross-asset stage. Without '
                              'them that stage is skipped and said to be skipped: '
                              'one asset is not a cross-asset comparison')
-    parser.add_argument('--holdout-data', default=None,
-                        help='Holdout OHLCV CSV for a final stage: one backtest of '
-                             'the stage-2 winner, nothing fitted. It must start '
-                             'after --data ends. Looking at it spends it, so it '
+    parser.add_argument('--holdout-data', nargs='+', default=None,
+                        help='Holdout OHLCV CSV(s) for a final stage: one backtest of '
+                             'the stage-2 winner per file, nothing fitted. Each must '
+                             'start after --data and every --compare-data file ends. '
+                             'Several files are pooled: round trips are summed and '
+                             'the excess over buy-and-hold is the median of the '
+                             'per-file figures. Looking at it spends it, so it '
                              'must be typed here and cannot come from niffler.toml, '
                              'and it only runs once every earlier gate has passed: '
                              '--force does not spend it on a strategy that failed')
@@ -897,7 +1067,9 @@ def main() -> int:
     report_config(config)
 
     datasets = [args.data] + list(args.compare_data or [])
-    required = datasets + ([args.holdout_data] if args.holdout_data else [])
+    holdout_paths = ([args.holdout_data] if isinstance(args.holdout_data, str)
+                     else list(args.holdout_data or []))
+    required = datasets + holdout_paths
     missing = [path for path in required if not os.path.exists(path)]
     if missing:
         print(f"Error: data file(s) not found: {', '.join(missing)}", file=sys.stderr)
@@ -909,6 +1081,12 @@ def main() -> int:
         print("Error: holdout_data is set in the configuration file. It must be "
               "typed as --holdout-data: read from a file it would be spent on "
               "every run.", file=sys.stderr)
+        return EXIT_ERROR
+
+    # Twice in the list is two rows and two votes in the pool for one look.
+    if len(set(holdout_paths)) != len(holdout_paths):
+        print("Error: a holdout file is listed more than once in --holdout-data.",
+              file=sys.stderr)
         return EXIT_ERROR
 
     try:
@@ -969,12 +1147,16 @@ def main() -> int:
         data = load_ohlcv_csv(args.data, clean=args.clean)
         screened.append(args.data)
 
-        holdout = None
-        if args.holdout_data:
+        holdouts: Dict[str, Any] = {}
+        if holdout_paths:
             # Checked before any stage runs: reading the dates is not a look at
             # the result, and a mis-cut file should not cost a whole funnel.
-            holdout = load_ohlcv_csv(args.holdout_data, clean=args.clean)
-            check_holdout_follows_research(data, holdout)
+            holdouts = {path: load_ohlcv_csv(path, clean=args.clean)
+                        for path in holdout_paths}
+            research = {args.data: data}
+            for path in args.compare_data or []:
+                research[path] = load_ohlcv_csv(path, clean=args.clean)
+            check_holdout_follows_research(research, holdouts)
 
         if record(run_backtest_stage(data, symbol, args.strategy, run_config)):
             optimize_stage = run_optimize_stage(
@@ -1013,8 +1195,7 @@ def main() -> int:
                         report_stage(skipped)
                         reached_holdout = True
 
-                    if reached_holdout and holdout is not None \
-                            and stopped_at is not None:
+                    if reached_holdout and holdouts and stopped_at is not None:
                         # Only --force gets here with a failed gate behind it.
                         skipped = StageResult(
                             name=STAGE_HOLDOUT,
@@ -1024,14 +1205,25 @@ def main() -> int:
                                            'does not override this)')
                         stages.append(skipped)
                         report_stage(skipped)
-                    elif reached_holdout and holdout is not None:
+                    elif reached_holdout and len(holdouts) == 1:
                         holdout_stage = run_holdout_stage(
-                            holdout, symbol_from_path(args.holdout_data),
+                            holdouts[holdout_paths[0]],
+                            symbol_from_path(holdout_paths[0]),
                             args.strategy,
                             optimize_stage.payload['winner_parameters'],
                             run_config, args.min_holdout_excess,
                             args.min_holdout_trades)
-                        screened.append(args.holdout_data)
+                        screened.extend(holdout_paths)
+                        record(holdout_stage)
+                    elif reached_holdout and holdouts:
+                        holdout_stage = run_pooled_holdout_stage(
+                            [(symbol_from_path(path), holdouts[path])
+                             for path in holdout_paths],
+                            args.strategy,
+                            optimize_stage.payload['winner_parameters'],
+                            run_config, args.min_holdout_excess,
+                            args.min_holdout_trades)
+                        screened.extend(holdout_paths)
                         record(holdout_stage)
                     elif reached_holdout:
                         skipped = StageResult(
@@ -1076,28 +1268,29 @@ def main() -> int:
     # funnel stopped short of would claim evidence that was never gathered.
     provenance = {path: collect_provenance(path) for path in screened}
 
-    # The holdout is exported as a row of its own, carrying the hash of the file
-    # it read, so "how many runs looked at this holdout" is a count over rows.
+    # Each holdout file is exported as a row of its own, carrying the hash of the
+    # file it read, so "how many runs looked at this holdout" is a count over rows.
     detail_rows = list(walk_forward_rows)
-    holdout_sha256 = None
     if holdout_stage is not None:
-        holdout_sha256 = provenance_fingerprint(
-            provenance.get(args.holdout_data))['data_sha256']
-        holdout_stage.payload.update({
-            'data_path': args.holdout_data,
-            'data_sha256': holdout_sha256,
-        })
-        detail_rows.append({
-            **holdout_stage.payload,
-            'stage': STAGE_HOLDOUT,
-            'strategy': args.strategy,
-            'error': None,
-        })
+        for path, payload in zip(holdout_paths, holdout_files(holdout_stage)):
+            payload.update({
+                'data_path': path,
+                'data_sha256': provenance_fingerprint(
+                    provenance.get(path))['data_sha256'],
+            })
+            detail_rows.append({
+                **payload,
+                'stage': STAGE_HOLDOUT,
+                'strategy': args.strategy,
+                'error': None,
+            })
     record = exporter_manager.create_run_record(
         identity, args.strategy,
         {
             'requested_datasets': datasets,
-            'holdout_data': args.holdout_data,
+            # One path stays a string, as it always was; several are a list.
+            'holdout_data': (holdout_paths[0] if len(holdout_paths) == 1
+                             else holdout_paths or None),
             'strategy': args.strategy,
             'settings': {
                 'train_window_months': schedule.train_window_months,
@@ -1148,9 +1341,7 @@ def main() -> int:
             'n_stages': len(stages),
             # None unless the holdout backtest ran: a requested holdout a gate
             # stopped short of was not looked at.
-            'holdout_data_sha256': holdout_sha256,
-            'holdout_excess_pct': (holdout_stage.payload['excess_return_pct']
-                                   if holdout_stage is not None else None),
+            **holdout_summary(holdout_stage),
             # One entry per gate: which stage, what was measured, against what.
             'stages': [
                 {'stage': stage.name, 'quantity': gate.quantity, 'value': gate.value,

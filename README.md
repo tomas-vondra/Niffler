@@ -239,7 +239,9 @@ python scripts/screen.py --data data/SPY_research.csv --strategy breakout \
 ```
 
 - Nothing is fitted on the holdout: one backtest, the parameters stage 2 already chose.
-- The holdout must start strictly after `--data` ends, or the run exits 1 naming both dates.
+- The holdout must start strictly after `--data` **and every `--compare-data` file** ends,
+  or the run exits 1 naming the dates and the files. A walk-forward on another asset over
+  a period is still a decision made with that period in view.
 - The gates are completed round trips, `--min-holdout-trades` (default 1), and excess
   return over buy-and-hold, `--min-holdout-excess` (default 0). The first exists because a
   strategy that stays flat while the asset falls has positive excess without having done
@@ -251,6 +253,28 @@ python scripts/screen.py --data data/SPY_research.csv --strategy breakout \
   same file is research data. So the path must be typed - `holdout_data` in `niffler.toml`
   is an error - and every holdout run exports the file's hash (`stage: holdout` in
   `niffler-comparisons`, `holdout_data_sha256` on the run), so the looks can be counted.
+
+**Several holdout files.** One file is one asset, and often too few round trips to say
+much. `--holdout-data` takes several, and they are pooled into one verdict:
+
+```bash
+python scripts/screen.py --data data/SPY_research.csv --strategy breakout \
+  --compare-data data/QQQ_research.csv \
+  --holdout-data data/SPY_holdout.csv data/QQQ_holdout.csv
+```
+
+- One backtest per file, all with the same stage-2 winner. No parameters are refitted per
+  instrument.
+- `--min-holdout-trades` reads the round trips **summed** over the files.
+- `--min-holdout-excess` reads the **median** of the per-file excess over buy-and-hold -
+  the convention `compare.py` uses for folds, so one exceptional file cannot carry the
+  verdict - and the output says how many files beat buy-and-hold.
+- A file the strategy never traded on is left out of that median and named: flat while the
+  asset fell is positive excess for nothing.
+- Each file is printed on its own lines and exported as its own `stage: holdout` row with
+  its own hash, so looks stay countable per file. The run summary carries `holdout_files`,
+  `holdout_files_beating` and `holdout_round_trips`, and no single hash.
+- Every file listed is spent by the run.
 
 Without `--holdout-data` the funnel says so: `SKIPPED: no --holdout-data given`.
 

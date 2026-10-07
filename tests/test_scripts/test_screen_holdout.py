@@ -93,14 +93,14 @@ class TestHoldoutMustFollowResearch(unittest.TestCase):
         research = make_data('2020-01-01', 100)
         holdout = make_data('2020-04-10', 50)
 
-        check_holdout_follows_research(research, holdout)
+        check_holdout_follows_research({'r.csv': research}, {'h.csv': holdout})
 
     def test_an_overlapping_holdout_is_refused_naming_both_dates(self):
         research = make_data('2020-01-01', 100)
         holdout = make_data('2020-03-01', 50)
 
         with self.assertRaises(ValueError) as raised:
-            check_holdout_follows_research(research, holdout)
+            check_holdout_follows_research({'r.csv': research}, {'h.csv': holdout})
 
         self.assertIn('2020-03-01', str(raised.exception))
         self.assertIn('2020-04-09', str(raised.exception))
@@ -110,13 +110,14 @@ class TestHoldoutMustFollowResearch(unittest.TestCase):
         holdout = make_data('2020-04-09', 50)
 
         with self.assertRaises(ValueError):
-            check_holdout_follows_research(research, holdout)
+            check_holdout_follows_research({'r.csv': research}, {'h.csv': holdout})
 
     def test_an_empty_frame_is_refused(self):
         research = make_data('2020-01-01', 100)
 
         with self.assertRaises(ValueError):
-            check_holdout_follows_research(research, research.iloc[0:0])
+            check_holdout_follows_research({'r.csv': research},
+                                           {'h.csv': research.iloc[0:0]})
 
 
 class TestHoldoutStage(unittest.TestCase):
