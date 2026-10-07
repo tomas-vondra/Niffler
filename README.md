@@ -210,10 +210,17 @@ first gate that fails, saying exactly why**:
   STOPPED at backtest: round trips 4 < 30 (--min-trades-for-significance)
 ```
 
-Every threshold is a flag and is printed whether or not it fires. Three of the four
-defaults are judgment calls and say so in `--help`; the fourth reuses the framework's own
-`DEFAULT_MIN_TRADES` (the optional holdout gates, below, default to one round trip and
-to break-even). A stop exits **3** — it is a normal outcome, not an error (1 is a
+Stage 2 has three gates: plateau retention, the share of the grid that beat buy-and-hold,
+and **search luck** - `--min-grid-relative-probability` (default 0.5), the probability
+that the winner is truly above the best a search that size finds among equally good
+combinations (see [Search luck](docs/optimization.md#search-luck)). A search whose luck
+could not be assessed - a truncated result set, too few trials, no spread between them -
+says so in a fenced block and **stops the funnel**: not assessable is not a pass.
+
+Every threshold is a flag and is printed whether or not it fires. Four of the five
+research-stage defaults are judgment calls and say so in `--help`; the fifth reuses the
+framework's own `DEFAULT_MIN_TRADES` (the optional holdout gates, below, default to one
+round trip and to break-even). A stop exits **3** — it is a normal outcome, not an error (1 is a
 real failure, and argparse owns 2). `--force` runs every stage anyway - except the
 holdout, below - and still exits 3.
 
@@ -628,9 +635,10 @@ Being explicit, so nobody discovers these the expensive way:
   significance test answers "is this one strategy's mean trade return distinguishable from
   zero on this one sample". It knows nothing about how many parameter sets were tried to
   find it, so if you optimised on the same data it overstates the evidence. The correction
-  exists in one place only: `optimize.py` prints a `SEARCH LUCK` block for the winner of
-  the search it just ran - a grid-relative probability and the published deflated Sharpe
-  ratio (see [Search luck](docs/optimization.md#search-luck)). It
+  exists for the optimizer's winner only: `optimize.py` prints a `SEARCH LUCK` block for
+  the winner of the search it just ran - a grid-relative probability and the published
+  deflated Sharpe ratio (see [Search luck](docs/optimization.md#search-luck)) - and
+  `screen.py` gates its optimize stage on the first of the two. It
   counts that one search - not the other strategies or grids tried before it - and it
   counts every combination as an independent trial.
 - **Only one benchmark: buy-and-hold of the traded asset.** No index, no risk-free rate, no
