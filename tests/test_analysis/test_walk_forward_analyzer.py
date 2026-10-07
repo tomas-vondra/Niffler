@@ -12,6 +12,8 @@ from niffler.analysis.walk_forward_analyzer import (
     WalkForwardFold,
     MODE_WALK_FORWARD,
     MODE_SEGMENTED_IN_SAMPLE,
+    POOLED_METRICS,
+    describe_fold_independence,
 )
 from niffler.backtesting.run_config import RunConfig
 from niffler.optimization.parameter_space import ParameterSpace
@@ -864,6 +866,105 @@ class TestWalkForwardParallelExecution(WalkForwardTestBase):
 
         self.assertEqual(folds, [])
         self.assertEqual(failed, 1)
+
+
+class TestWalkForwardStepDefault(WalkForwardTestBase):
+    """An unset step means non-overlapping folds, for library callers too."""
+
+    def make_default_step_analyzer(self, **overrides):
+        kwargs = {
+            'strategy_class': self.strategy_class,
+            'parameter_space': self.parameter_space,
+            'train_window_months': 6,
+            'test_window_months': 4,
+            'n_jobs': 1,
+        }
+        kwargs.update(overrides)
+        return WalkForwardAnalyzer(**kwargs)
+
+    def test_unset_step_equals_the_test_window(self):
+        self.assertEqual(self.make_default_step_analyzer().step_months, 4)
+        self.assertEqual(
+            self.make_default_step_analyzer(test_window_months=6).step_months, 6)
+
+    def test_an_explicit_step_is_kept(self):
+        self.assertEqual(self.make_default_step_analyzer(step_months=2).step_months, 2)
+
+    def test_default_schedule_tiles_without_overlap(self):
+        analyzer = self.make_default_step_analyzer()
+
+        windows = analyzer._generate_walk_forward_periods(self.test_data)
+
+        self.assertGreater(len(windows), 2)
+        for previous, current in zip(windows, windows[1:]):
+            self.assertEqual(current.test_start, previous.test_end)
+
+    def test_default_run_reports_independent_folds(self):
+        analyzer = self.make_default_step_analyzer()
+
+        with self.assertLogs(level='INFO') as logs:
+            result = analyzer.analyze(self.test_data, "TEST")
+
+        self.assertEqual(result.combined_metrics['oos_overlap_pct'], 0.0)
+        self.assertEqual(result.analysis_parameters['step_months'], 4)
+        self.assertEqual([m for m in logs.output if 'windows overlap' in m], [])
+        self.assertTrue(
+            describe_fold_independence(result.combined_metrics)['folds_independent'])
+
+    def test_explicit_overlap_reports_non_independent_folds(self):
+        analyzer = self.make_default_step_analyzer(step_months=2)
+
+        with self.assertLogs(level='WARNING') as logs:
+            result = analyzer.analyze(self.test_data, "TEST")
+
+        self.assertTrue(any('windows overlap' in m for m in logs.output), logs.output)
+        self.assertGreater(result.combined_metrics['oos_overlap_pct'], 0.0)
+        self.assertIs(
+            describe_fold_independence(result.combined_metrics)['folds_independent'],
+            False)
+
+
+class TestDescribeFoldIndependence(unittest.TestCase):
+    """The label is a statement of fact, never an estimate."""
+
+    def test_no_overlap_is_independent(self):
+        described = describe_fold_independence({'oos_overlap_pct': 0.0})
+
+        self.assertIs(described['folds_independent'], True)
+        self.assertEqual(described['oos_overlap_pct'], 0.0)
+
+    def test_any_overlap_is_not_independent(self):
+        described = describe_fold_independence({'oos_overlap_pct': 0.4})
+
+        self.assertIs(described['folds_independent'], False)
+
+    def test_unknown_overlap_is_none_not_independent(self):
+        for metrics in ({}, None, {'avg_return': 1.0}):
+            with self.subTest(metrics=metrics):
+                self.assertIsNone(
+                    describe_fold_independence(metrics)['folds_independent'])
+
+    def test_pooled_metrics_are_not_listed_as_per_fold(self):
+        described = describe_fold_independence({
+            'oos_overlap_pct': 50.0,
+            'combined_sharpe_ratio': 1.0,
+            'independent_oos_bars': 100.0,
+            'overlapping_oos_bars': 100.0,
+            'profitable_periods_pct': 87.5,
+            'avg_return': 10.0,
+        })
+
+        self.assertEqual(described['per_fold_metrics'],
+                         ['avg_return', 'profitable_periods_pct'])
+        self.assertEqual(set(described['per_fold_metrics']) & POOLED_METRICS, set())
+        self.assertIn('performance_consistency', described['per_fold_sections'])
+
+    def test_does_not_estimate_an_effective_fold_count(self):
+        described = describe_fold_independence({'oos_overlap_pct': 50.0})
+
+        self.assertEqual(
+            sorted(described),
+            ['folds_independent', 'oos_overlap_pct', 'per_fold_metrics', 'per_fold_sections'])
 
 
 if __name__ == '__main__':

@@ -212,11 +212,40 @@ first gate that fails, saying exactly why**:
 
 Every threshold is a flag and is printed whether or not it fires. Three of the four
 defaults are judgment calls and say so in `--help`; the fourth reuses the framework's own
-`DEFAULT_MIN_TRADES`. A stop exits **3** — it is a normal outcome, not an error (1 is a
-real failure, and argparse owns 2). `--force` runs every stage anyway and still exits 3.
+`DEFAULT_MIN_TRADES` (the optional holdout gates, below, default to one round trip and
+to break-even). A stop exits **3** — it is a normal outcome, not an error (1 is a
+real failure, and argparse owns 2). `--force` runs every stage anyway - except the
+holdout, below - and still exits 3.
 
 The script implements no analysis of its own: every number it gates on is computed by the
 library or by `compare.py`.
+
+**A fifth stage, for the end of the research.** Stages 1-4 can be rerun as often as it
+takes, and every rerun is a decision made with the research data in view: widen a window,
+switch the metric, screen again until the gates pass. No single run cheated, but the
+version that passed was chosen because it passed. `--holdout-data` adds one backtest of
+the stage-2 winner on a file none of those decisions saw:
+
+```bash
+python scripts/screen.py --data data/SPY_research.csv --strategy breakout \
+  --compare-data data/QQQ_research.csv --holdout-data data/SPY_holdout.csv
+```
+
+- Nothing is fitted on the holdout: one backtest, the parameters stage 2 already chose.
+- The holdout must start strictly after `--data` ends, or the run exits 1 naming both dates.
+- The gates are completed round trips, `--min-holdout-trades` (default 1), and excess
+  return over buy-and-hold, `--min-holdout-excess` (default 0). The first exists because a
+  strategy that stays flat while the asset falls has positive excess without having done
+  anything. The significance verdict is printed as the engine gives it; on a short holdout
+  it will often refuse one, and that refusal is not worked around.
+- It only runs once every earlier gate passed. `--force` does not override that: after a
+  failed gate the stage is reported as skipped and the holdout is not spent.
+- **Looking spends it.** Adjust the strategy after a holdout run and screen again, and the
+  same file is research data. So the path must be typed - `holdout_data` in `niffler.toml`
+  is an error - and every holdout run exports the file's hash (`stage: holdout` in
+  `niffler-comparisons`, `holdout_data_sha256` on the run), so the looks can be counted.
+
+Without `--holdout-data` the funnel says so: `SKIPPED: no --holdout-data given`.
 
 ### 8. Results Export
 **Export** backtest results to multiple formats for analysis and monitoring:
@@ -540,6 +569,26 @@ $50 of cash could not buy a share priced at $100. The engine trades fractional u
 always could — the test was pinning the rounding bug, not a rule, and now asserts the half
 share it really buys.
 
+### 11. Walk-forward folds no longer overlap by default
+
+`analyze.py --step` used to default to 3 months against a 6-month `--test-window`, so
+consecutive out-of-sample windows shared half their bars and every fold-counting figure
+treated the same quarter as two observations. `--step` now defaults to `--test-window`,
+the rule `compare.py` and `screen.py` already followed, and `WalkForwardAnalyzer` does the
+same when `step_months` is left unset.
+
+**A walk-forward run without `--step` now produces fewer folds and different per-fold
+figures.** On five years of daily data the default schedule goes from 15 folds to 8. Pooled
+figures move too, because the folds are fitted on different training windows.
+
+- Pass `--step 3` to reproduce an old schedule. Overlap is still allowed and still warned
+  about.
+- The step actually used is printed, marked `(default: equal to the test window)` when the
+  flag was not given.
+- When folds do overlap, every number that counts a fold as one sample is tagged
+  `[overlapping folds - not independent]` on the console, and the saved document carries
+  `fold_independence.folds_independent: false`. No effective fold count is estimated.
+
 ## What Niffler does *not* do
 
 Being explicit, so nobody discovers these the expensive way:
@@ -571,9 +620,10 @@ Being explicit, so nobody discovers these the expensive way:
   optimisation result records the risk manager it ran under, but `--params-file` reads only
   the parameters, so the flags have to be repeated on the validation run — exactly as they
   do for `--cost-model`.
-- **Walk-forward folds still overlap by default** (`test_window=6`, `step=3`). Repeated
-  out-of-sample bars are counted once for the combined Sharpe and the overlap is reported
-  and warned about, but per-fold counters still treat each fold as one sample.
+- **No correction for overlapping walk-forward folds.** Folds no longer overlap by default,
+  but `--step` below `--test-window` still overlaps them. Repeated out-of-sample bars are
+  then counted once for the combined Sharpe, and the per-fold counters are labelled as
+  counting non-independent folds - labelled, not corrected.
 - **A backtest's p-value is not corrected for the search that found its parameters.** The
   significance test answers "is this one strategy's mean trade return distinguishable from
   zero on this one sample". It knows nothing about how many parameter sets were tried to
@@ -872,7 +922,7 @@ The suite is the source of truth for its own size. Run it:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-At the time of writing this reports **1493 tests, 0 failures, 0 errors**. Treat that as a
+At the time of writing this reports **1639 tests, 0 failures, 0 errors**. Treat that as a
 sanity check, not a spec — if the command disagrees with this paragraph, believe the
 command. It is the only place in the documentation that quotes a count.
 

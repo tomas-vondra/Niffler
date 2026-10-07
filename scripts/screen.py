@@ -24,6 +24,21 @@ The stages and the question each one answers
 4. **Compare across assets** - *does it generalise?* The gate is BEAT%, the
    share of out-of-sample folds that beat buy-and-hold on the same bars, pooled
    over every asset screened.
+5. **Holdout** (only with ``--holdout-data``) - *does it hold on bars no
+   decision has seen?* One backtest of the stage-2 winner on a file that starts
+   after the primary dataset ends. Nothing is fitted on it. The gates are a
+   minimum number of completed round trips and excess return over buy-and-hold.
+
+The holdout is spent by looking at it
+-------------------------------------
+Stages 1-4 can be rerun as often as the research takes; every rerun is another
+decision made with the research data in view. The holdout is the one number no
+such decision has touched, and that is true exactly once: a strategy adjusted
+after a holdout run and screened again has been fitted to the holdout. So the
+path cannot come from ``niffler.toml`` - it has to be typed - and every holdout
+run exports the file's hash, so the number of looks can be counted afterwards.
+For the same reason ``--force`` does not reach it: a strategy that already
+failed a gate has its verdict, and a look spent confirming it is a look lost.
 
 Thresholds
 ----------
@@ -33,7 +48,9 @@ gate fires - a gate you cannot see is not a gate. Three of the four defaults are
 efficiency ratio of 0.30 is the line between a real edge and a fitted one. They
 are set where a reasonable person would want to look again, and they are meant
 to be argued with. The exception is the trade-count gate, which reuses the
-framework's existing ``DEFAULT_MIN_TRADES``.
+framework's existing ``DEFAULT_MIN_TRADES``. The holdout gates default to one
+completed round trip and to zero excess over buy-and-hold: the least that counts
+as having traded, and a break-even line, rather than judgments.
 
 Exit codes
 ----------
@@ -41,7 +58,8 @@ Exit codes
 expected outcome and emphatically not an error, which is why it is not ``1``.
 ``1`` is reserved for a genuine failure (unreadable data, a broken run) and
 argparse owns ``2`` for a usage error, so a stop needs a code of its own.
-``--force`` runs every stage regardless, but a run whose gates failed still
+``--force`` runs every stage regardless (except the holdout, which a failed
+gate leaves unspent), but a run whose gates failed still
 exits ``3``: the exit code reports the verdict, ``--force`` only controls how
 much work is done before the verdict is printed.
 
@@ -75,7 +93,7 @@ from niffler.strategies.registry import (
     get_strategy_class,
 )
 from niffler.exporters import ExporterManager
-from niffler.utils.provenance import collect_provenance
+from niffler.utils.provenance import collect_provenance, provenance_fingerprint
 from niffler.utils.run_identity import RUN_KIND_SCREEN
 from scripts.common import (
     add_cost_model_arguments,
@@ -144,6 +162,17 @@ STAGE_BACKTEST = 'backtest'
 STAGE_OPTIMIZE = 'optimize'
 STAGE_WALK_FORWARD = 'walk-forward'
 STAGE_COMPARE = 'compare'
+STAGE_HOLDOUT = 'holdout'
+
+#: Not a judgment call in the way the other four are: zero is the line between
+#: beating the passive alternative and losing to it on bars nothing was fitted
+#: on. It is still a flag, because how much excess is enough is arguable.
+DEFAULT_MIN_HOLDOUT_EXCESS = 0.0
+
+#: A strategy that stays flat while the asset falls has positive excess over
+#: buy-and-hold without having done anything. One completed round trip is the
+#: least that separates "beat holding" from "did not trade".
+DEFAULT_MIN_HOLDOUT_TRADES = 1
 
 _SEPARATOR = '=' * 78
 
@@ -483,6 +512,120 @@ def run_compare_stage(rows: List[Dict[str, Any]], min_beat_pct: float) -> StageR
     return stage
 
 
+def check_holdout_follows_research(research, holdout) -> None:
+    """Refuse a holdout that overlaps the data the strategy was fitted on.
+
+    Args:
+        research: The primary OHLCV dataset.
+        holdout: The holdout OHLCV dataset.
+
+    Raises:
+        ValueError: If either frame is empty, or the holdout's first bar is not
+            strictly after the research data's last bar.
+    """
+    if research.empty or holdout.empty:
+        raise ValueError("holdout check needs at least one bar in both the "
+                         "research and the holdout dataset")
+
+    research_end = research.index[-1]
+    holdout_start = holdout.index[0]
+    if holdout_start <= research_end:
+        raise ValueError(
+            f"holdout data starts {holdout_start} but the research data runs to "
+            f"{research_end}: the holdout must start strictly after it, or the "
+            f"parameters were fitted on bars the holdout then scores them on")
+
+
+def run_holdout_stage(holdout, symbol: str, strategy_name: str,
+                      parameters: Dict[str, Any], run_config: RunConfig,
+                      min_excess: float,
+                      min_trades: int = DEFAULT_MIN_HOLDOUT_TRADES) -> StageResult:
+    """Stage 5: does the fitted strategy beat holding on bars nothing has seen?
+
+    One backtest, with the parameters stage 2 chose on the research data.
+    Nothing is optimised here: a search over holdout bars would turn them into
+    research bars.
+
+    The significance assessment is the engine's own and is reported as it
+    stands. Below ``min_trades_for_significance`` it refuses a verdict, and that
+    refusal is printed rather than gated on or worked around: a short holdout
+    often cannot support a p-value, which is a fact about the holdout.
+
+    Args:
+        holdout: The holdout OHLCV dataset.
+        symbol: Symbol identifier for reporting.
+        strategy_name: Registered strategy name.
+        parameters: The winning parameters from the optimize stage.
+        run_config: Engine settings, the same ones every earlier stage ran under.
+        min_excess: Gate on excess return over buy-and-hold, in percentage points.
+        min_trades: Gate on completed round trips. Reported first, because
+            below it the excess is not a measurement of the strategy.
+
+    Returns:
+        The stage result, gated on round trips and on excess return over
+        buy-and-hold.
+    """
+    engine = BacktestEngine.from_config(run_config)
+    result = engine.run_backtest(create_strategy(strategy_name, parameters),
+                                 holdout, symbol)
+
+    stage = StageResult(name=STAGE_HOLDOUT)
+    stage.detail = [
+        f"{len(holdout)} bar(s) from {holdout.index[0]} to {holdout.index[-1]}, "
+        f"parameters {parameters}",
+        f"return {result.total_return_pct:.2f}%  vs buy-and-hold "
+        f"{_number(result.benchmark_return_pct)}%  fills {result.total_trades}  "
+        f"round trips {result.round_trip_count}",
+    ]
+    if result.significance_verdict:
+        stage.detail.append(f"significance: {result.significance_verdict}")
+    if result.is_sample_sufficient and result.p_value is not None:
+        stage.detail.append(
+            f"t-statistic {_number(result.t_statistic, 3)}  "
+            f"p-value {result.p_value:.4f} (two-sided)")
+
+    if result.round_trip_count < min_trades:
+        stage.detail.append(
+            f"the strategy completed {result.round_trip_count} round trip(s) on "
+            f"the holdout: it did not trade enough for its excess over "
+            f"buy-and-hold to show anything about it")
+
+    stage.gates = [
+        Gate(
+            stage=STAGE_HOLDOUT,
+            quantity='round trips',
+            value=float(result.round_trip_count),
+            threshold=float(min_trades),
+            flag='--min-holdout-trades',
+            precision=0,
+        ),
+        Gate(
+            stage=STAGE_HOLDOUT,
+            quantity='excess over buy-and-hold (pp)',
+            value=result.excess_return_pct,
+            threshold=min_excess,
+            flag='--min-holdout-excess',
+            unknown_reason='no benchmark could be established on the holdout',
+        ),
+    ]
+    stage.payload = {
+        'symbol': symbol,
+        'parameters': parameters,
+        'first_bar': str(holdout.index[0]),
+        'last_bar': str(holdout.index[-1]),
+        'bars': len(holdout),
+        'total_return_pct': result.total_return_pct,
+        'benchmark_return_pct': result.benchmark_return_pct,
+        'excess_return_pct': result.excess_return_pct,
+        'total_trades': result.total_trades,
+        'round_trips': result.round_trip_count,
+        'is_sample_sufficient': result.is_sample_sufficient,
+        'p_value': result.p_value,
+        'significance_verdict': result.significance_verdict,
+    }
+    return stage
+
+
 def _number(value: Optional[float], precision: int = 2) -> str:
     """Render a metric that may legitimately be absent."""
     return 'n/a' if value is None else f"{value:.{precision}f}"
@@ -524,6 +667,10 @@ Examples:
   # Report every stage even after one fails
   python scripts/screen.py --data data/SPY_research.csv --strategy rsi --force
 
+  # Finish with one look at bars no decision has seen. Run it once.
+  python scripts/screen.py --data data/SPY_research.csv --strategy breakout \\
+    --compare-data data/QQQ_research.csv --holdout-data data/SPY_holdout.csv
+
 Exit codes: 0 = every gate passed, 3 = a gate stopped the run (a normal
 outcome), 1 = the run failed.
         """
@@ -538,6 +685,13 @@ outcome), 1 = the run failed.
                         help='Further datasets for the cross-asset stage. Without '
                              'them that stage is skipped and said to be skipped: '
                              'one asset is not a cross-asset comparison')
+    parser.add_argument('--holdout-data', default=None,
+                        help='Holdout OHLCV CSV for a final stage: one backtest of '
+                             'the stage-2 winner, nothing fitted. It must start '
+                             'after --data ends. Looking at it spends it, so it '
+                             'must be typed here and cannot come from niffler.toml, '
+                             'and it only runs once every earlier gate has passed: '
+                             '--force does not spend it on a strategy that failed')
     parser.add_argument('--clean', action='store_true',
                         help='Run the preprocessing pipeline on each dataset first')
     add_exporter_arguments(parser, default='console')
@@ -557,8 +711,10 @@ outcome), 1 = the run failed.
     gates = parser.add_argument_group(
         'gate thresholds',
         'Judgment calls, not results. --min-trades-for-significance reuses the '
-        'framework constant; the other three are set where a reasonable person '
-        'would want to look again, and are meant to be argued with.')
+        'framework constant, --min-holdout-excess defaults to break-even and '
+        '--min-holdout-trades to one round trip; '
+        'the other three are set where a reasonable person would want to look '
+        'again, and are meant to be argued with.')
     gates.add_argument('--min-retention', type=float, default=DEFAULT_MIN_RETENTION,
                        help=f"Stage 2: plateau retention the winner's neighbourhood "
                             f"must keep, where 1.0 is a flat plateau and 0.0 an "
@@ -578,6 +734,18 @@ outcome), 1 = the run failed.
                             f"assets, that must beat buy-and-hold on the same bars "
                             f"(default: {DEFAULT_MIN_BEAT_PCT:g} - a judgment call, "
                             f"and the coin-toss line against doing nothing)")
+    gates.add_argument('--min-holdout-excess', type=float,
+                       default=DEFAULT_MIN_HOLDOUT_EXCESS,
+                       help=f"Stage 5: return over buy-and-hold on the holdout, in "
+                            f"percentage points (default: "
+                            f"{DEFAULT_MIN_HOLDOUT_EXCESS:g} - the line between "
+                            f"beating the passive alternative and losing to it)")
+    gates.add_argument('--min-holdout-trades', type=int,
+                       default=DEFAULT_MIN_HOLDOUT_TRADES,
+                       help=f"Stage 5: completed round trips on the holdout "
+                            f"(default: {DEFAULT_MIN_HOLDOUT_TRADES} - a strategy "
+                            f"that never traded has an excess over buy-and-hold "
+                            f"that shows nothing)")
 
     search = parser.add_argument_group('search and folds')
     search.add_argument('--optimization-method', '--optimization_method', default='grid',
@@ -639,9 +807,18 @@ def main() -> int:
     report_config(config)
 
     datasets = [args.data] + list(args.compare_data or [])
-    missing = [path for path in datasets if not os.path.exists(path)]
+    required = datasets + ([args.holdout_data] if args.holdout_data else [])
+    missing = [path for path in required if not os.path.exists(path)]
     if missing:
         print(f"Error: data file(s) not found: {', '.join(missing)}", file=sys.stderr)
+        return EXIT_ERROR
+
+    # A path in niffler.toml would be read by every run of the funnel, and a
+    # holdout scored on every iteration is research data under another name.
+    if args.holdout_data and not typed_on_command_line(parser, 'holdout_data'):
+        print("Error: holdout_data is set in the configuration file. It must be "
+              "typed as --holdout-data: read from a file it would be spent on "
+              "every run.", file=sys.stderr)
         return EXIT_ERROR
 
     try:
@@ -685,6 +862,8 @@ def main() -> int:
     # The walk-forward rows, one per dataset the funnel reached. Empty when a
     # gate stopped it before stage 3.
     walk_forward_rows: List[Dict[str, Any]] = []
+    # Set only when the holdout backtest actually ran.
+    holdout_stage: Optional[StageResult] = None
 
     def record(stage: StageResult) -> bool:
         """Report a stage and say whether the funnel should continue."""
@@ -700,16 +879,24 @@ def main() -> int:
         data = load_ohlcv_csv(args.data, clean=args.clean)
         screened.append(args.data)
 
+        holdout = None
+        if args.holdout_data:
+            # Checked before any stage runs: reading the dates is not a look at
+            # the result, and a mis-cut file should not cost a whole funnel.
+            holdout = load_ohlcv_csv(args.holdout_data, clean=args.clean)
+            check_holdout_follows_research(data, holdout)
+
         if record(run_backtest_stage(data, symbol, args.strategy, run_config)):
-            if record(run_optimize_stage(
-                    data, args.strategy, run_config,
-                    method=args.optimization_method,
-                    metric=args.optimization_metric,
-                    trials=args.trials,
-                    seed=args.seed,
-                    n_jobs=args.n_jobs,
-                    min_retention=args.min_retention,
-                    min_grid_beat=args.min_grid_beat)):
+            optimize_stage = run_optimize_stage(
+                data, args.strategy, run_config,
+                method=args.optimization_method,
+                metric=args.optimization_metric,
+                trials=args.trials,
+                seed=args.seed,
+                n_jobs=args.n_jobs,
+                min_retention=args.min_retention,
+                min_grid_beat=args.min_grid_beat)
+            if record(optimize_stage):
 
                 rows = [evaluate(args.data, args.strategy, run_config, schedule)]
                 walk_forward_rows = rows
@@ -723,13 +910,44 @@ def main() -> int:
                                 evaluate(path, args.strategy, run_config, schedule))
                             screened.append(path)
                         render(rows)
-                        record(run_compare_stage(rows, args.min_beat_pct))
+                        reached_holdout = record(
+                            run_compare_stage(rows, args.min_beat_pct))
                     else:
                         skipped = StageResult(
                             name=STAGE_COMPARE,
                             skipped_reason='no --compare-data given; a single asset '
                                            'is one observation, not a cross-asset '
                                            'comparison')
+                        stages.append(skipped)
+                        report_stage(skipped)
+                        reached_holdout = True
+
+                    if reached_holdout and holdout is not None \
+                            and stopped_at is not None:
+                        # Only --force gets here with a failed gate behind it.
+                        skipped = StageResult(
+                            name=STAGE_HOLDOUT,
+                            skipped_reason='an earlier gate failed; the holdout '
+                                           'was not spent on a strategy that '
+                                           'already has its verdict (--force '
+                                           'does not override this)')
+                        stages.append(skipped)
+                        report_stage(skipped)
+                    elif reached_holdout and holdout is not None:
+                        holdout_stage = run_holdout_stage(
+                            holdout, symbol_from_path(args.holdout_data),
+                            args.strategy,
+                            optimize_stage.payload['winner_parameters'],
+                            run_config, args.min_holdout_excess,
+                            args.min_holdout_trades)
+                        screened.append(args.holdout_data)
+                        record(holdout_stage)
+                    elif reached_holdout:
+                        skipped = StageResult(
+                            name=STAGE_HOLDOUT,
+                            skipped_reason='no --holdout-data given; every number '
+                                           'above comes from data the search has '
+                                           'seen')
                         stages.append(skipped)
                         report_stage(skipped)
     except Exception as e:
@@ -745,6 +963,10 @@ def main() -> int:
         print(f"PASSED all {len(stages)} stage(s). That is a reason to look harder, "
               f"not a result: no correction is applied for the parameter search "
               f"behind any of these numbers.")
+        if holdout_stage is not None:
+            print("The holdout is the one number here that search never saw, and "
+                  "it is now spent: adjust the strategy and screen again, and the "
+                  "same file is research data.")
     else:
         print(stopped_at.describe())
         if args.force:
@@ -761,10 +983,29 @@ def main() -> int:
     # file and imply it covered the whole screen, and a block for a dataset the
     # funnel stopped short of would claim evidence that was never gathered.
     provenance = {path: collect_provenance(path) for path in screened}
+
+    # The holdout is exported as a row of its own, carrying the hash of the file
+    # it read, so "how many runs looked at this holdout" is a count over rows.
+    detail_rows = list(walk_forward_rows)
+    holdout_sha256 = None
+    if holdout_stage is not None:
+        holdout_sha256 = provenance_fingerprint(
+            provenance.get(args.holdout_data))['data_sha256']
+        holdout_stage.payload.update({
+            'data_path': args.holdout_data,
+            'data_sha256': holdout_sha256,
+        })
+        detail_rows.append({
+            **holdout_stage.payload,
+            'stage': STAGE_HOLDOUT,
+            'strategy': args.strategy,
+            'error': None,
+        })
     record = exporter_manager.create_run_record(
         identity, args.strategy,
         {
             'requested_datasets': datasets,
+            'holdout_data': args.holdout_data,
             'strategy': args.strategy,
             'settings': {
                 'train_window_months': schedule.train_window_months,
@@ -780,6 +1021,8 @@ def main() -> int:
                 'min_grid_beat': args.min_grid_beat,
                 'min_efficiency': args.min_efficiency,
                 'min_beat_pct': args.min_beat_pct,
+                'min_holdout_excess': args.min_holdout_excess,
+                'min_holdout_trades': args.min_holdout_trades,
             },
             'stages': [
                 {
@@ -810,6 +1053,11 @@ def main() -> int:
             'stopped_at_quantity': stopped_at.quantity if stopped_at is not None else None,
             'forced': bool(args.force),
             'n_stages': len(stages),
+            # None unless the holdout backtest ran: a requested holdout a gate
+            # stopped short of was not looked at.
+            'holdout_data_sha256': holdout_sha256,
+            'holdout_excess_pct': (holdout_stage.payload['excess_return_pct']
+                                   if holdout_stage is not None else None),
             # One entry per gate: which stage, what was measured, against what.
             'stages': [
                 {'stage': stage.name, 'quantity': gate.quantity, 'value': gate.value,
@@ -817,7 +1065,7 @@ def main() -> int:
                 for stage in stages for gate in stage.gates
             ],
         },
-        details=comparison_details(walk_forward_rows, provenance),
+        details=comparison_details(detail_rows, provenance),
     )
     # A screen whose record could not be written has failed, whatever the gates said.
     if report_export_outcome(exporter_manager.export_run(record), what='Screen'):

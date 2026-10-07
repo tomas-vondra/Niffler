@@ -7,7 +7,7 @@ import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from niffler.strategies.base_strategy import BaseStrategy
-from niffler.backtesting.backtest_engine import BacktestEngine
+from niffler.backtesting.backtest_engine import BacktestEngine, quiet_backtests
 from niffler.backtesting.run_config import RunConfig, resolve_run_config
 from niffler.utils.run_identity import RUN_KIND_MONTE_CARLO
 from .analysis_result import AnalysisResult, log_failure_rate
@@ -412,7 +412,8 @@ class MonteCarloAnalyzer:
                 )
                 return None
 
-            result = analyzer._backtest_engine.run_backtest(analyzer._strategy, sampled_data, symbol)
+            with quiet_backtests():
+                result = analyzer._backtest_engine.run_backtest(analyzer._strategy, sampled_data, symbol)
 
             # Add simulation metadata
             result.metadata = {
@@ -455,7 +456,8 @@ class MonteCarloAnalyzer:
 
         try:
             # Use pre-created strategy and backtest engine instances for better performance
-            result = self._backtest_engine.run_backtest(self._strategy, sampled_data, symbol)
+            with quiet_backtests():
+                result = self._backtest_engine.run_backtest(self._strategy, sampled_data, symbol)
 
             # Add simulation metadata
             result.metadata = {

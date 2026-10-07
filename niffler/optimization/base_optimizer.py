@@ -9,9 +9,10 @@ from datetime import datetime
 from decimal import Decimal, getcontext
 import threading
 import random
+import time
 
 from niffler.strategies.base_strategy import BaseStrategy
-from niffler.backtesting.backtest_engine import BacktestEngine
+from niffler.backtesting.backtest_engine import BacktestEngine, quiet_backtests
 from niffler.backtesting.run_config import RunConfig, resolve_run_config
 from niffler.utils.json_utils import safe_json_dump
 from .parameter_space import ParameterSpace
@@ -27,6 +28,9 @@ class BaseOptimizer(ABC):
     DEFAULT_COMMISSION = 0.001
     DEFAULT_SORT_BY = 'total_return'
     BACKTEST_TIMEOUT_SECONDS = 300  # 5 minutes per backtest
+    # Minimum gap between progress lines. Time-based rather than every N
+    # combinations, so a fast grid stays quiet and a slow one still reports.
+    PROGRESS_INTERVAL_SECONDS = 10.0
     REQUIRED_DATA_COLUMNS = ['open', 'high', 'low', 'close', 'volume']
     # Limit results in memory for large optimizations. When the cap is hit the
     # worst-scoring half is discarded, which never changes the winner (the
@@ -203,9 +207,48 @@ class BaseOptimizer(ABC):
         sorted_results = self._sort_and_log_results(results)
         return sorted_results
     
+    def _report_progress(self, done: int, total: int, started: float,
+                         last_reported: float) -> float:
+        """
+        Log how far the search has got, at most once per PROGRESS_INTERVAL_SECONDS.
+
+        Called from the parent process only: a spawned worker does not inherit
+        the logging configuration, so a parallel search is otherwise silent
+        from its first combination to its last.
+
+        Args:
+            done: Combinations finished so far, failed ones included
+            total: Combinations in the search
+            started: ``time.monotonic()`` when evaluation began
+            last_reported: ``time.monotonic()`` of the previous progress line
+
+        Returns:
+            The time of the latest progress line, to pass to the next call
+        """
+        now = time.monotonic()
+        if done >= total or now - last_reported < self.PROGRESS_INTERVAL_SECONDS:
+            return last_reported
+
+        elapsed = now - started
+        remaining = elapsed / done * (total - done)
+        logging.info(
+            f"Progress: {done}/{total} combinations ({done / total:.0%}) | "
+            f"elapsed {self._format_seconds(elapsed)} | "
+            f"ETA {self._format_seconds(remaining)}"
+        )
+        return now
+
+    @staticmethod
+    def _format_seconds(seconds: float) -> str:
+        """Render a duration as H:MM:SS."""
+        minutes, secs = divmod(int(round(seconds)), 60)
+        hours, minutes = divmod(minutes, 60)
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+
     def _evaluate_sequential(self, combinations: List[Dict[str, Any]]) -> List[OptimizationResult]:
         """Evaluate combinations sequentially (single-threaded)."""
         results = []
+        started = last_reported = time.monotonic()
         for i, params in enumerate(combinations):
             if self._check_shutdown():
                 break
@@ -214,6 +257,7 @@ class BaseOptimizer(ABC):
             result = self._evaluate_single_combination(params)
             if result is not None:
                 results = self._manage_memory_efficient_results(results, result)
+            last_reported = self._report_progress(i + 1, len(combinations), started, last_reported)
         return results
     
     def _evaluate_parallel(self, combinations: List[Dict[str, Any]]) -> List[OptimizationResult]:
@@ -249,6 +293,7 @@ class BaseOptimizer(ABC):
                 # Collect as they complete, but retain in submission order
                 completed: Dict[int, Optional[OptimizationResult]] = {}
                 next_index = 0
+                started = last_reported = time.monotonic()
                 for i, future in enumerate(as_completed(future_to_index)):
                     if self._check_shutdown():
                         # Cancel remaining futures
@@ -274,6 +319,9 @@ class BaseOptimizer(ABC):
                         logging.warning(f"Error evaluating {params}: {e}")
                         completed[index] = None
                         failed_count += 1
+
+                    last_reported = self._report_progress(
+                        i + 1, len(combinations), started, last_reported)
 
                     # Drain every position that is now contiguous with the last
                     # one retained, so retention order never depends on timing.
@@ -361,7 +409,8 @@ class BaseOptimizer(ABC):
             strategy = self.strategy_class(**parameters)
             
             # Run backtest using reusable engine
-            backtest_result = self._backtest_engine.run_backtest(strategy, self.data)
+            with quiet_backtests():
+                backtest_result = self._backtest_engine.run_backtest(strategy, self.data)
             
             return OptimizationResult(
                 parameters=parameters,
@@ -391,7 +440,8 @@ class BaseOptimizer(ABC):
             # Run backtest
             engine = BacktestEngine.from_config(resolve_run_config(run_config))
 
-            backtest_result = engine.run_backtest(strategy, data)
+            with quiet_backtests():
+                backtest_result = engine.run_backtest(strategy, data)
             
             return OptimizationResult(
                 parameters=parameters,

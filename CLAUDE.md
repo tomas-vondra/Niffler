@@ -38,6 +38,7 @@ The short version, because these are easy to "helpfully" undo:
 | `niffler/strategies/` imports **nothing** from `niffler/optimization/`; a strategy declares `PARAMETER_SPEC` as a plain dict | Import `ParameterSpace` into a strategy module - `niffler/optimization/__init__` imports `optimizer_factory`, which imports the registry, so it is a circular import |
 | Engine settings travel as **one** `RunConfig`, built once by `scripts/common.build_run_config` | Add an eleventh knob to `BacktestEngine.__init__` without a field on `RunConfig`, hand an analyzer or a worker a loose `initial_capital`/`commission`/`cost_model` triple, or re-check a range that `RunConfig.__post_init__` already checks |
 | A screening gate with **no** measurable value stops the run | Treat a `None` retention / efficiency / BEAT% as a pass, or as a 0.0 |
+| The holdout is scored by **one backtest**, on bars strictly after the research data, and its path is **typed** | Optimise or walk-forward on the holdout file, accept `holdout_data` from `niffler.toml`, run the stage after any earlier gate failed (`--force` included), or let a holdout with no completed round trip pass on its excess |
 | A cross-asset comparison pairs each fold with buy-and-hold over the **same bars** | Compare a fold return against a benchmark computed over the whole file, or against a fixed number - the window length would drive the verdict |
 | A strategy parameter the chosen strategy does not accept is an **error** | Silently drop an unknown `--params` key or a foreign flag, which runs the strategy with defaults while the user thinks it was configured |
 | There is **one** registry per extension point - strategies, exporters (`niffler/exporters/registry.py`), data sources (`niffler/data/downloaders/registry.py`) - and what each accepts is derived with `inspect.signature` | Hand-write a per-name kwargs filter or an `--source`/`--exporters` `choices=[...]` list; a forgotten branch builds the exporter on **defaults**, reports success and exits 0 |
@@ -260,6 +261,13 @@ python scripts/screen.py --data data/SPY_research.csv --strategy simple_ma \
 
 # Report every stage even after one fails (still exits 3)
 python scripts/screen.py --data data/SPY_research.csv --strategy rsi --force
+
+# Finish with ONE look at bars no decision has seen: a single backtest of the stage-2
+# winner, gated on completed round trips and on excess over buy-and-hold. Looking spends
+# the holdout - a strategy adjusted afterwards and screened again has been fitted to it -
+# so it only runs once every earlier gate passed, and --force does not override that
+python scripts/screen.py --data data/SPY_research.csv --strategy breakout \
+  --compare-data data/QQQ_research.csv --holdout-data data/SPY_holdout.csv
 ```
 
 Exit codes: `0` every gate passed, `3` a gate stopped the run, `1` the run failed.
@@ -428,8 +436,8 @@ Exit codes: `0` every gate passed, `3` a gate stopped the run, `1` the run faile
   - `run_record.py` - `RunRecord` (identity, `strategy_key`, `document`): what an
     exporter is handed for a run that is not a single backtest
   - `console_exporter.py` - Human-readable console output. Supports every run kind; for
-    non-backtest kinds it prints the run's identity, since those scripts print their own
-    tables
+    non-backtest kinds it prints nothing, since those scripts print the run's identity and
+    their own tables
   - `json_exporter.py` - One JSON document per run, every kind. This is the durable record
     and the file `--params-file` reads; `--output PATH` in any script selects it
   - `csv_exporter.py` - CSV file export for analysis tools (backtests only)
@@ -477,8 +485,15 @@ Exit codes: `0` every gate passed, `3` a gate stopped the run, `1` the run faile
     overlap. A pair that fails becomes a row carrying its error and makes the run exit
     non-zero - it never silently shrinks the table
   - `screen.py` - The pipeline as a funnel: backtest → optimize → walk-forward →
-    cross-asset compare, stopping at the first gate that fails with a line that names
-    the stage, the measurement, the threshold and the flag that set it. It computes
+    cross-asset compare → holdout (only with `--holdout-data`), stopping at the first
+    gate that fails with a line that names the stage, the measurement, the threshold and
+    the flag that set it. The holdout stage is one backtest of the stage-2 winner, never
+    a search; the file must start strictly after `--data` ends (else exit 1), must be
+    typed rather than read from `niffler.toml`, is skipped - not spent - when an earlier
+    gate failed even under `--force`, cannot pass below `--min-holdout-trades` completed
+    round trips (default 1), and is exported as a `niffler-comparisons`
+    row with `stage: holdout` and its own `data_sha256` (also `holdout_data_sha256` on the
+    run summary), so the number of looks at one holdout file is a count. It computes
     nothing itself - every gated number comes from the library or from
     `compare.evaluate`, which it calls once for the primary asset and reads twice
     (stages 3 and 4). `Gate` is a pure dataclass, so every threshold decision is
@@ -609,10 +624,12 @@ The analysis framework provides two main approaches for testing strategy robustn
   `parameter_space`) and `segmented_in_sample` (the old fixed-parameter behaviour — it
   validates nothing, requires `optimal_parameters`, logs a warning and marks every fold
   in-sample)
-- **Overlap caveat**: with the defaults (`test_window_months=6`, `step_months=3`)
-  consecutive out-of-sample windows overlap 50%. Repeated bars are counted once in
-  `combined_sharpe_ratio` and the overlap is reported/warned, but per-fold counters still
-  treat each fold as one sample
+- **Folds do not overlap by default**: `step_months=None` means `test_window_months`, the
+  same rule `compare.py` and `screen.py` use, and `analyze.py --step` defaults to it. A
+  smaller step overlaps the out-of-sample windows: repeated bars are counted once in
+  `combined_sharpe_ratio`, the overlap is reported/warned, and every per-fold counter is
+  labelled via `describe_fold_independence` (console tag, `fold_independence` in the
+  document) rather than corrected - do not add an "effective fold count"
 
 #### Monte Carlo Analysis
 - **Purpose**: Tests market scenario robustness using block bootstrap sampling

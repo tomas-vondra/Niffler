@@ -25,6 +25,9 @@ from niffler.analysis import (
     MonteCarloAnalyzer,
     MODE_WALK_FORWARD,
     MODE_SEGMENTED_IN_SAMPLE,
+    OVERLAP_TAG,
+    POOLED_METRICS,
+    describe_fold_independence,
 )
 from niffler.optimization.base_optimizer import BaseOptimizer
 from niffler.optimization.optimizer_factory import (
@@ -74,7 +77,7 @@ Examples:
   python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma
 
   # Walk-forward with custom windows
-  python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma --train-window 12 --test-window 6 --step 3
+  python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --strategy simple_ma --train-window 12 --test-window 6 --step 6
 
   # Re-run one fixed parameter set over consecutive in-sample slices (NOT a validation)
   python scripts/analyze.py --data data/BTCUSDT_binance_1d.csv --analysis walk_forward --mode segmented_in_sample --strategy simple_ma --params '{"short_window": 10, "long_window": 30}'
@@ -194,8 +197,9 @@ Examples:
     parser.add_argument(
         '--step',
         type=int,
-        default=3,
-        help='Step size in months for walk-forward analysis (default: 3)'
+        default=None,
+        help='Months between folds (default: --test-window, '
+             'which keeps out-of-sample windows non-overlapping)'
     )
     
     # Monte Carlo specific arguments
@@ -400,22 +404,38 @@ def run_walk_forward_analysis(args, data: pd.DataFrame, parameters: dict = None,
               f"({'anchored' if args.anchored else 'rolling'})")
         print(f"Optimizer: {args.optimization_method} on {args.optimization_metric}")
     print(f"Test Windows: {args.test_window} months")
-    print(f"Step Size: {args.step} months")
+    step_origin = '' if args.step is not None else ' (default: equal to the test window)'
+    print(f"Step Size: {analyzer.step_months} months{step_origin}")
+
+    # Overlapping folds share bars, so a number that counts folds must not be
+    # printed looking the same as one that counts independent observations.
+    independence = describe_fold_independence(result.combined_metrics)
+    overlapping = independence['folds_independent'] is False
+    fold_tag = f"  {OVERLAP_TAG}" if overlapping else ''
+    if overlapping:
+        print(f"\n{'!' * 66}")
+        print(f"FOLDS OVERLAP: {independence['oos_overlap_pct']:.1f}% of pooled "
+              f"out-of-sample bars are repeats.")
+        print("The folds are NOT independent observations. Every line tagged")
+        print(f"{OVERLAP_TAG} counts a fold as one sample.")
+        print("Leave --step unset (or >= --test-window) for independent folds.")
+        print('!' * 66)
 
     print(f"\nCombined Metrics:")
     for metric, value in result.combined_metrics.items():
+        tag = '' if metric in POOLED_METRICS else fold_tag
         if isinstance(value, (int, float)):
-            print(f"  {metric}: {value:.4f}")
+            print(f"  {metric}: {value:.4f}{tag}")
         else:
-            print(f"  {metric}: {value}")
-    
+            print(f"  {metric}: {value}{tag}")
+
     print(f"\nStability Metrics:")
     for metric, value in result.stability_metrics.items():
         if isinstance(value, (int, float)):
-            print(f"  {metric}: {value:.4f}")
+            print(f"  {metric}: {value:.4f}{fold_tag}")
         else:
-            print(f"  {metric}: {value}")
-    
+            print(f"  {metric}: {value}{fold_tag}")
+
     # Show per-fold parameters and in-sample vs out-of-sample performance
     folds = (result.metadata or {}).get('folds') or []
     if folds:
@@ -554,6 +574,7 @@ def build_results_document(result) -> dict:
     df = result.to_dataframe()
     if result.analysis_type == RUN_KIND_WALK_FORWARD:
         output_data['period_results'] = df.to_dict('records')
+        output_data['fold_independence'] = describe_fold_independence(result.combined_metrics)
     else:  # monte_carlo
         output_data['simulation_results'] = df.to_dict('records')
 
@@ -570,6 +591,9 @@ _SUMMARY_FIELDS = (
     'n_periods', 'combined_metrics', 'stability_metrics', 'analysis_parameters',
     'performance_consistency',
 )
+
+#: The parts of ``fold_independence`` a walk-forward summary carries at top level.
+FOLD_INDEPENDENCE_SUMMARY_FIELDS = ('folds_independent', 'oos_overlap_pct')
 
 
 def build_export_views(result, document: dict):
@@ -593,6 +617,11 @@ def build_export_views(result, document: dict):
     summary['failure_rate'] = getattr(result, 'failure_rate', None)
 
     if document.get('analysis_type') == RUN_KIND_WALK_FORWARD:
+        # Flat and explicitly mapped, so a leaderboard can filter on them. An
+        # unknown overlap stays None: null is not the same claim as false.
+        independence = document.get('fold_independence') or {}
+        for name in FOLD_INDEPENDENCE_SUMMARY_FIELDS:
+            summary[name] = independence.get(name)
         metadata = result.metadata if isinstance(result.metadata, dict) else {}
         folds = metadata.get('folds')
         periods = list(document.get('period_results') or [])

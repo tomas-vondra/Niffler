@@ -188,13 +188,12 @@ class TestManagerExportRun(TempDirTestCase):
             ['console', 'json'], kind='optimize', output_path=self.path())
         record = record_for()
 
-        with patch('sys.stdout', new=io.StringIO()) as stdout:
+        with patch('sys.stdout', new=io.StringIO()):
             summary = manager.export_run(record)
 
         self.assertTrue(summary.ok)
         self.assertEqual(summary.run_id, record.identity.run_id)
         self.assertEqual(summary.successes, ['ConsoleExporter', 'JsonExporter'])
-        self.assertIn(record.identity.run_id, stdout.getvalue())
         self.assertEqual(self.read()['run']['run_id'], record.identity.run_id)
 
     def test_one_failing_exporter_does_not_stop_the_others(self):
@@ -213,13 +212,13 @@ class TestManagerExportRun(TempDirTestCase):
         self.assertEqual(summary.failures[0][1], 'disk full')
         self.assertTrue(os.path.exists(self.path()))
 
-    def test_console_prints_the_identity(self):
+    def test_console_does_not_repeat_the_identity(self):
+        # Every script prints the identity line itself before the run starts.
         record = record_for(identity=RunIdentity(run_id='r1', kind='screen',
                                                  experiment='exp'))
         with patch('sys.stdout', new=io.StringIO()) as stdout:
             ConsoleExporter().export_run(record)
-        self.assertIn('r1', stdout.getvalue())
-        self.assertIn('experiment: exp', stdout.getvalue())
+        self.assertEqual(stdout.getvalue(), '')
 
 
 if __name__ == '__main__':

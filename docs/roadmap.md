@@ -61,8 +61,17 @@ Kept struck through rather than deleted, so the list stays honest about what mov
   functions (`niffler/optimization/optimizer_factory.py`) and a class attribute plus
   instance methods (`niffler/exporters/exporter_manager.py`). The risk manager in
   `backtest.py` is still built inline. Pick one and converge.
-- **Progress reporting during optimization.** A grid search currently prints nothing until
-  it finishes. There is no per-combination feedback and no ETA.
+- ~~**Progress reporting during optimization.**~~ — shipped, and the original note was only
+  half right. With `--jobs` above 1 a search did print nothing until it finished, because
+  spawned workers do not inherit the logging configuration. The parent process now logs
+  `Progress: done/total | elapsed | ETA` at most every 10 seconds, on every evaluation path.
+- ~~**A sequential search floods the log.**~~ — found while measuring the item above, and
+  fixed with it. With `--jobs 1` the search was the opposite of silent: the engine logs every
+  fill and five lines per backtest at `INFO`, so the default 396-combination `breakout` grid
+  on five years of daily BTCUSDT wrote about 41,700 lines, 39,524 of them `BUY:`/`SELL:`. The
+  same run now writes 175. `quiet_backtests()` holds the backtesting package below `WARNING`
+  while the optimizer, walk-forward or Monte Carlo runs backtests in a loop; a single
+  `backtest.py` run still logs its fills, and `--log-level DEBUG` restores the full log.
 
 ## Observability
 
@@ -139,9 +148,10 @@ for.
   returns 438.42% — below the baseline — and only 24.7% of the grid beats holding at all.
   The inputs for a deflated Sharpe are all already in hand (trial count, the spread of
   scores across the complete result set, the winner's return moments, the bar count).
-- **One asset, one window.** Every CLI takes a single `--data` CSV, so a result is an
-  anecdote until it is repeated. A batch runner that fans one strategy across N datasets
-  and reports the cross-sectional distribution is what turns it into evidence.
+- ~~**One asset, one window.**~~ — shipped in #11 and #14. `scripts/compare.py` takes several
+  `--data` files, runs the same walk-forward over each and reports excess over buy-and-hold
+  per dataset; `scripts/screen.py` makes that cross-asset comparison the last gate of its
+  funnel. `backtest.py`, `optimize.py` and `analyze.py` still take one CSV each, by design.
 - **Walk-forward folds overlap by default.** `test_window=6` with `step=3` means
   consecutive out-of-sample windows share half their bars. The run reports
   `oos_overlap_pct` and the pooled metrics deduplicate, but 15 folds are not 15
