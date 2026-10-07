@@ -35,6 +35,7 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from niffler.config.logging import setup_logging
+from niffler.exporters import ExporterManager
 from niffler.utils.provenance import collect_provenance
 from niffler.optimization import plateau as plateau_analysis
 from niffler.optimization.optimizer_factory import (
@@ -54,13 +55,15 @@ from scripts.common import (
     add_cost_model_arguments,
     add_engine_arguments,
     add_experiment_arguments,
+    add_exporter_arguments,
     add_risk_manager_arguments,
     build_run_config,
     build_run_identity,
+    configure_exporters,
     load_ohlcv_csv,
+    report_export_outcome,
     report_run_config,
     report_run_identity,
-    run_metadata,
 )
 from scripts.config_file import (
     add_config_arguments,
@@ -287,9 +290,12 @@ def main() -> int:
     parser.add_argument('--seed', type=int, default=None,
                        help='Random seed for reproducible results')
     
-    # Output options
+    # Output options. The JSON file is this script's durable record and what a
+    # later --params-file step reads, so json is in the default list.
+    add_exporter_arguments(parser, default='console,json')
     parser.add_argument('--output', default=None,
-                       help='Output file for results (default: auto-generated)')
+                       help='Path for the JSON result file; implies the json exporter '
+                            '(default: auto-generated)')
     parser.add_argument('--top-n', type=int, default=10,
                        help='Number of top results to display (default: 10)')
 
@@ -336,6 +342,15 @@ def main() -> int:
             args, RUN_KIND_OPTIMIZE, config=config, experiment_typed=experiment_typed
         )
         report_run_identity(identity, identity_note)
+
+        # Exporters are created before the search: an exporter that cannot
+        # export an optimization must not be discovered after the grid has run.
+        exporter_manager = ExporterManager()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        configure_exporters(
+            exporter_manager, args, RUN_KIND_OPTIMIZE,
+            default_output=f"optimization_results_{args.strategy}_{args.method}_{timestamp}.json"
+        )
 
         # Create optimizer
         optimizer = create_optimizer(
@@ -439,18 +454,15 @@ def main() -> int:
             print(f"    Parameters: {params}")
             print()
         
-        # Generate output filename if not provided
-        if args.output is None:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            args.output = f"optimization_results_{args.strategy}_{args.method}_{timestamp}.json"
-        
-        # Save results, stamped with the code/data/environment that produced them.
-        # Collected once here rather than inside save_results, which is also called
-        # from library code that has no idea what the input file was.
-        provenance = collect_provenance(args.data)
-        optimizer.save_results(results, args.output, provenance=provenance,
-                               run=run_metadata(identity, args.strategy))
-        print(f"Full results saved to: {args.output}")
+        # Export the results, stamped with the run and with the code, data and
+        # environment that produced them. Provenance is collected once here and
+        # shared by every exporter.
+        record = exporter_manager.create_run_record(
+            identity, args.strategy, optimizer.results_document(results),
+            provenance=collect_provenance(args.data)
+        )
+        exit_code = report_export_outcome(
+            exporter_manager.export_run(record), what='Optimization')
 
         # Plateau analysis last, and non-fatally: it reads scores the run
         # already produced, so a reporting bug must not throw away an
@@ -468,7 +480,7 @@ def main() -> int:
             except Exception as e:
                 logger.warning(f"Could not run plateau analysis: {e}")
 
-        return 0
+        return exit_code
         
     except Exception as e:
         logger.error(f"Optimization failed: {e}")

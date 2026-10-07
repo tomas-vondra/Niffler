@@ -32,7 +32,7 @@ from niffler.optimization.optimizer_factory import (
     get_parameter_space,
 )
 from niffler.strategies.registry import get_available_strategies, get_strategy_class
-from niffler.utils.json_utils import safe_json_dump
+from niffler.exporters import ExporterManager
 from niffler.utils.provenance import collect_provenance
 from niffler.utils.run_identity import RUN_KIND_MONTE_CARLO, RUN_KIND_WALK_FORWARD
 from scripts.common import (
@@ -43,13 +43,15 @@ from scripts.common import (
     add_experiment_arguments,
     add_risk_manager_arguments,
     add_strategy_parameter_arguments,
+    add_exporter_arguments,
     build_run_config,
     build_run_identity,
+    configure_exporters,
     load_ohlcv_csv,
+    report_export_outcome,
     report_run_config,
     report_run_identity,
     resolve_strategy_parameters,
-    run_metadata,
 )
 from scripts.config_file import (
     add_config_arguments,
@@ -232,9 +234,10 @@ Examples:
     )
     
     # Output arguments
+    add_exporter_arguments(parser, default='console')
     parser.add_argument(
         '--output',
-        help='Output file for detailed results (JSON format)'
+        help='Path for the JSON result file; implies the json exporter'
     )
     
     parser.add_argument(
@@ -519,67 +522,44 @@ def run_monte_carlo_analysis(args, data: pd.DataFrame, parameters: dict,
 
 
 
-def save_results(result, output_file: str, provenance: dict = None,
-                 run: dict = None) -> None:
-    """Save analysis results to a JSON file.
+def build_results_document(result) -> dict:
+    """Render an analysis result as the document every exporter is handed.
+
+    It carries neither a ``run`` nor a ``provenance`` block: those are attached
+    once, by ``ExporterManager.create_run_record``.
 
     Args:
-        result: Analysis result object to serialise.
-        output_file: Path of the JSON file to write.
-        provenance: Optional run provenance record (see
-            ``niffler.utils.provenance.collect_provenance``), written under a
-            top-level ``provenance`` key so a walk-forward or Monte Carlo verdict
-            can be tied back to the code and data that produced it.
-        run: Optional run identity block, written under a top-level ``run`` key.
+        result: Analysis result object to render.
 
-    Raises:
-        OSError: If the file cannot be written.
-        TypeError: If the result cannot be serialised to JSON.
+    Returns:
+        A dict holding the summary and one record per fold or simulation.
     """
-    try:
-        # Convert result to dictionary
-        output_data = {
-            'analysis_type': result.analysis_type,
-            'strategy_name': result.strategy_name,
-            'symbol': result.symbol,
-            'analysis_start_date': result.analysis_start_date.isoformat(),
-            'analysis_end_date': result.analysis_end_date.isoformat(),
-            'n_periods': result.n_periods,
-            'combined_metrics': result.combined_metrics,
-            'stability_metrics': result.stability_metrics,
-            'analysis_parameters': result.analysis_parameters,
-            'summary_statistics': result.get_summary_statistics(),
-            'performance_consistency': result.get_performance_consistency()
-        }
-        
-        # Add period/simulation results
-        df = result.to_dataframe()
-        if result.analysis_type == 'walk_forward':
-            output_data['period_results'] = df.to_dict('records')
-        else:  # monte_carlo
-            output_data['simulation_results'] = df.to_dict('records')
-        
-        # Add metadata if available
-        if result.metadata:
-            output_data['metadata'] = result.metadata
+    output_data = {
+        'analysis_type': result.analysis_type,
+        'strategy_name': result.strategy_name,
+        'symbol': result.symbol,
+        'analysis_start_date': result.analysis_start_date.isoformat(),
+        'analysis_end_date': result.analysis_end_date.isoformat(),
+        'n_periods': result.n_periods,
+        'combined_metrics': result.combined_metrics,
+        'stability_metrics': result.stability_metrics,
+        'analysis_parameters': result.analysis_parameters,
+        'summary_statistics': result.get_summary_statistics(),
+        'performance_consistency': result.get_performance_consistency()
+    }
 
-        if provenance is not None:
-            output_data['provenance'] = provenance
+    # Add period/simulation results
+    df = result.to_dataframe()
+    if result.analysis_type == 'walk_forward':
+        output_data['period_results'] = df.to_dict('records')
+    else:  # monte_carlo
+        output_data['simulation_results'] = df.to_dict('records')
 
-        if run is not None:
-            output_data['run'] = run
+    # Add metadata if available
+    if result.metadata:
+        output_data['metadata'] = result.metadata
 
-        # Save to file
-        with open(output_file, 'w') as f:
-            safe_json_dump(output_data, f, indent=2, default=str)
-        
-        logging.info(f"Results saved to {output_file}")
-
-    except (OSError, TypeError, ValueError) as e:
-        # Never swallow this: main() reports the analysis as failed instead of
-        # claiming success while no file was written.
-        logging.error(f"Error saving results to {output_file}: {e}")
-        raise
+    return output_data
 
 
 def main() -> int:
@@ -641,6 +621,11 @@ def main() -> int:
         )
         report_run_identity(identity, identity_note)
 
+        # Exporters are created before the analysis: one that cannot export
+        # this kind of run must not be discovered after the folds have run.
+        exporter_manager = ExporterManager()
+        configure_exporters(exporter_manager, args, identity.kind)
+
         # Run analysis
         if args.analysis == 'walk_forward':
             result = run_walk_forward_analysis(args, data, parameters, run_config)
@@ -649,10 +634,15 @@ def main() -> int:
         else:
             raise ValueError(f"Unknown analysis type: {args.analysis}")
         
-        # Save results if output file specified
-        if args.output:
-            save_results(result, args.output, provenance=collect_provenance(args.data),
-                         run=run_metadata(identity, args.strategy))
+        # Export the result through every configured exporter.
+        record =exporter_manager.create_run_record(
+            identity, args.strategy, build_results_document(result),
+            provenance=collect_provenance(args.data)
+        )
+        # A failed export is a failed run: it must not be reported as a
+        # successful analysis while no file was written.
+        if report_export_outcome(exporter_manager.export_run(record), what='Analysis'):
+            return 1
         
         print(f"\nAnalysis completed successfully!")
         return 0

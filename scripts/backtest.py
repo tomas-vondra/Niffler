@@ -18,22 +18,27 @@ from niffler.strategies.registry import (
     create_strategy,
     get_available_strategies,
 )
-from niffler.exporters import ExporterManager, get_available_exporters
+from niffler.exporters import ExporterManager
 from niffler.utils.provenance import collect_provenance
 from niffler.utils.run_identity import RUN_KIND_BACKTEST
 from niffler.config.logging import setup_logging
 from scripts.common import (
+    EXPORTER_OPTION_FLAGS,  # noqa: F401 - re-exported for callers and tests
     PARAMS_TABLE,
     StrategyParameters,
     add_cost_model_arguments,
     add_engine_arguments,
     add_experiment_arguments,
+    add_exporter_arguments,
     add_risk_manager_arguments,
     add_strategy_parameter_arguments,
+    build_exporter_options,  # noqa: F401 - re-exported for callers and tests
     build_run_config,
     build_run_identity,
+    configure_exporters,
     load_ohlcv_csv,
     report_cost_model,
+    report_export_outcome,
     report_run_identity,
     resolve_strategy_parameters,
 )
@@ -83,36 +88,6 @@ def load_data(file_path: str, clean: bool = False) -> pd.DataFrame:
     return load_ohlcv_csv(file_path, clean=clean)
 
 
-def report_export_outcome(export_result: Any, exporter_names: List[str]) -> int:
-    """Print a per-exporter export report and derive the process exit code.
-
-    Args:
-        export_result: The ``ExportSummary`` returned by
-            ExporterManager.export_backtest_result.
-        exporter_names: Names of the configured exporters.
-
-    Returns:
-        0 when every exporter succeeded, 1 when at least one failed.
-    """
-    successes = export_result.successes
-    failures = export_result.failures
-
-    print(f"Backtest completed with run ID: {export_result.run_id}")
-
-    print("Export report:")
-    for name in successes:
-        print(f"  OK     {name}")
-    for name, error in failures:
-        print(f"  FAILED {name}: {error}")
-
-    if failures:
-        total = len(successes) + len(failures)
-        print(f"Error: {len(failures)} of {total} exporters failed", file=sys.stderr)
-        return 1
-
-    return 0
-
-
 # Convenience flags that map onto strategy constructor parameters. The flag name
 # is only needed to phrase errors in the terms the user actually typed.
 STRATEGY_PARAMETER_FLAGS = {
@@ -145,61 +120,6 @@ def build_strategy_parameters(args, config=None) -> StrategyParameters:
     return resolve_strategy_parameters(
         args, args.strategy, config=config, flags=STRATEGY_PARAMETER_FLAGS
     )
-
-
-# Convenience flags that map onto exporter constructor options: option name ->
-# argparse attribute. Each flag defaults to None so an explicitly passed one can be
-# told apart from an unset one, and only the ones actually passed are forwarded - an
-# option nobody asked for must not be broadcast to exporters that would reject it.
-#
-# Unlike STRATEGY_PARAMETER_FLAGS this carries no flag spellings: the rejection
-# happens in ExporterManager, which serves callers that have no CLI, so its message
-# names the option (output_dir) rather than the flag (--csv-output-dir).
-EXPORTER_OPTION_FLAGS = {
-    'output_dir': 'csv_output_dir',
-    'host': 'es_host',
-    'port': 'es_port',
-    'index_prefix': 'es_index_prefix',
-}
-
-
-def build_exporter_options(args) -> Dict[str, Any]:
-    """Collect exporter options from --exporter-params and the convenience flags.
-
-    An explicitly passed flag overrides the same key in ``--exporter-params``. The
-    options are validated against the chosen exporters by
-    ``ExporterManager.create_exporters_from_list``, which raises when none of them
-    accepts an option, so ``--exporters console --csv-output-dir results/`` fails
-    loudly instead of writing nothing anywhere.
-
-    Args:
-        args: Parsed command line arguments.
-
-    Returns:
-        Keyword arguments for the exporter constructors.
-
-    Raises:
-        ValueError: If --exporter-params is not a JSON object.
-    """
-    options: Dict[str, Any] = {}
-
-    if args.exporter_params:
-        try:
-            parsed = json.loads(args.exporter_params)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON in --exporter-params: {e}") from e
-        if not isinstance(parsed, dict):
-            raise ValueError(
-                f"--exporter-params must be a JSON object, got {type(parsed).__name__}"
-            )
-        options.update(parsed)
-
-    for option, attribute in EXPORTER_OPTION_FLAGS.items():
-        value = getattr(args, attribute, None)
-        if value is not None:
-            options[option] = value
-
-    return options
 
 
 def main() -> int:
@@ -264,33 +184,11 @@ Examples:
     add_engine_arguments(parser, bootstrap=True)
 
 
-    # Output options
-    #
-    # The exporter choices come from niffler.exporters.registry, and --exporter-params
-    # is the generic path that reaches any registered exporter's constructor. The named
-    # flags below are conveniences for the options the shipped exporters happen to have;
-    # each defaults to None so only explicitly passed ones are forwarded. An option no
-    # chosen exporter accepts is an error, never silently ignored.
-    available_exporters = ','.join(get_available_exporters())
-    parser.add_argument('--exporters', type=str, default='console',
-                       help=f'Comma-separated list of exporters to use: {available_exporters} (default: console)')
-    parser.add_argument('--exporter-params',
-                       help='Exporter options as a JSON object, e.g. \'{"output_dir": "results"}\'. '
-                            'Works for any registered exporter; an option none of the chosen '
-                            'exporters accepts is reported with the accepted ones.')
-    parser.add_argument('--csv-output-dir', default=None,
-                       help='Directory for CSV output files (default: current directory)')
+    # Output options: --exporters and friends, identical in every script.
+    add_exporter_arguments(parser, default='console')
     parser.add_argument('--symbol', default=None,
                        help='Symbol identifier for the data (default: extracted from filename)')
 
-    # Elasticsearch options (optional overrides for .env file configuration)
-    parser.add_argument('--es-host',
-                       help='Elasticsearch host (overrides ELASTICSEARCH_HOST env var)')
-    parser.add_argument('--es-port', type=int,
-                       help='Elasticsearch port (overrides ELASTICSEARCH_PORT env var)')
-    parser.add_argument('--es-index-prefix',
-                       help='Elasticsearch index prefix (overrides ELASTICSEARCH_INDEX_PREFIX env var)')
-    
     # Data processing options
     parser.add_argument('--clean', action='store_true',
                        help='Apply data cleaning pipeline to the CSV file before backtesting')
@@ -356,6 +254,12 @@ Examples:
         )
         report_run_identity(identity, identity_note)
 
+        # Exporters are created before the run for the same reason: an option
+        # none of them accepts, or one that cannot export a backtest, is a
+        # mistake in the command and must not cost a finished backtest.
+        # Construction is generic - a registered exporter needs no change here.
+        exporter_manager = ExporterManager()
+        configure_exporters(exporter_manager, args, RUN_KIND_BACKTEST)
 
         print(f"Strategy: {strategy.get_description()}")
         
@@ -379,23 +283,6 @@ Examples:
 
         # Run backtest
         result = engine.run_backtest(strategy, data, symbol)
-
-        # Setup exporters
-        exporter_manager = ExporterManager()
-
-        # Parse exporters parameter
-        exporter_names = [name.strip().lower() for name in args.exporters.split(',')]
-
-        # Create exporters. Construction is generic: an exporter registered in
-        # niffler.exporters.registry is usable here with no change to this file, and
-        # each one is handed the options its constructor declares.
-        exporter_manager.create_exporters_from_list(
-            exporter_names, **build_exporter_options(args)
-        )
-
-        if exporter_manager.get_exporter_count() == 0:
-            print(f"Error: no usable exporters created from '{args.exporters}'", file=sys.stderr)
-            return 1
 
         # Prepare strategy parameters for metadata (generic - gets from strategy object)
         strategy_params = strategy.parameters.copy()

@@ -74,20 +74,22 @@ from niffler.strategies.registry import (
     get_available_strategies,
     get_strategy_class,
 )
-from niffler.utils.json_utils import safe_json_dump
+from niffler.exporters import ExporterManager
 from niffler.utils.provenance import collect_provenance
 from niffler.utils.run_identity import RUN_KIND_SCREEN
 from scripts.common import (
     add_cost_model_arguments,
     add_engine_arguments,
     add_experiment_arguments,
+    add_exporter_arguments,
     add_risk_manager_arguments,
     build_run_config,
     build_run_identity,
+    configure_exporters,
     load_ohlcv_csv,
+    report_export_outcome,
     report_run_config,
     report_run_identity,
-    run_metadata,
 )
 from scripts.compare import FoldSchedule, evaluate, render, symbol_from_path
 from scripts.config_file import (
@@ -532,8 +534,10 @@ outcome), 1 = the run failed.
                              'one asset is not a cross-asset comparison')
     parser.add_argument('--clean', action='store_true',
                         help='Run the preprocessing pipeline on each dataset first')
+    add_exporter_arguments(parser, default='console')
     parser.add_argument('--output', default=None,
-                        help='Write the full screening record to this JSON file')
+                        help='Write the full screening record to this JSON file; '
+                             'implies the json exporter')
     parser.add_argument('--force', action='store_true',
                         help='Run every stage even after a gate fails. The failure '
                              'is still reported and the run still exits 3')
@@ -640,6 +644,10 @@ def main() -> int:
         identity, identity_note = build_run_identity(
             args, RUN_KIND_SCREEN, config=config, experiment_typed=experiment_typed
         )
+        # Created before the funnel runs, so an unusable exporter stops the
+        # screen now rather than after every stage has been computed.
+        exporter_manager = ExporterManager()
+        configure_exporters(exporter_manager, args, RUN_KIND_SCREEN)
     except (ValueError, TypeError) as e:
         print(f"Error: {e}", file=sys.stderr)
         return EXIT_ERROR
@@ -739,14 +747,9 @@ def main() -> int:
             print("(--force ran the remaining stages anyway; the verdict stands.)")
     print(_SEPARATOR)
 
-    if args.output:
-        payload = {
-            'run': run_metadata(identity, args.strategy),
-            # One record per dataset the run actually read: a single block would
-            # hash one file and imply it covered the whole screen, and a block
-            # for a dataset the funnel stopped short of would claim evidence
-            # that was never gathered.
-            'provenance': {path: collect_provenance(path) for path in screened},
+    record = exporter_manager.create_run_record(
+        identity, args.strategy,
+        {
             'requested_datasets': datasets,
             'strategy': args.strategy,
             'settings': {
@@ -783,10 +786,16 @@ def main() -> int:
                 for stage in stages
             ],
             'stopped_at': stopped_at.describe() if stopped_at is not None else None,
-        }
-        with open(args.output, 'w') as handle:
-            safe_json_dump(payload, handle, indent=2, default=str)
-        print(f"Wrote {args.output}")
+        },
+        # One record per dataset the run actually read: a single block would hash
+        # one file and imply it covered the whole screen, and a block for a
+        # dataset the funnel stopped short of would claim evidence that was
+        # never gathered.
+        provenance={path: collect_provenance(path) for path in screened},
+    )
+    # A screen whose record could not be written has failed, whatever the gates said.
+    if report_export_outcome(exporter_manager.export_run(record), what='Screen'):
+        return EXIT_ERROR
 
     return EXIT_OK if stopped_at is None else EXIT_STOPPED
 

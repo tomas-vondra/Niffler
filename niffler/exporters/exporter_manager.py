@@ -6,14 +6,16 @@ Coordinates multiple exporters for backtesting results with unique identificatio
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, Any, List, Optional, Set, Tuple
+from typing import Callable, Dict, Any, List, Optional, Set, Tuple
 from .base_exporter import BaseExporter
 from .registry import (
     create_exporter,
     get_available_exporters,
     get_exporter_class,
     get_exporter_option_names,
+    get_exporters_supporting,
 )
+from .run_record import RunRecord
 from ..backtesting.backtest_result import BacktestResult
 from ..utils.run_identity import RUN_KIND_BACKTEST, RunIdentity, new_run_identity
 
@@ -94,6 +96,7 @@ class ExporterManager:
         return exporter
 
     def create_exporters_from_list(self, exporter_names: List[str],
+                                   kind: Optional[str] = None,
                                    **kwargs) -> List[Tuple[str, str]]:
         """
         Create multiple exporters from a list of names, broadcasting the options.
@@ -113,6 +116,11 @@ class ExporterManager:
 
         Args:
             exporter_names: Names of the exporter types to create
+            kind: The kind of run about to be exported (see
+                :data:`niffler.utils.run_identity.RUN_KINDS`). When given, an
+                exporter that does not support it is a caller error and raises
+                here - which callers do before the computation, so an unusable
+                exporter is not discovered after the work is done
             **kwargs: Configuration pool broadcast to the exporter constructors
 
         Returns:
@@ -120,15 +128,26 @@ class ExporterManager:
             could not be created; empty when every requested exporter was built
 
         Raises:
-            ValueError: If an option is accepted by none of the requested exporters
+            ValueError: If an option is accepted by none of the requested exporters,
+                or a requested exporter does not support ``kind``
         """
         accepted_by: Dict[str, Set[str]] = {}
+        unsupported: List[str] = []
         for name in exporter_names:
             try:
-                get_exporter_class(name)
+                exporter_class = get_exporter_class(name)
             except ValueError:
                 continue  # Unknown names are reported per-exporter below.
             accepted_by[name] = get_exporter_option_names(name)
+            if kind is not None and kind not in exporter_class.SUPPORTED_KINDS:
+                unsupported.append(name)
+
+        if unsupported:
+            supporting = ', '.join(get_exporters_supporting(kind)) or 'none'
+            raise ValueError(
+                f"Exporter(s) {', '.join(unsupported)} cannot export a {kind} run. "
+                f"Exporters that can: {supporting}"
+            )
 
         if kwargs and accepted_by:
             self._reject_orphan_options(set(kwargs), accepted_by)
@@ -227,16 +246,41 @@ class ExporterManager:
             cost_model, risk_manager, identity=identity, strategy_key=strategy_key
         )
 
+        return self._export_with_all(
+            run_id,
+            lambda exporter: exporter.export_backtest_result(result, run_id, metadata)
+        )
+
+    def export_run(self, record: RunRecord) -> ExportSummary:
+        """
+        Export a run that is not a single backtest using all configured exporters.
+
+        The same isolation and failure accounting as
+        :meth:`export_backtest_result`: one exporter failing never stops the
+        others, and every failure is in the returned summary.
+
+        Args:
+            record: The run to export, built by :meth:`create_run_record`
+
+        Returns:
+            ExportSummary describing which exporters succeeded and which failed
+        """
+        return self._export_with_all(
+            record.identity.run_id, lambda exporter: exporter.export_run(record)
+        )
+
+    def _export_with_all(self, run_id: str,
+                         export: Callable[[BaseExporter], None]) -> ExportSummary:
+        """Run one export call against every exporter, recording each outcome."""
         successes: List[str] = []
         # Exporters that never got constructed failed just as surely as ones that
         # raised while exporting - both mean the data did not reach their sink.
         failures: List[Tuple[str, str]] = list(self.creation_failures)
 
-        # Export using all exporters
         for exporter in self.exporters:
             exporter_name = exporter.__class__.__name__
             try:
-                exporter.export_backtest_result(result, run_id, metadata)
+                export(exporter)
                 successes.append(exporter_name)
             except Exception as e:
                 # Continue with other exporters even if one fails, but record the failure
@@ -252,12 +296,42 @@ class ExporterManager:
             requested = len(self.exporters) + len(self.creation_failures)
             logger.error(
                 f"{len(failures)} of {requested} exporter(s) failed for "
-                f"backtest {run_id}: "
+                f"run {run_id}: "
                 f"{', '.join(name for name, _ in failures)}"
             )
 
         return summary
-    
+
+    @staticmethod
+    def create_run_record(identity: RunIdentity, strategy_key: Optional[str],
+                          body: Dict[str, Any],
+                          provenance: Optional[Dict[str, Any]] = None) -> RunRecord:
+        """
+        Build the record of a run that is not a single backtest.
+
+        The counterpart of :meth:`create_metadata`, and likewise the only builder:
+        the ``run`` and ``provenance`` blocks are attached here and nowhere else,
+        so every saved document names its run the same way. The registry key is
+        recorded beside the identity because ``strategy_name`` is the display
+        string - a grouping keyed on prose splits a strategy's history in two the
+        day its display name is edited.
+
+        Args:
+            identity: The run's identity, minted once by the caller that owns the run
+            strategy_key: Registry name of the strategy, or None for a run that
+                spans several
+            body: The script's own result document
+            provenance: Optional run provenance record, collected once by the caller
+
+        Returns:
+            The record handed to every exporter
+        """
+        document = dict(body)
+        if provenance is not None:
+            document['provenance'] = provenance
+        document['run'] = {**identity.to_metadata(), 'strategy_key': strategy_key}
+        return RunRecord(identity=identity, strategy_key=strategy_key, document=document)
+
     def create_metadata(self, result: BacktestResult, strategy_params: Dict[str, Any],
                         symbol: str, initial_capital: float, commission: float,
                         provenance: Optional[Dict[str, Any]] = None,

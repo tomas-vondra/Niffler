@@ -19,8 +19,48 @@ python scripts/backtest.py --data data/BTCUSDT_binance_1d.csv --strategy simple_
   --exporters console,csv,elasticsearch --csv-output-dir results/
 ```
 
-`--exporters` takes a comma-separated list. Available names: `console`, `csv`,
+`--exporters` takes a comma-separated list. Available names: `console`, `csv`, `json`,
 `elasticsearch`.
+
+## The same flags in every script
+
+`backtest.py`, `optimize.py`, `analyze.py`, `compare.py` and `screen.py` all take
+`--exporters`, `--exporter-params`, `--csv-output-dir` and the `--es-*` flags. What differs
+is the default list and which exporters can export that script's kind of run:
+
+| Script | Run kind | Default `--exporters` |
+|--------|----------|-----------------------|
+| `backtest.py` | `backtest` | `console` |
+| `optimize.py` | `optimize` | `console,json` |
+| `analyze.py` | `walk_forward` / `monte_carlo` | `console` |
+| `compare.py` | `compare` | `console` |
+| `screen.py` | `screen` | `console` |
+
+| Exporter | Exports |
+|----------|---------|
+| `console` | every kind (for non-backtest kinds: the run's identity; the script prints its own tables) |
+| `json` | every kind, one document per run |
+| `csv` | backtests |
+| `elasticsearch` | backtests |
+
+```bash
+# --output PATH implies the json exporter, in every script that has the flag
+python scripts/analyze.py --data data/BTCUSDT_1d.csv --analysis walk_forward --output wf.json
+
+# The same thing spelled generically
+python scripts/analyze.py --data data/BTCUSDT_1d.csv --analysis walk_forward \
+  --exporters console,json --exporter-params '{"output_path": "wf.json"}'
+```
+
+An exporter that cannot export the run's kind is an **error before the run starts**:
+`optimize.py --exporters csv` exits 1 naming the exporters that can, rather than running a
+grid search and failing at the end. With no path given, the JSON exporter names the file
+`{kind}_{strategy}_{run id prefix}.json`; `optimize.py` keeps its
+`optimization_results_{strategy}_{method}_{timestamp}.json` default.
+
+Every saved JSON document carries a `run` block (run id, kind, experiment, parent run,
+profile, strategy key) and a `provenance` block. Both are attached in one place,
+`ExporterManager.create_run_record`.
 
 ## Failure Reporting and Exit Codes
 
@@ -287,7 +327,10 @@ package installed raises a clear `RuntimeError`.
    success, which is exactly the bug this contract exists to prevent. Call the inherited
    `self.require_valid_result(result, destination)` for the standard precondition check;
    it raises `ExportError`.
-3. Add one line to `EXPORTER_CLASSES` in `niffler/exporters/registry.py`, keyed by the name
+3. To export more than backtests, set `SUPPORTED_KINDS` and implement
+   `export_run(record)`. The default `SUPPORTED_KINDS` is backtests only and the default
+   `export_run` raises, so an exporter never claims a kind it does not handle.
+4. Add one line to `EXPORTER_CLASSES` in `niffler/exporters/registry.py`, keyed by the name
    users pass to `--exporters`.
 
 That is the whole procedure. `--exporters` choices derive from the registry, and the new
