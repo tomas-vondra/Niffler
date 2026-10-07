@@ -578,8 +578,9 @@ Being explicit, so nobody discovers these the expensive way:
   significance test answers "is this one strategy's mean trade return distinguishable from
   zero on this one sample". It knows nothing about how many parameter sets were tried to
   find it, so if you optimised on the same data it overstates the evidence. The correction
-  exists in one place only: `optimize.py` prints a deflated Sharpe ratio for the winner of
-  the search it just ran (see [Deflated Sharpe](docs/optimization.md#deflated-sharpe)). It
+  exists in one place only: `optimize.py` prints a `SEARCH LUCK` block for the winner of
+  the search it just ran - a grid-relative probability and the published deflated Sharpe
+  ratio (see [Search luck](docs/optimization.md#search-luck)). It
   counts that one search - not the other strategies or grids tried before it - and it
   counts every combination as an independent trial.
 - **Only one benchmark: buy-and-hold of the traded asset.** No index, no risk-free rate, no
@@ -695,8 +696,8 @@ buy-and-hold benchmark, charged the same commission and cost model; when no benc
 available the fallback is labelled for exactly what it is and is never called
 buy-and-hold.
 
-This is **not** a multiple-testing correction - that is the separate deflated Sharpe block
-`optimize.py` prints after it (see [Deflated Sharpe](docs/optimization.md#deflated-sharpe)).
+This is **not** a multiple-testing correction - that is the separate `SEARCH LUCK` block
+`optimize.py` prints after it (see [Search luck](docs/optimization.md#search-luck)).
 It is a way of seeing whether the winner sits on a hill or on a needle, plus the honest
 counterweight to a report that otherwise shows only its best row.
 

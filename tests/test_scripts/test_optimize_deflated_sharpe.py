@@ -33,7 +33,7 @@ from scripts import optimize
 
 BARS = 300
 # The block's own header; the plateau block also names it in passing.
-BLOCK = 'DEFLATED SHARPE - '
+BLOCK = 'SEARCH LUCK - '
 
 
 def make_result(short_window, long_window, mean_return, seed):
@@ -146,8 +146,8 @@ class TestExportViews(unittest.TestCase):
         summary = self.summary(deflated_sharpe.summary_fields(analysis))
 
         self.assertEqual(summary['deflated_sharpe'], analysis.probability)
-        self.assertEqual(summary['deflated_sharpe_vs_grid'], analysis.probability_vs_grid)
-        self.assertEqual(summary['deflated_sharpe_trials'], 12.0)
+        self.assertEqual(summary['grid_relative_probability'], analysis.grid_relative_probability)
+        self.assertEqual(summary['search_luck_trials'], 12.0)
         self.assertAlmostEqual(summary['expected_max_sharpe'],
                                analysis.expected_max_sharpe * math.sqrt(365))
         # The winner's own metrics are untouched.
@@ -207,7 +207,7 @@ class TestMainWiring(unittest.TestCase):
         _, output = self._run()
 
         self.assertNotIn('There is no multiple-testing correction', output)
-        self.assertIn('DEFLATED SHARPE block does', output)
+        self.assertIn('SEARCH LUCK block does', output)
 
     def test_it_does_not_depend_on_the_plateau_block(self):
         _, output = self._run('--no-plateau')
@@ -267,7 +267,7 @@ class TestBacktestCaveat(unittest.TestCase):
             ConsoleExporter()._print_significance(result)
 
         self.assertIn('this p-value is not corrected for that', buffer.getvalue())
-        self.assertIn('DEFLATED', buffer.getvalue())
+        self.assertIn('SEARCH LUCK block', buffer.getvalue())
 
 
 if __name__ == '__main__':

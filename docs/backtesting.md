@@ -381,7 +381,7 @@ Read the number narrowly. It is:
   same data, the p-value overstates the evidence — a grid of 200 parameter sets contains
   about ten "significant at 5%" results by chance alone. A backtest cannot know how many
   sets were tried; the search can, and `optimize.py` prints a
-  [deflated Sharpe ratio](optimization.md#deflated-sharpe) for its winner.
+  [selection-corrected figure](optimization.md#search-luck) for its winner.
 - **assuming i.i.d. round trips.** Overlapping positions, regime persistence and
   volatility clustering all violate that to some degree.
 - **assuming an approximately normal mean.** Trade returns are skewed and fat-tailed; the
@@ -497,7 +497,7 @@ Be aware of these before trusting a backtest figure:
   the stop is processed first; and the entry bar's stop is checked before the entry fills
 - **The significance test is not corrected for multiple testing.** It knows nothing about
   how many parameter sets were tried to find the one being tested. The
-  [deflated Sharpe ratio](optimization.md#deflated-sharpe) that corrects for one search is
+  [`SEARCH LUCK` block](optimization.md#search-luck) that corrects for one search is
   reported by `optimize.py`, not here
 - **One benchmark only: buy-and-hold of the traded asset.** No index, no risk-free rate,
   no multi-asset comparison, and therefore no CAPM alpha or beta

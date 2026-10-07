@@ -159,16 +159,16 @@ class TestDeflatedSharpe(unittest.TestCase):
         self.assertEqual(result.trials_source, ds.TRIALS_EVALUATED)
         self.assertAlmostEqual(result.trial_sharpe_std, spread)
         self.assertAlmostEqual(result.expected_max_sharpe, line)
-        self.assertAlmostEqual(result.expected_max_sharpe_vs_grid, 0.05 + line)
+        self.assertAlmostEqual(result.grid_relative_luck_line, 0.05 + line)
         self.assertAlmostEqual(
             result.probability, ds.probabilistic_sharpe(0.08, line, 500, 0.0, 3.0))
         self.assertAlmostEqual(
-            result.probability_vs_grid,
+            result.grid_relative_probability,
             ds.probabilistic_sharpe(0.08, 0.05 + line, 500, 0.0, 3.0))
 
     def test_a_grid_above_zero_is_judged_more_strictly_against_itself(self):
         result = ds.deflated_sharpe(moments(0.08), self.TRIALS, trials_evaluated=5)
-        self.assertLess(result.probability_vs_grid, result.probability)
+        self.assertLess(result.grid_relative_probability, result.probability)
 
     def test_the_count_is_every_evaluated_combination_not_only_the_scored_ones(self):
         scored = ds.deflated_sharpe(moments(0.08), self.TRIALS, trials_evaluated=5)
@@ -208,7 +208,7 @@ class TestDeflatedSharpe(unittest.TestCase):
 
         self.assertEqual(result.status, ds.STATUS_NO_DISPERSION)
         self.assertIsNone(result.probability)
-        self.assertIsNone(result.probability_vs_grid)
+        self.assertIsNone(result.grid_relative_probability)
 
     def test_extreme_moments_report_the_lines_but_no_probability(self):
         winner = moments(0.5, skewness=50.0, kurtosis=1.0)
@@ -267,7 +267,7 @@ class TestPureNoise(unittest.TestCase):
         result = ds.deflated_sharpe(winner, sharpes, self.TRIALS)
 
         self.assertGreater(result.probability, 0.99)
-        self.assertGreater(result.probability_vs_grid, 0.99)
+        self.assertGreater(result.grid_relative_probability, 0.99)
 
 
 class TestAnalyseResults(unittest.TestCase):
@@ -293,7 +293,7 @@ class TestAnalyseResults(unittest.TestCase):
 
         self.assertEqual(analysis.status, ds.STATUS_TRUNCATED)
         for field in ('trials', 'trial_sharpe_std', 'expected_max_sharpe',
-                      'expected_max_sharpe_vs_grid', 'probability', 'probability_vs_grid',
+                      'grid_relative_luck_line', 'probability', 'grid_relative_probability',
                       'winner'):
             with self.subTest(field=field):
                 self.assertIsNone(getattr(analysis, field))
@@ -377,10 +377,10 @@ class TestSummaryFields(unittest.TestCase):
 
         self.assertEqual(tuple(fields), ds.SUMMARY_FIELDS)
         self.assertEqual(fields['deflated_sharpe'], result.probability)
-        self.assertEqual(fields['deflated_sharpe_vs_grid'], result.probability_vs_grid)
-        self.assertEqual(fields['deflated_sharpe_status'], ds.STATUS_OK)
-        self.assertEqual(fields['deflated_sharpe_trials'], 3.0)
-        self.assertEqual(fields['deflated_sharpe_trials_source'], ds.TRIALS_EVALUATED)
+        self.assertEqual(fields['grid_relative_probability'], result.grid_relative_probability)
+        self.assertEqual(fields['search_luck_status'], ds.STATUS_OK)
+        self.assertEqual(fields['search_luck_trials'], 3.0)
+        self.assertEqual(fields['search_luck_trials_source'], ds.TRIALS_EVALUATED)
         self.assertAlmostEqual(fields['expected_max_sharpe'],
                                result.expected_max_sharpe * math.sqrt(365))
         self.assertAlmostEqual(fields['trial_sharpe_std'],
@@ -390,7 +390,7 @@ class TestSummaryFields(unittest.TestCase):
         result = ds.analyse_results([], plateau.SELECTION_TRUNCATED, periods_per_year=365)
         fields = ds.summary_fields(result)
 
-        self.assertEqual(fields.pop('deflated_sharpe_status'), ds.STATUS_TRUNCATED)
+        self.assertEqual(fields.pop('search_luck_status'), ds.STATUS_TRUNCATED)
         self.assertTrue(all(value is None for value in fields.values()), fields)
 
     def test_every_field_is_mapped_in_the_runs_index(self):
@@ -422,10 +422,10 @@ class TestRenderReport(unittest.TestCase):
         text = ds.render_report(result)
 
         self.assertIn(f'{result.annualised(result.expected_max_sharpe):.3f} annualised', text)
-        self.assertIn(f'{result.annualised(result.expected_max_sharpe_vs_grid):.3f} annualised',
+        self.assertIn(f'{result.annualised(result.grid_relative_luck_line):.3f} annualised',
                       text)
         self.assertIn(f'{result.probability * 100:.1f}%', text)
-        self.assertIn(f'{result.probability_vs_grid * 100:.1f}%', text)
+        self.assertIn(f'{result.grid_relative_probability * 100:.1f}%', text)
 
     def test_the_default_count_is_explained(self):
         text = ds.render_report(self.ok())
@@ -439,23 +439,50 @@ class TestRenderReport(unittest.TestCase):
         self.assertIn('trials counted: 2 (--effective-trials; 5 combinations were evaluated)',
                       text)
 
-    def test_a_winner_above_both_lines_clears_both(self):
-        text = ds.render_report(self.ok(winner_sharpe=0.6))
-        self.assertIn('Both clear the conventional 95% bar', text)
+    def test_the_grid_relative_figure_leads_and_the_published_one_follows(self):
+        text = ds.render_report(self.ok())
 
-    def test_a_winner_above_zero_but_not_above_its_grid_is_called_that(self):
+        self.assertLess(text.index('GRID-RELATIVE'), text.index('DEFLATED SHARPE RATIO'))
+        self.assertTrue(text.startswith(ds.BLOCK_TITLE))
+
+    def test_only_the_published_figure_is_called_deflated(self):
+        text = ds.render_report(self.ok())
+
+        self.assertEqual(text.count('DEFLATED'), 1)
+        self.assertIn('Bailey & Lopez de Prado', text)
+        for field in ('grid_relative_probability', 'grid_relative_luck_line'):
+            self.assertIn(field, ds.SUMMARY_FIELDS)
+            self.assertNotIn('deflated', field)
+
+    def test_a_winner_above_its_grid_clears_the_bar(self):
+        text = ds.render_report(self.ok(winner_sharpe=0.6))
+        self.assertIn('This clears the conventional 95% bar', text)
+
+    def test_the_verdict_follows_the_grid_relative_figure_not_the_published_one(self):
         trials = (0.30, 0.31, 0.32, 0.33, 0.34)
         result = self.ok(winner_sharpe=0.34, trials=trials)
         self.assertGreaterEqual(result.probability, 0.95)
-        self.assertLess(result.probability_vs_grid, 0.95)
+        self.assertLess(result.grid_relative_probability, 0.95)
 
         text = ds.render_report(result)
-        self.assertIn('Only the first clears', text)
-        self.assertIn('no evidence for', text)
+        self.assertIn('does NOT clear the conventional 95% bar', text)
+        self.assertIn('no evidence for these particular parameters', text)
+        self.assertNotIn('This clears', text)
 
     def test_a_winner_below_the_line_does_not_clear_it(self):
         text = ds.render_report(self.ok(winner_sharpe=0.01))
         self.assertIn('does NOT clear the conventional 95% bar', text)
+
+    def test_trials_that_never_traded_are_said_to_count_without_a_sharpe(self):
+        result = ds.deflated_sharpe(moments(0.08), [0.02, 0.05, 0.08], 7,
+                                    periods_per_year=365)
+        text = ds.render_report(result)
+
+        self.assertIn('trials counted: 7', text)
+        self.assertIn('4 of them never traded: they count as trials but have no Sharpe', text)
+
+    def test_a_grid_where_everything_traded_says_nothing_about_blanks(self):
+        self.assertNotIn('never traded', ds.render_report(self.ok()))
 
     def test_per_bar_figures_are_labelled_as_such_without_an_annualisation(self):
         result = ds.deflated_sharpe(moments(0.08), [0.02, 0.05, 0.08], 3)

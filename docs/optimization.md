@@ -168,33 +168,35 @@ drawdown every time.
 It is now sorted highest-first, so the **shallowest** drawdown ranks first. Sorting by any
 other metric is unchanged.
 
-### Deflated Sharpe
+### Search luck
 
 A search keeps the best of N combinations, and the best of N estimates is biased upwards
 even when none of them has any edge: flip ten coins 396 times and somebody gets nine heads.
-Every `optimize.py` run therefore prints a `DEFLATED SHARPE` block after the plateau block,
-following Bailey & López de Prado (2014). It computes:
+Every `optimize.py` run therefore prints a `SEARCH LUCK` block after the plateau block.
 
-- **A luck line** - the Sharpe the best of N trials is expected to show by chance, from N
-  and the spread of the trial Sharpe ratios:
-  `sqrt(V[SR]) * ((1 - γ) Z⁻¹[1 - 1/N] + γ Z⁻¹[1 - 1/(N e)])`.
-- **The deflated Sharpe** - the probability that the winner's *true* Sharpe is above that
-  line, given its bar count and the skewness and kurtosis of its returns.
+It rests on one quantity from Bailey & López de Prado (2014): the **allowance** for
+selection - how far above its starting point the best of N trials is expected to land by
+chance, from N and the spread of the trial Sharpe ratios:
+`sqrt(V[SR]) * ((1 - γ) Z⁻¹[1 - 1/N] + γ Z⁻¹[1 - 1/(N e)])`. A **luck line** is that
+allowance added to a starting point, and the block reports the probability that the
+winner's *true* Sharpe is above the line, given its bar count and the skewness and kurtosis
+of its returns.
 
-"By luck" needs a null, so two lines are reported:
+"By luck" needs a null, so there are two lines, in this order:
 
-| Reading | Null | Luck line |
-|---------|------|-----------|
-| 1 - the published deflated Sharpe | no combination has any edge at all | the allowance above **zero** |
-| 2 - versus the grid | every combination is as good as the average one, and tuning found nothing | the same allowance above the **grid's mean Sharpe** |
+| Figure | Null | Luck line | Exported as |
+|--------|------|-----------|-------------|
+| **Grid-relative probability** - leads, and drives the verdict | every combination is as good as the average one, and tuning found nothing | the allowance above the **grid's mean Sharpe** | `grid_relative_probability`, `grid_relative_luck_line` |
+| **Deflated Sharpe ratio** - the published statistic | no combination has any edge at all | the allowance above **zero** | `deflated_sharpe`, `expected_max_sharpe` |
 
-The second exists because the first is easy to clear for the wrong reason: every
+Only the second is the deflated Sharpe ratio; the name is not used for the first. The
+published figure does not lead because it is easy to clear for the wrong reason: every
 combination of a long-only strategy on an asset that rose carries the same market exposure,
 so the whole grid sits above zero. On the default `breakout` grid over BTCUSDT 2019-07 to
 2024-07 the trial Sharpe ratios average 1.007 with a spread of 0.123, and the winner's is
-1.263. Reading 1 puts the luck line at 0.366 and the probability at 97.9%; reading 2 puts
-the line at 1.373 and the probability at 40.1%. The family is above zero; the search is no
-evidence for those particular parameters.
+1.263. The grid-relative line is 1.373 and the probability 40.1%; the deflated Sharpe ratio
+puts its line at 0.366 and reads 97.9%. The family is above zero; the search is no evidence
+for those particular parameters, and that is the verdict the block prints.
 
 What it does not do:
 
@@ -202,6 +204,9 @@ What it does not do:
   the number of independent trials is smaller. A smaller N lowers the luck line, so the
   default over-corrects rather than under-corrects. `--effective-trials N` overrides it and
   the block says which was used; estimating it from the trials is not implemented.
+- **A combination that never traded counts as a trial but adds nothing to the spread.** It
+  was tried, so it is in N; it has no Sharpe ratio, so it is not in the spread or the mean.
+  The block says how many there were.
 - **One search.** Other strategies and earlier grids on the same data are not counted.
 - **Neither null is "no edge over the market".** Buy-and-hold stays a separate comparison.
 - **A truncated result set gets no figure.** When the memory cap discarded results the

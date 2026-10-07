@@ -29,11 +29,16 @@ Two luck lines
 to clear for the wrong reason. Every combination of a long-only strategy on an
 asset that rose carries the same market exposure, so the whole grid sits well
 above zero and its winner clears a zero-centred luck line without the search
-having found anything. A second line is therefore reported beside the first:
-the grid's own mean Sharpe plus the same allowance. Its null is that every
+having found anything. A second line is therefore reported, and it leads: the
+grid's own mean Sharpe plus the same allowance. Its null is that every
 combination is as good as the average one and the differences between them are
 noise, which is the question a parameter search actually raises: did tuning
 find anything?
+
+Only the zero-centred figure is the *deflated Sharpe ratio* - that is what the
+paper defines. The other is called the **grid-relative probability** here, in
+the output and in the exported fields, so it is never mistaken for the
+published statistic.
 
 Everything is computed in **per-bar** Sharpe, so no annualisation factor enters
 the probability. The annualised figures printed beside it exist only to be read
@@ -86,19 +91,25 @@ STATUS_UNDEFINED = 'undefined'
 TRIALS_EVALUATED = 'evaluated'
 TRIALS_OVERRIDE = 'override'
 
-#: What an exported optimization summary carries. ``deflated_sharpe`` and
-#: ``deflated_sharpe_vs_grid`` are probabilities; the Sharpe figures are annualised.
+#: What an exported optimization summary carries. ``grid_relative_probability``
+#: and ``deflated_sharpe`` are probabilities; the Sharpe figures are annualised.
+#: Only ``deflated_sharpe`` and its line ``expected_max_sharpe`` are the published
+#: statistic.
 SUMMARY_FIELDS = (
+    'grid_relative_probability',
+    'grid_relative_luck_line',
     'deflated_sharpe',
-    'deflated_sharpe_vs_grid',
-    'deflated_sharpe_status',
-    'deflated_sharpe_trials',
-    'deflated_sharpe_trials_source',
     'expected_max_sharpe',
-    'expected_max_sharpe_vs_grid',
+    'search_luck_status',
+    'search_luck_trials',
+    'search_luck_trials_source',
     'trial_sharpe_mean',
     'trial_sharpe_std',
 )
+
+#: Title of the printed block. It holds two figures, so it is not named after
+#: the one of them that is the published deflated Sharpe ratio.
+BLOCK_TITLE = 'SEARCH LUCK'
 
 _NORMAL = NormalDist()
 
@@ -136,16 +147,16 @@ class DeflatedSharpe:
     trials_with_sharpe: int = 0
     trial_sharpe_mean: Optional[float] = None
     trial_sharpe_std: Optional[float] = None
-    #: The luck line: expected best Sharpe of ``trials`` zero-edge trials.
+    #: The published luck line: expected best Sharpe of ``trials`` zero-edge trials.
     expected_max_sharpe: Optional[float] = None
-    #: The stricter luck line: the same allowance above the trials' own mean.
-    expected_max_sharpe_vs_grid: Optional[float] = None
+    #: The line that leads: the same allowance above the trials' own mean.
+    grid_relative_luck_line: Optional[float] = None
     winner: Optional[ReturnMoments] = None
-    #: Probability that the winner's true Sharpe is above the luck line. This
-    #: is the published deflated Sharpe ratio.
+    #: Probability that the winner's true Sharpe is above the published line.
+    #: This, and only this, is the deflated Sharpe ratio.
     probability: Optional[float] = None
-    #: The same probability against the stricter line.
-    probability_vs_grid: Optional[float] = None
+    #: The same probability against the grid-relative line. The verdict reads this one.
+    grid_relative_probability: Optional[float] = None
     periods_per_year: Optional[float] = None
 
     @property
@@ -326,17 +337,17 @@ def deflated_sharpe(winner: ReturnMoments, trial_sharpes: Sequence[float],
         'trial_sharpe_mean': mean,
         'trial_sharpe_std': spread,
         'expected_max_sharpe': luck_line,
-        'expected_max_sharpe_vs_grid': mean + luck_line,
+        'grid_relative_luck_line': mean + luck_line,
         'winner': winner,
         **common,
     }
 
     probability = probabilistic_sharpe(
         winner.sharpe, luck_line, winner.observations, winner.skewness, winner.kurtosis)
-    probability_vs_grid = probabilistic_sharpe(
+    grid_relative_probability = probabilistic_sharpe(
         winner.sharpe, mean + luck_line, winner.observations, winner.skewness,
         winner.kurtosis)
-    if probability is None or probability_vs_grid is None:
+    if probability is None or grid_relative_probability is None:
         return DeflatedSharpe(
             status=STATUS_UNDEFINED,
             reason=("the winner's skewness and kurtosis leave the variance of its "
@@ -344,7 +355,7 @@ def deflated_sharpe(winner: ReturnMoments, trial_sharpes: Sequence[float],
             **measured)
 
     return DeflatedSharpe(status=STATUS_OK, probability=probability,
-                          probability_vs_grid=probability_vs_grid, **measured)
+                          grid_relative_probability=grid_relative_probability, **measured)
 
 
 def analyse_results(results: Sequence[OptimizationResult], selection: str,
@@ -423,14 +434,14 @@ def summary_fields(result: Optional[DeflatedSharpe]) -> Dict[str, Any]:
         return dict.fromkeys(SUMMARY_FIELDS)
 
     return {
+        'grid_relative_probability': result.grid_relative_probability,
+        'grid_relative_luck_line': result.annualised(result.grid_relative_luck_line),
         'deflated_sharpe': result.probability,
-        'deflated_sharpe_vs_grid': result.probability_vs_grid,
-        'deflated_sharpe_status': result.status,
-        'deflated_sharpe_trials': result.trials,
-        'deflated_sharpe_trials_source': (
-            result.trials_source if result.trials is not None else None),
         'expected_max_sharpe': result.annualised(result.expected_max_sharpe),
-        'expected_max_sharpe_vs_grid': result.annualised(result.expected_max_sharpe_vs_grid),
+        'search_luck_status': result.status,
+        'search_luck_trials': result.trials,
+        'search_luck_trials_source': (
+            result.trials_source if result.trials is not None else None),
         'trial_sharpe_mean': result.annualised(result.trial_sharpe_mean),
         'trial_sharpe_std': result.annualised(result.trial_sharpe_std),
     }
@@ -457,7 +468,7 @@ def render_report(result: DeflatedSharpe, confidence: float = DEFAULT_CONFIDENCE
         The rendered block. When nothing was computed it says so and why,
         rather than printing a zero.
     """
-    lines: List[str] = ['DEFLATED SHARPE - is the winner above what a search this size finds by luck?']
+    lines: List[str] = [f'{BLOCK_TITLE} - is the winner above what a search this size finds by luck?']
 
     if result.trials is None:
         lines.append(f'  NOT COMPUTED: {result.reason}.')
@@ -474,6 +485,11 @@ def render_report(result: DeflatedSharpe, confidence: float = DEFAULT_CONFIDENCE
         lines.append('    independent; counting them all over-corrects rather than')
         lines.append('    under-corrects. --effective-trials overrides the count.')
 
+    blanks = result.trials_evaluated - result.trials_with_sharpe
+    if blanks > 0:
+        lines.append(f'    {blanks} of them never traded: they count as trials but have no Sharpe')
+        lines.append('    ratio to add to the spread.')
+
     spread, unit = _sharpe_text(result, result.trial_sharpe_std)
     mean, _ = _sharpe_text(result, result.trial_sharpe_mean)
     lines.append(f'  trial Sharpe ratios: mean {mean}, spread {spread} {unit} '
@@ -484,38 +500,32 @@ def render_report(result: DeflatedSharpe, confidence: float = DEFAULT_CONFIDENCE
                  f'(skewness {result.winner.skewness:+.2f}, '
                  f'kurtosis {result.winner.kurtosis:.2f})')
 
-    if result.probability is None or result.probability_vs_grid is None:
+    if result.probability is None or result.grid_relative_probability is None:
         lines.append(f'  NO PROBABILITY: {result.reason}.')
         return '\n'.join(lines)
 
-    luck, _ = _sharpe_text(result, result.expected_max_sharpe)
-    luck_vs_grid, _ = _sharpe_text(result, result.expected_max_sharpe_vs_grid)
-    lines.append('  "By luck" needs a null, so there are two luck lines - the best Sharpe')
-    lines.append('  that many trials with that spread are expected to show if:')
-    lines.append('  1. no combination has any edge at all (the published deflated Sharpe)')
-    lines.append(f'       luck line {luck} {unit} | probability the winner is truly '
-                 f'above it: {result.probability * 100:.1f}%')
-    lines.append('  2. every combination is as good as the average one, and tuning found nothing')
-    lines.append(f'       luck line {luck_vs_grid} {unit} | probability the winner is truly '
-                 f'above it: {result.probability_vs_grid * 100:.1f}%')
-
-    clears_zero = result.probability >= confidence
-    clears_grid = result.probability_vs_grid >= confidence
-    if clears_zero and clears_grid:
-        lines.append(f'  Both clear the conventional {confidence:.0%} bar: the winner is more '
-                     f'than the')
-        lines.append('  best of that many lucky tries, under either reading.')
-    elif clears_zero:
-        lines.append(f'  Only the first clears the conventional {confidence:.0%} bar. The '
-                     f'strategy family')
-        lines.append('  is above zero, but the winner is NOT distinguishable from the best of')
-        lines.append('  that many equally good combinations: the search is no evidence for')
-        lines.append('  these particular parameters.')
+    grid_luck, _ = _sharpe_text(result, result.grid_relative_luck_line)
+    lines.append('  GRID-RELATIVE - is the winner better than the best of that many equally')
+    lines.append('  good combinations? (null: every one is as good as the average, and')
+    lines.append('  tuning found nothing)')
+    lines.append(f'    luck line {grid_luck} {unit} | probability the winner is truly above it: '
+                 f'{result.grid_relative_probability * 100:.1f}%')
+    if result.grid_relative_probability >= confidence:
+        lines.append(f'  This clears the conventional {confidence:.0%} bar: the winner is more than the')
+        lines.append('  best of that many equally good combinations.')
     else:
-        lines.append(f'  The winner does NOT clear the conventional {confidence:.0%} bar: it is not')
-        lines.append('  distinguishable from the best of that many lucky tries.')
+        lines.append(f'  This does NOT clear the conventional {confidence:.0%} bar: the winner is not')
+        lines.append('  distinguishable from the best of that many equally good combinations.')
+        lines.append('  The search is no evidence for these particular parameters.')
 
-    lines.append('  Neither line is "no edge over the market": a long-only strategy on an')
-    lines.append('  asset that rose clears the first from exposure alone. This corrects')
-    lines.append('  for this one search only. Still one asset, one window.')
+    luck, _ = _sharpe_text(result, result.expected_max_sharpe)
+    lines.append('  DEFLATED SHARPE RATIO (Bailey & Lopez de Prado; null: no combination has')
+    lines.append('  any edge at all)')
+    lines.append(f'    luck line {luck} {unit} | probability the winner is truly above it: '
+                 f'{result.probability * 100:.1f}%')
+    lines.append('    A long-only strategy on an asset that rose clears this from market')
+    lines.append('    exposure alone, which is why it does not lead.')
+
+    lines.append('  Neither figure is "no edge over the market", and both correct for this')
+    lines.append('  one search only. Still one asset, one window.')
     return '\n'.join(lines)
