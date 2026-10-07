@@ -364,6 +364,8 @@ Stated plainly, so results are not over-read:
   treat each fold as one independent sample, which they are not. The console tags each of
   them `[overlapping folds - not independent]` and the saved document carries
   `fold_independence` (`folds_independent`, `oos_overlap_pct`, the affected metric names).
+  The `niffler-runs` summary carries the first two at top level, explicitly mapped as a
+  boolean and a double so a dashboard can filter on them; an unknown overlap is `null`.
   No effective fold count is estimated. The default used to be 3 months and was once left
   alone so as not to alter existing schedules; it changed when all three walk-forward
   scripts were put on one rule, and `--step 3` reproduces the old schedule

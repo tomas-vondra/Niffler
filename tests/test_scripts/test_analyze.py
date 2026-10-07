@@ -855,7 +855,40 @@ class TestWalkForwardStepAndOverlapLabels(unittest.TestCase):
 
         summary, _ = analyze.build_export_views(result, analyze.build_results_document(result))
 
-        self.assertIs(summary['fold_independence']['folds_independent'], False)
+        self.assertIs(summary['folds_independent'], False)
+        self.assertEqual(summary['oos_overlap_pct'], 50.0)
+
+    def test_the_exported_summary_uses_the_document_names(self):
+        result = self._result(0.0)
+        document = analyze.build_results_document(result)
+
+        summary, _ = analyze.build_export_views(result, document)
+
+        for name in analyze.FOLD_INDEPENDENCE_SUMMARY_FIELDS:
+            with self.subTest(field=name):
+                self.assertEqual(summary[name], document['fold_independence'][name])
+        self.assertIs(summary['folds_independent'], True)
+
+    def test_unknown_overlap_exports_as_null_not_false(self):
+        result = self._result(0.0)
+        result.combined_metrics = {'profitable_periods_pct': 87.5}
+
+        summary, _ = analyze.build_export_views(result, analyze.build_results_document(result))
+
+        self.assertIn('folds_independent', summary)
+        self.assertIsNone(summary['folds_independent'])
+        self.assertIsNone(summary['oos_overlap_pct'])
+
+    def test_the_summary_fields_are_explicitly_mapped(self):
+        mappings = Path(__file__).parent.parent.parent / 'config' / 'elasticsearch' / 'mappings'
+        with open(mappings / 'runs.json', 'r') as handle:
+            properties = json.load(handle)['mappings']['properties']
+
+        self.assertEqual(properties['folds_independent'], {'type': 'boolean'})
+        self.assertEqual(properties['oos_overlap_pct'], {'type': 'double'})
+        for name in analyze.FOLD_INDEPENDENCE_SUMMARY_FIELDS:
+            with self.subTest(field=name):
+                self.assertIn(name, properties)
 
     def test_monte_carlo_has_no_fold_label(self):
         result = self._result(0.0)
@@ -865,7 +898,8 @@ class TestWalkForwardStepAndOverlapLabels(unittest.TestCase):
         summary, _ = analyze.build_export_views(result, document)
 
         self.assertNotIn('fold_independence', document)
-        self.assertNotIn('fold_independence', summary)
+        self.assertNotIn('folds_independent', summary)
+        self.assertNotIn('oos_overlap_pct', summary)
 
 
 if __name__ == '__main__':

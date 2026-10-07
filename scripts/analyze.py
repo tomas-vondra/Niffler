@@ -592,6 +592,9 @@ _SUMMARY_FIELDS = (
     'performance_consistency',
 )
 
+#: The parts of ``fold_independence`` a walk-forward summary carries at top level.
+FOLD_INDEPENDENCE_SUMMARY_FIELDS = ('folds_independent', 'oos_overlap_pct')
+
 
 def build_export_views(result, document: dict):
     """Shape an analysis for a document store: one summary, one row per fold or simulation.
@@ -614,7 +617,11 @@ def build_export_views(result, document: dict):
     summary['failure_rate'] = getattr(result, 'failure_rate', None)
 
     if document.get('analysis_type') == RUN_KIND_WALK_FORWARD:
-        summary['fold_independence'] = document.get('fold_independence')
+        # Flat and explicitly mapped, so a leaderboard can filter on them. An
+        # unknown overlap stays None: null is not the same claim as false.
+        independence = document.get('fold_independence') or {}
+        for name in FOLD_INDEPENDENCE_SUMMARY_FIELDS:
+            summary[name] = independence.get(name)
         metadata = result.metadata if isinstance(result.metadata, dict) else {}
         folds = metadata.get('folds')
         periods = list(document.get('period_results') or [])
