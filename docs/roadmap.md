@@ -56,11 +56,12 @@ Kept struck through rather than deleted, so the list stays honest about what mov
 
 ## Framework and usability
 
-- **Unify the remaining factory shapes.** #9 removed the strategy-construction `if` chain
-  from `scripts/backtest.py`, but two shapes still coexist: module-level dicts plus free
-  functions (`niffler/optimization/optimizer_factory.py`) and a class attribute plus
-  instance methods (`niffler/exporters/exporter_manager.py`). The risk manager in
-  `backtest.py` is still built inline. Pick one and converge.
+- ~~**Unify the remaining factory shapes.**~~ — done, and two thirds of this entry had gone
+  stale before anyone struck it. The exporter map moved to `niffler/exporters/registry.py`
+  in #12, and the risk manager stopped being built inline in #13 and #16
+  (`niffler/risk/registry.py`). Only the optimizer was left; it now has
+  `niffler/optimization/registry.py` in the same shape, and `optimizer_factory.py`
+  re-exports it for existing imports.
 - ~~**Progress reporting during optimization.**~~ — shipped, and the original note was only
   half right. With `--jobs` above 1 a search did print nothing until it finished, because
   spawned workers do not inherit the logging configuration. The parent process now logs
