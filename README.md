@@ -212,11 +212,35 @@ first gate that fails, saying exactly why**:
 
 Every threshold is a flag and is printed whether or not it fires. Three of the four
 defaults are judgment calls and say so in `--help`; the fourth reuses the framework's own
-`DEFAULT_MIN_TRADES`. A stop exits **3** — it is a normal outcome, not an error (1 is a
+`DEFAULT_MIN_TRADES` (the optional holdout gate, below, defaults to break-even). A stop exits **3** — it is a normal outcome, not an error (1 is a
 real failure, and argparse owns 2). `--force` runs every stage anyway and still exits 3.
 
 The script implements no analysis of its own: every number it gates on is computed by the
 library or by `compare.py`.
+
+**A fifth stage, for the end of the research.** Stages 1-4 can be rerun as often as it
+takes, and every rerun is a decision made with the research data in view: widen a window,
+switch the metric, screen again until the gates pass. No single run cheated, but the
+version that passed was chosen because it passed. `--holdout-data` adds one backtest of
+the stage-2 winner on a file none of those decisions saw:
+
+```bash
+python scripts/screen.py --data data/SPY_research.csv --strategy breakout \
+  --compare-data data/QQQ_research.csv --holdout-data data/SPY_holdout.csv
+```
+
+- Nothing is fitted on the holdout: one backtest, the parameters stage 2 already chose.
+- The holdout must start strictly after `--data` ends, or the run exits 1 naming both dates.
+- The gate is excess return over buy-and-hold, `--min-holdout-excess` (default 0). The
+  significance verdict is printed as the engine gives it; on a short holdout it will often
+  refuse one, and that refusal is not worked around.
+- It only runs once every earlier gate passed (or under `--force`).
+- **Looking spends it.** Adjust the strategy after a holdout run and screen again, and the
+  same file is research data. So the path must be typed - `holdout_data` in `niffler.toml`
+  is an error - and every holdout run exports the file's hash (`stage: holdout` in
+  `niffler-comparisons`, `holdout_data_sha256` on the run), so the looks can be counted.
+
+Without `--holdout-data` the funnel says so: `SKIPPED: no --holdout-data given`.
 
 ### 8. Results Export
 **Export** backtest results to multiple formats for analysis and monitoring:

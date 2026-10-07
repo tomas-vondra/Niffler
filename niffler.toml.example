@@ -118,6 +118,10 @@ data = [
 
 [screen]
 min_efficiency = 0.5
+# The holdout threshold may live here. The holdout PATH may not: holdout_data in
+# this file is an error, because every run of the funnel would then score the
+# holdout, and a file scored on every iteration is research data.
+min_holdout_excess = 0.0
 
 [download_data]
 source    = "ccxt"
