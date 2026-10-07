@@ -114,6 +114,7 @@ from scripts.common import (
     report_export_outcome,
     report_run_config,
     report_run_identity,
+    warn_if_holdout_data,
 )
 from scripts.compare import (
     FoldSchedule,
@@ -1082,6 +1083,9 @@ def main() -> int:
               "typed as --holdout-data: read from a file it would be spent on "
               "every run.", file=sys.stderr)
         return EXIT_ERROR
+
+    # Only the research roles: --holdout-data is where such a file belongs.
+    warn_if_holdout_data(datasets)
 
     # Twice in the list is two rows and two votes in the pool for one look.
     if len(set(holdout_paths)) != len(holdout_paths):

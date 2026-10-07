@@ -24,7 +24,7 @@ import os
 import sys
 import warnings
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 
@@ -1044,6 +1044,49 @@ def symbol_from_data_path(path: str) -> str:
         ``data/BTCUSDT_binance_1d.csv`` gives ``BTCUSDT``.
     """
     return os.path.splitext(os.path.basename(path))[0].split('_')[0]
+
+
+#: What marks a file as a holdout. Only a naming convention: nothing in a CSV
+#: says which decisions have already seen its bars.
+HOLDOUT_NAME_MARKER = 'holdout'
+
+
+def warn_if_holdout_data(paths: Union[str, Sequence[str]], stream=None) -> List[str]:
+    """Warn loudly when a file named like a holdout is used as ordinary data.
+
+    A holdout is spent by looking at it, and an optimisation or a backtest on it
+    is a look. This is a warning rather than a refusal because the name is only
+    a convention: the script cannot know what the file is, only what it is
+    called.
+
+    Args:
+        paths: The data path, or paths, a script is about to use as research data.
+        stream: Stream the warning goes to (default ``sys.stderr``).
+
+    Returns:
+        The paths that look like holdout files, empty when none does.
+    """
+    if isinstance(paths, str):
+        paths = [paths]
+    suspect = [path for path in paths
+               if HOLDOUT_NAME_MARKER in os.path.basename(path).lower()]
+    if not suspect:
+        return []
+
+    listed = "\n".join(f"    {path}" for path in suspect)
+    print(
+        f"{_SEPARATOR}\n"
+        "WARNING: this looks like a HOLDOUT file used as ordinary data.\n"
+        f"{listed}\n"
+        "  A holdout is spent by looking at it. Any result computed from these\n"
+        "  bars is a decision made with them in view, and from then on the file\n"
+        "  is research data. Its one intended use is screen.py --holdout-data,\n"
+        "  once, for a strategy that has passed every other gate.\n"
+        "  The name is only a convention, so this is a warning and not a refusal.\n"
+        f"{_SEPARATOR}",
+        file=stream if stream is not None else sys.stderr,
+    )
+    return suspect
 
 
 # ---------------------------------------------------------------------------

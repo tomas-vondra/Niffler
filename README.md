@@ -253,6 +253,10 @@ python scripts/screen.py --data data/SPY_research.csv --strategy breakout \
   same file is research data. So the path must be typed - `holdout_data` in `niffler.toml`
   is an error - and every holdout run exports the file's hash (`stage: holdout` in
   `niffler-comparisons`, `holdout_data_sha256` on the run), so the looks can be counted.
+- **Anywhere else, a holdout file gets a warning.** `backtest.py`, `optimize.py`,
+  `analyze.py`, `compare.py`, and `screen.py`'s own `--data` / `--compare-data` print a
+  fenced warning when a data file's name contains `holdout`: a backtest or a search on it
+  is a look too. It is a warning and not a refusal, because the name is only a convention.
 
 **Several holdout files.** One file is one asset, and often too few round trips to say
 much. `--holdout-data` takes several, and they are pooled into one verdict:

@@ -57,6 +57,7 @@ from scripts.common import (
     report_run_identity,
     resolve_strategy_parameters,
     symbol_from_data_path,
+    warn_if_holdout_data,
 )
 from scripts.config_file import (
     add_config_arguments,
@@ -664,6 +665,7 @@ def main() -> int:
 
     try:
         # Load data
+        warn_if_holdout_data(args.data)
         data = load_data(args.data)
 
         # Load parameters. A fixed parameter set is only meaningful for Monte Carlo and

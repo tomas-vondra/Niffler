@@ -71,6 +71,7 @@ from scripts.common import (
     report_run_config,
     report_run_identity,
     symbol_from_data_path,
+    warn_if_holdout_data,
 )
 from scripts.config_file import (
     add_config_arguments,
@@ -488,6 +489,7 @@ def main() -> int:
     
     try:
         # Load and validate data
+        warn_if_holdout_data(args.data)
         logger.info(f"Loading data from {args.data}")
         data = load_and_validate_data(args.data, args.clean)
         

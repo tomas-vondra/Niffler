@@ -540,6 +540,11 @@ Exit codes: `0` every gate passed, `3` a gate stopped the run, `1` the run faile
     (`timestamp`/`date`/`datetime`/`time` plus pandas' unnamed index column), datetime
     parsing, required-column and duplicate-timestamp validation, index sorting, optional
     `--clean` pass. Do not add a fourth loader
+  - `common.py` also holds `warn_if_holdout_data`: every script that reads research data
+    (`backtest.py`, `optimize.py`, `analyze.py`, `compare.py`, and `screen.py` for
+    `--data` / `--compare-data`) prints a fenced warning to stderr when a data file's name
+    contains `holdout`, because using it there spends it. A warning, never a refusal - the
+    name is only a convention - and `screen.py --holdout-data` itself does not warn
   - Every `main()` returns an `int` exit code and is invoked as `sys.exit(main())`
   - Scripts insert into `sys.path` only under `if __package__ in (None, '')`, so importing
     them as `scripts.<name>` (tests, discovery) touches nothing
