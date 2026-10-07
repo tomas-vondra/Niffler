@@ -236,8 +236,11 @@ python scripts/download_data.py --source yahoo --symbol SPY --timeframe 1d \
 - **Looking spends it.** Change the strategy after a holdout run and screen again, and that
   file is research data from then on. Only data that did not exist at the time of the look
   is a fresh holdout.
-- Do not pass a holdout file to `backtest.py`, `optimize.py`, `analyze.py` or `compare.py`.
-  Nothing stops you; the convention is the only guard.
+- Do not pass a holdout file to `backtest.py`, `optimize.py`, `analyze.py` or `compare.py`,
+  or as `screen.py --data` / `--compare-data`. They warn when a file name contains
+  `holdout`, and run anyway: the name is the only thing they can go by.
+- Several instruments can share one verdict: `--holdout-data` takes several files and pools
+  them. Every one must start after the last bar of every research file in the run.
 - Extending a holdout with newer bars is fine. Moving the cut-off earlier is not.
 
 ## Data Format

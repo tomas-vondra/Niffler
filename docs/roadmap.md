@@ -161,16 +161,20 @@ it, because a correction that is read as complete is worse than none.
     override; nothing estimates it.
   - **One search only.** Trying three strategies and keeping the best is the same selection
     one level up, and nothing counts it, although every run's `experiment` is now recorded.
-  - **Not a gate.** `screen.py` does not stop on it yet.
+  - ~~**Not a gate.**~~ — `screen.py` stops at stage 2 on the grid-relative probability
+    since #29 (`--min-grid-relative-probability`, default 0.5, a judgment call). A search
+    whose luck cannot be assessed stops too, and says it is not a pass. The gate always
+    counts every combination, so the BTCUSDT example above (40.1%) now stops there.
 - ~~**No untouched data.**~~ — shipped in #24. Walk-forward is out-of-sample per fold, but the
   loop around it is not: a strategy adjusted until it passes has been fitted by whoever was
   adjusting. `screen.py --holdout-data` runs one backtest of the winning parameters on data
   no stage saw, gated on completed round trips and on excess over buy-and-hold; `--force`
   does not spend it, and every look exports the file's hash so the looks can be counted. How
   the files are made is in [data-management.md](data-management.md#research-and-holdout-files).
-  Still open: one holdout file per run, so the verdict is one asset and often too few round
-  trips for the significance gate; pooling the holdout across instruments is not built, and
-  no other script refuses a holdout file.
+  Since #29 `--holdout-data` takes several files and pools them - round trips summed, excess
+  the median across files, each file its own exported row - and every other script warns
+  when a data file is named like a holdout. Still open: the warning goes by file name only
+  and refuses nothing, and no cap on looks per holdout file is enforced.
 - ~~**One asset, one window.**~~ — shipped in #11 and #14. `scripts/compare.py` takes several
   `--data` files, runs the same walk-forward over each and reports excess over buy-and-hold
   per dataset; `scripts/screen.py` makes that cross-asset comparison the last gate of its
