@@ -190,10 +190,10 @@ Sharpe ratio (zero variance), and the resulting file used to be unparseable by a
 strict — including the `--params-file` path in `analyze.py`.
 
 #### Console Output
-Real-time optimization progress including:
-- Parameter combination being tested
-- Progress indicators and completion estimates
-- Performance metrics for each run
+- A `Progress: 120/396 combinations (30%) | elapsed 0:00:42 | ETA 0:01:37` log line at
+  most every 10 seconds, at `INFO`, from the parent process - so it appears whatever
+  `--jobs` is. A search that finishes inside 10 seconds prints none.
+- Each parameter combination as it is evaluated, at `DEBUG` only
 - Final summary with best results
 
 ### Integration Features

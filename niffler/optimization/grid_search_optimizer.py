@@ -1,6 +1,7 @@
 from typing import List, Dict, Any, Iterator
 import itertools
 import logging
+import time
 from .base_optimizer import BaseOptimizer
 from .optimization_result import OptimizationResult
 
@@ -47,6 +48,7 @@ class GridSearchOptimizer(BaseOptimizer):
                                    estimated_size: int) -> List[OptimizationResult]:
         """Evaluate combinations from generator without loading all into memory."""
         results = []
+        started = last_reported = time.monotonic()
         
         for i, params in enumerate(combinations_generator):
             if self._check_shutdown():
@@ -56,6 +58,7 @@ class GridSearchOptimizer(BaseOptimizer):
             result = self._evaluate_single_combination(params)
             if result is not None:
                 results = self._manage_memory_efficient_results(results, result)
+            last_reported = self._report_progress(i + 1, estimated_size, started, last_reported)
         
         # Sort and log results
         return self._sort_and_log_results(results)

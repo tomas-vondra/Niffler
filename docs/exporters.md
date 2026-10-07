@@ -38,7 +38,7 @@ is the default list and which exporters can export that script's kind of run:
 
 | Exporter | Exports |
 |----------|---------|
-| `console` | every kind (for non-backtest kinds: the run's identity; the script prints its own tables) |
+| `console` | every kind (for non-backtest kinds it prints nothing more: the script prints the run's identity and its own tables) |
 | `json` | every kind, one document per run |
 | `csv` | backtests |
 | `elasticsearch` | every kind: one summary per run, plus one document per trial, fold, simulation or comparison row |
