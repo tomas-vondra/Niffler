@@ -65,12 +65,13 @@ Kept struck through rather than deleted, so the list stays honest about what mov
   half right. With `--jobs` above 1 a search did print nothing until it finished, because
   spawned workers do not inherit the logging configuration. The parent process now logs
   `Progress: done/total | elapsed | ETA` at most every 10 seconds, on every evaluation path.
-- **A sequential search floods the log.** With `--jobs 1` the same search is the opposite of
-  silent: `backtest_engine.py` logs every fill and five lines per backtest at `INFO` through
-  the root logger, so the default 396-combination `breakout` grid on five years of daily
-  BTCUSDT writes about 41,700 lines, 39,524 of them `BUY:`/`SELL:`. The progress lines are in there
-  but buried. Fixing it means deciding whether a fill belongs at `INFO` for a single
-  backtest too, which is why it was not folded into the progress change.
+- ~~**A sequential search floods the log.**~~ — found while measuring the item above, and
+  fixed with it. With `--jobs 1` the search was the opposite of silent: the engine logs every
+  fill and five lines per backtest at `INFO`, so the default 396-combination `breakout` grid
+  on five years of daily BTCUSDT wrote about 41,700 lines, 39,524 of them `BUY:`/`SELL:`. The
+  same run now writes 175. `quiet_backtests()` holds the backtesting package below `WARNING`
+  while the optimizer, walk-forward or Monte Carlo runs backtests in a loop; a single
+  `backtest.py` run still logs its fills, and `--log-level DEBUG` restores the full log.
 
 ## Observability
 

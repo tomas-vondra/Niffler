@@ -12,7 +12,7 @@ import random
 import time
 
 from niffler.strategies.base_strategy import BaseStrategy
-from niffler.backtesting.backtest_engine import BacktestEngine
+from niffler.backtesting.backtest_engine import BacktestEngine, quiet_backtests
 from niffler.backtesting.run_config import RunConfig, resolve_run_config
 from niffler.utils.json_utils import safe_json_dump
 from .parameter_space import ParameterSpace
@@ -409,7 +409,8 @@ class BaseOptimizer(ABC):
             strategy = self.strategy_class(**parameters)
             
             # Run backtest using reusable engine
-            backtest_result = self._backtest_engine.run_backtest(strategy, self.data)
+            with quiet_backtests():
+                backtest_result = self._backtest_engine.run_backtest(strategy, self.data)
             
             return OptimizationResult(
                 parameters=parameters,
@@ -439,7 +440,8 @@ class BaseOptimizer(ABC):
             # Run backtest
             engine = BacktestEngine.from_config(resolve_run_config(run_config))
 
-            backtest_result = engine.run_backtest(strategy, data)
+            with quiet_backtests():
+                backtest_result = engine.run_backtest(strategy, data)
             
             return OptimizationResult(
                 parameters=parameters,

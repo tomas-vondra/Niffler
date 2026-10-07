@@ -194,6 +194,9 @@ strict — including the `--params-file` path in `analyze.py`.
   most every 10 seconds, at `INFO`, from the parent process - so it appears whatever
   `--jobs` is. A search that finishes inside 10 seconds prints none.
 - Each parameter combination as it is evaluated, at `DEBUG` only
+- The per-backtest lines (each fill, the data range, the benchmark) are held back during a
+  search, a walk-forward and a Monte Carlo run; warnings still print, and
+  `--log-level DEBUG` restores them
 - Final summary with best results
 
 ### Integration Features

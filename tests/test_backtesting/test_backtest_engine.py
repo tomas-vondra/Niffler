@@ -406,7 +406,7 @@ class TestBacktestEngine(unittest.TestCase):
         win_rate = self.engine._calculate_win_rate(trades)
         self.assertEqual(win_rate, 50.0)  # 1 win, 1 loss from partial fills
         
-    @patch('niffler.backtesting.backtest_engine.logging')
+    @patch('niffler.backtesting.backtest_engine.logger')
     def test_logging_calls(self, mock_logging):
         """Test that logging calls are made during backtest."""
         strategy = MockStrategy()
@@ -1244,7 +1244,7 @@ class TestIntrabarStopLoss(unittest.TestCase):
         with patch.object(BacktestEngine, '_execute_buy_trade',
                           return_value=Trade(dates[1], "TEST", TradeSide.BUY,
                                              100.0, 0.001, 0.1, 0.0)):
-            with patch('niffler.backtesting.backtest_engine.logging') as mock_logging:
+            with patch('niffler.backtesting.backtest_engine.logger') as mock_logging:
                 result = engine.run_backtest(strategy, data, "TEST")
 
         warnings = [str(call) for call in mock_logging.warning.call_args_list]
