@@ -411,8 +411,8 @@ Exit codes: `0` every gate passed, `3` a gate stopped the run, `1` the run faile
   - `run_record.py` - `RunRecord` (identity, `strategy_key`, `document`): what an
     exporter is handed for a run that is not a single backtest
   - `console_exporter.py` - Human-readable console output. Supports every run kind; for
-    non-backtest kinds it prints the run's identity, since those scripts print their own
-    tables
+    non-backtest kinds it prints nothing, since those scripts print the run's identity and
+    their own tables
   - `json_exporter.py` - One JSON document per run, every kind. This is the durable record
     and the file `--params-file` reads; `--output PATH` in any script selects it
   - `csv_exporter.py` - CSV file export for analysis tools (backtests only)

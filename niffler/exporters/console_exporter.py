@@ -9,7 +9,7 @@ from .base_exporter import BaseExporter
 from .run_record import RunRecord
 from ..backtesting.backtest_result import BacktestResult
 from ..utils.provenance import format_provenance_summary
-from ..utils.run_identity import RUN_KINDS, format_run_identity
+from ..utils.run_identity import RUN_KINDS
 
 
 class ConsoleExporter(BaseExporter):
@@ -22,15 +22,16 @@ class ConsoleExporter(BaseExporter):
 
     def export_run(self, record: RunRecord) -> None:
         """
-        Print the identity of a run whose report the script has already printed.
+        Print nothing: the script has already printed this run's report.
 
-        An optimization or an analysis writes its own tables as it goes, so the
-        console's share of the export is the line that says which run they were.
+        An optimization or an analysis writes its own tables as it goes and
+        names the run before it starts, so a second identity line here would
+        only repeat the first. The kind stays supported so that ``console``
+        remains a valid default for every script.
 
         Args:
             record: The run to export
         """
-        print(f"\n{format_run_identity(record.identity)}")
 
 
     def export_backtest_result(self, result: BacktestResult, run_id: str, 

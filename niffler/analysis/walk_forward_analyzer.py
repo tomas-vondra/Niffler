@@ -8,7 +8,7 @@ import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from niffler.strategies.base_strategy import BaseStrategy
-from niffler.backtesting.backtest_engine import BacktestEngine
+from niffler.backtesting.backtest_engine import BacktestEngine, quiet_backtests
 from niffler.backtesting.backtest_result import BacktestResult
 from niffler.backtesting.run_config import RunConfig, resolve_run_config
 from niffler.optimization.parameter_space import ParameterSpace
@@ -669,7 +669,8 @@ class WalkForwardAnalyzer:
             parameters = dict(optimal_parameters)
 
         strategy = strategy_class(**parameters)
-        test_result = engine.run_backtest(strategy, test_data, symbol)
+        with quiet_backtests():
+            test_result = engine.run_backtest(strategy, test_data, symbol)
 
         efficiency_ratio = WalkForwardAnalyzer._calculate_efficiency_ratio(
             train_return_pct, n_train_bars,

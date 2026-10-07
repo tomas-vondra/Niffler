@@ -3,7 +3,8 @@ import math
 import pandas as pd
 import numpy as np
 import logging
-from typing import Any, Dict, List, Optional
+from contextlib import contextmanager
+from typing import Any, Dict, Iterator, List, Optional
 from niffler.risk.contract import RiskManager
 from niffler.strategies.base_strategy import BaseStrategy
 from .trade import Trade, TradeSide
@@ -22,6 +23,32 @@ from .benchmark import (
 from .significance import DEFAULT_MIN_TRADES, assess_significance
 from .run_config import EXECUTION_TIMINGS as _EXECUTION_TIMINGS
 from .run_config import RunConfig
+
+logger = logging.getLogger(__name__)
+
+#: Parent of every logger in this package, so one level silences engine and benchmark.
+_PACKAGE_LOGGER = logging.getLogger(__name__.rsplit('.', 1)[0])
+
+
+@contextmanager
+def quiet_backtests() -> Iterator[None]:
+    """
+    Hold back per-backtest INFO lines while many backtests run in a loop.
+
+    One backtest logging each fill is a trade log. A 396-combination grid doing
+    the same is ~40,000 lines that bury the search's own output. Warnings still
+    get through, and DEBUG turns the full log back on.
+    """
+    if logging.getLogger().isEnabledFor(logging.DEBUG):
+        yield
+        return
+
+    previous = _PACKAGE_LOGGER.level
+    _PACKAGE_LOGGER.setLevel(logging.WARNING)
+    try:
+        yield
+    finally:
+        _PACKAGE_LOGGER.setLevel(previous)
 
 
 class BacktestEngine:
@@ -241,7 +268,7 @@ class BacktestEngine:
         # Comprehensive input validation
         self._validate_inputs(strategy, data, symbol)
 
-        logging.info(f"Starting backtest for {symbol} with {len(data)} data points")
+        logger.info(f"Starting backtest for {symbol} with {len(data)} data points")
 
         # Generate trading signals
         signals_df = strategy.generate_signals(data.copy())
@@ -374,7 +401,7 @@ class BacktestEngine:
         try:
             benchmark = compute_benchmark(self, data, symbol, self.benchmark)
         except BenchmarkError as e:
-            logging.error(f"BENCHMARK UNAVAILABLE for {symbol}: {e}")
+            logger.error(f"BENCHMARK UNAVAILABLE for {symbol}: {e}")
             return {**self._empty_comparison(), 'benchmark_error': str(e)}
 
         return self._compare_to_benchmark(portfolio_values, benchmark)
@@ -638,7 +665,7 @@ class BacktestEngine:
             # is below the minimum order value, or the cost model reports the bar
             # cannot absorb it. Staying silent here is indistinguishable from
             # "stop not hit".
-            logging.warning(
+            logger.warning(
                 f"STOP LOSS NOT EXECUTED: {reason}; position {portfolio.position:.6f} units "
                 f"at ${fill_price:.2f} is worth ${portfolio.position * fill_price:.2f}, which "
                 f"is either below the minimum order value of ${self.min_order_value:.2f} or "
@@ -652,7 +679,7 @@ class BacktestEngine:
         if not portfolio.is_flat:
             # A liquidity cap kept the stop from filling in full. Reporting the
             # partial exit beats pretending the whole position was liquidated.
-            logging.warning(
+            logger.warning(
                 f"STOP LOSS PARTIALLY FILLED: sold {stop_trade.quantity:.6f} of "
                 f"{stop_trade.quantity + portfolio.position:.6f} units at "
                 f"${stop_trade.price:.2f} - {reason}. {portfolio.position:.6f} units "
@@ -663,7 +690,7 @@ class BacktestEngine:
         portfolio.position = 0.0
         portfolio.close_position()
 
-        logging.info(f"STOP LOSS: {stop_trade.quantity:.4f} shares at ${stop_trade.price:.2f} - {reason}")
+        logger.info(f"STOP LOSS: {stop_trade.quantity:.4f} shares at ${stop_trade.price:.2f} - {reason}")
         return True
 
     def _process_buy(self, portfolio: Portfolio,
@@ -708,11 +735,11 @@ class BacktestEngine:
                                       stop_loss=stop_loss_price)
         portfolio.apply_buy(trade)
 
-        logging.info(f"BUY: {trade.quantity:.4f} shares at ${trade.price:.2f} "
+        logger.info(f"BUY: {trade.quantity:.4f} shares at ${trade.price:.2f} "
                      f"(Value: ${trade.value:.2f}, Commission: ${trade.commission:.2f}, "
                      f"Cash: ${portfolio.cash:.2f})")
         if portfolio.stop_loss:
-            logging.info(f"Stop loss set at ${portfolio.stop_loss:.2f}")
+            logger.info(f"Stop loss set at ${portfolio.stop_loss:.2f}")
 
     def _process_sell(self, portfolio: Portfolio,
                       trades: List[Trade], timestamp: pd.Timestamp, symbol: str,
@@ -743,7 +770,7 @@ class BacktestEngine:
         if portfolio.is_flat:
             portfolio.close_position()
 
-        logging.info(f"SELL: {trade.quantity:.4f} shares at ${trade.price:.2f} "
+        logger.info(f"SELL: {trade.quantity:.4f} shares at ${trade.price:.2f} "
                      f"(Value: ${trade.value:.2f}, Commission: ${trade.commission:.2f}, "
                      f"Cash: ${portfolio.cash:.2f})")
 
@@ -977,7 +1004,7 @@ class BacktestEngine:
         if fillable > 0:
             return fillable
 
-        logging.warning(
+        logger.warning(
             f"ORDER NOT FILLED: {action} {symbol} at {request.timestamp}: the bar "
             f"traded {request.bar_volume} and the cost model reports it cannot "
             f"absorb any part of the order."
@@ -999,7 +1026,7 @@ class BacktestEngine:
             symbol: Traded symbol
             action: 'BUY' or 'SELL'
         """
-        logging.warning(
+        logger.warning(
             f"PARTIAL FILL: {action} {symbol} truncated from {wanted:.6f} to "
             f"{fillable:.6f} units at {request.timestamp}; the bar traded "
             f"{request.bar_volume} and the cost model caps how much of it one "
@@ -1238,6 +1265,6 @@ class BacktestEngine:
         if not data.index.is_monotonic_increasing:
             raise ValueError("Data index must be sorted in ascending order")
 
-        logging.info(f"Input validation passed for {symbol}")
-        logging.info(f"Data range: {data.index[0]} to {data.index[-1]}")
-        logging.info(f"Price range: ${data['close'].min():.2f} - ${data['close'].max():.2f}")
+        logger.info(f"Input validation passed for {symbol}")
+        logger.info(f"Data range: {data.index[0]} to {data.index[-1]}")
+        logger.info(f"Price range: ${data['close'].min():.2f} - ${data['close'].max():.2f}")
