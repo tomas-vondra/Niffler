@@ -245,7 +245,9 @@ python scripts/screen.py --data data/SPY_research.csv --strategy breakout \
   is an error - and every holdout run exports the file's hash (`stage: holdout` in
   `niffler-comparisons`, `holdout_data_sha256` on the run), so the looks can be counted.
 
-Without `--holdout-data` the funnel says so: `SKIPPED: no --holdout-data given`.
+Without `--holdout-data` the funnel says so: `SKIPPED: no --holdout-data given`. What the
+research and holdout files are, and how to make them, is in
+[docs/data-management.md](docs/data-management.md#research-and-holdout-files).
 
 ### 8. Results Export
 **Export** backtest results to multiple formats for analysis and monitoring:

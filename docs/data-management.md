@@ -185,6 +185,61 @@ python scripts/preprocessor.py --input data/BTCUSDT_binance_1d_20240101_20240105
 python scripts/preprocessor.py --input data/ --output cleaned_data/ --suffix _validated
 ```
 
+## Research and Holdout Files
+
+`screen.py --holdout-data` needs data that no earlier stage has seen. That is a second file
+per instrument, cut from the same history at a fixed date:
+
+| File | Bars | Used by |
+|------|------|---------|
+| `data/SPY_research.csv` | everything up to the cut-off | every script, as often as you like |
+| `data/SPY_holdout.csv` | everything after it | `screen.py --holdout-data`, once per finished strategy |
+
+The names are a convention, not something the code reads. What the code checks is the
+dates: the holdout's first bar must be strictly after the research file's last bar, or
+`screen.py` exits 1.
+
+### Why two files
+
+Optimising, walk-forward and cross-asset comparison all run on the research file, and so
+does the person deciding what to try next. After a few rounds of "adjust and rerun", the
+research data has been fitted by that loop even though no single run cheated. The holdout
+is the only data none of those decisions touched, so one backtest on it is evidence the
+loop did not produce.
+
+### Creating them
+
+There is no split tool. Each file is its own download, with `--output` naming it:
+
+```bash
+# Research: the history every script may use
+python scripts/download_data.py --source yahoo --symbol SPY --timeframe 1d \
+  --start-date 2019-07-31 --end-date 2024-07-31 --output SPY_research.csv
+
+# Holdout: everything after the cut-off, up to today
+python scripts/download_data.py --source yahoo --symbol SPY --timeframe 1d \
+  --start-date 2024-08-01 --end-date 2026-09-05 --output SPY_holdout.csv
+```
+
+- **Pick the cut-off before looking at any result**, and use the same one for every
+  instrument, so a cross-asset comparison and its holdouts cover the same periods.
+- **Leave the holdout long enough to trade.** Two years of daily bars is a handful of round
+  trips for a slow strategy; `--min-holdout-trades` fails a holdout with none.
+- **Yahoo's `--end-date` is exclusive, `ccxt`'s is inclusive.** With the dates above, the
+  Yahoo research file ends on 2024-07-30 and the bar for 2024-07-31 is in neither file. That
+  is harmless - a gap cannot leak - but it is why the two sources' files end a day apart.
+- Both files live under `data/`, which is not version-controlled; a holdout run records the
+  file's hash instead.
+
+### Rules for the holdout
+
+- **Looking spends it.** Change the strategy after a holdout run and screen again, and that
+  file is research data from then on. Only data that did not exist at the time of the look
+  is a fresh holdout.
+- Do not pass a holdout file to `backtest.py`, `optimize.py`, `analyze.py` or `compare.py`.
+  Nothing stops you; the convention is the only guard.
+- Extending a holdout with newer bars is fine. Moving the cut-off earlier is not.
+
 ## Data Format
 
 ### Standard CSV Structure
