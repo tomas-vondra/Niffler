@@ -132,7 +132,8 @@ In dependency order:
   `experiment` (trial-score distribution with the winner and the baseline marked, in-sample
   versus out-of-sample per fold, the Monte Carlo return distribution); and the existing
   single-run drill-down. Missing must render as missing, never as zero, and a truncated
-  grid must show no distribution.
+  grid must show no distribution. Its place in the order, and the derived index the
+  leaderboard will read instead of `niffler-runs`, are under **A system for new strategies**.
 
 Two traps found while scoping this, both worth handling in the export work rather than
 discovering later:
@@ -193,31 +194,104 @@ it, because a correction that is read as complete is worse than none.
 
 ## A system for new strategies
 
-Recorded as a direction on 2026-10-07. Nothing is built and the design is not agreed.
+Agreed as a plan on 2026-10-08, replacing the open questions recorded here the day before.
+Nothing is built.
 
-The goal: a scheduled agent finds strategies published on the internet, writes each one as
-a Niffler strategy, runs the whole experiment on it, and the results appear somewhere they
-can be compared - a leaderboard, with the detail behind each row. That needs a way to
-document a strategy first, by hand or by the agent, because today a strategy is only a class
-and a registry line: where the idea came from, what its rules are and what has already been
-tried on it are written down nowhere.
+The goal: every evening an agent takes strategies published on the internet that have not
+been tested here, writes each one as a Niffler strategy, runs every one through the same
+test, and the results land on a leaderboard. A hand-written idea goes down the same path
+from a different starting point - which is why the manual path is built first.
 
-What a design has to answer before any of it is built:
+### Decisions
 
-- **A strategy catalog.** One reviewed record per strategy - source, rules, parameters,
-  status - that survives independently of Elasticsearch, and tells a new idea from one
-  already tested under another name.
-- **One fixed test protocol.** The same datasets, costs, folds and gates for every strategy,
-  pinned and versioned, or the leaderboard compares runs that were never comparable.
-- **Selection across strategies.** Testing fifty strategies and reading the top of the list
-  is the grid-search problem one level up (see **Research rigor**); the leaderboard has to
-  show "best of N" beside the winner.
-- **Who spends the holdout.** An agent that screens every night would use the holdout up in
-  a week. It should stop before that stage and leave the look to a person.
-- **Generated code is untrusted.** Rules read from a web page are reimplemented and
-  reviewed, never executed as found, and nothing merges itself.
-- **Where it shows.** This is the cross-strategy dashboard under **Experiment tracking**,
-  which therefore comes first, as does the first run against a live Elasticsearch.
+- **A strategy is documented by a spec file.** One TOML file per strategy in git: where it
+  came from, its rules in prose, the published parameters, what it requires of the engine,
+  and the dates it was found and implemented. Today a strategy is only a class and a registry
+  line. A script scaffolds the class, the registry line and the tests from the spec; the
+  algorithm itself is written by an agent, or by hand.
+- **Three agents, none marking its own work.** One reads the page and writes the spec. A
+  second reads only the spec and writes the rule test: a synthetic series on which the rule
+  must fire on known bars and nowhere else. A third reads only the spec and writes the
+  algorithm, without seeing that test. Code found on a page is never executed.
+- **CI is the gate, not a reviewer.** Lint and the whole suite run on every pull request as
+  they do now, and the per-strategy checks are ordinary tests inside it. Two rules apply to
+  `bot/*` branches only: the change may touch strategy, strategy-test and catalog files and
+  nothing else, and a green run merges itself. This reverses "nothing merges itself" from the
+  earlier version of this section. The accepted cost: a spec that misreads its page passes
+  every check, and the row is then an honestly tested strategy under the wrong name, or a
+  good idea recorded as a failure. A hidden look-ahead is the case that matters, so a row
+  whose result is too good, or rests on too few trades, is flagged as suspicious.
+- **One fixed test protocol.** A versioned file pins the datasets by hash, the folds, the
+  gates and the costs - costs per market, because an equity and a crypto venue do not charge
+  alike. Primaries are SPY and BTCUSDT. Every exported document carries the protocol id; a
+  change is a new version, everything is run again under it, and the old rows stay.
+- **State lives in files behind one module.** A queue with one item per strategy (not per
+  page - a single page can list a thousand), each strategy's status with a dated log of its
+  changes, the verdicts, and the holdout ledger. No other code opens those files; that one
+  rule is what keeps a later move to a database a single change. Elasticsearch keeps the run
+  output it holds today and gains one derived index for the leaderboard, the `--exporters`
+  interface is unchanged, and Elasticsearch is never the only copy of anything.
+- **The agent spends the holdout, once.** One look per strategy version, taken when the
+  funnel passes and recorded in the ledger; an edited strategy gets no second look. There is
+  no fixed cap: the bar a holdout result has to clear rises with the number of looks, and the
+  count is shown beside the result. This reverses "leave the look to a person".
+- **It runs on one machine.** Discovery, implementation and testing all run locally, two new
+  strategies a night, and the leaderboard is built in Grafana.
+
+### Build order
+
+1. **Exits a strategy can set itself.** A stop price chosen by the strategy, a take-profit, a
+   trailing stop and an exit after a number of bars. The only stop today is a fixed
+   percentage from the risk manager, and there is no take-profit or trailing code at all.
+   Nearly every published strategy states a stop and a target, so without these almost
+   everything the agent writes would be an approximation. The stop invariants hold: a stop
+   fills at `min(open, stop)` and pays costs.
+2. **The first run against a live Elasticsearch** (see **Experiment tracking**). Everything
+   after this point writes to it.
+3. **Spec and scaffold.** The spec format, the scaffold script, a declared list of what the
+   engine supports, the generated test template, and specs written for `simple_ma`, `rsi`
+   and `breakout`. An idea the engine cannot express is recorded as unsupported with the
+   reason rather than approximated.
+4. **The protocol.** The first protocol file, a runner that checks the dataset hashes and
+   runs the funnel, and the protocol id on every exported document. Not yet checked: whether
+   the cross-asset stage can charge different costs per dataset.
+5. **The catalog module.** The queue, statuses, verdicts and holdout ledger as files, and the
+   derived leaderboard index.
+6. **The holdout rule and the suspicious flag**, enforced in that module.
+7. **The dashboards.** A leaderboard with a protocol filter that shows "best of N" beside the
+   top row, a view per strategy, and the existing single-run drill-down. This is the
+   cross-strategy dashboard under **Experiment tracking**, reading the derived index.
+8. **The agent.** Its instructions, the list of pages to watch, the `bot/*` rule in CI,
+   branch protection, the merge on green, the nightly schedule, and the runner that tests
+   whatever was merged.
+
+Steps 1 to 6 are useful with no automation at all.
+
+### Later
+
+- **Put unsupported ideas back in the queue** when the capability they were waiting for
+  lands. Until then they stay recorded with their reason and are picked up by hand.
+- **Count before building the large capabilities.** Run discovery alone over the watched
+  pages and count what each strategy requires, so the next capability is chosen by demand.
+- **The large engine capabilities**, none started: short selling (today a deliberate scope
+  limit, see below - it touches the portfolio, borrow costs and the buy-and-hold benchmark),
+  limit and stop entry orders (every order is a market order at the next open), intraday
+  data (the engine copes; the data, the holdout files and the compute do not exist), several
+  instruments in one strategy (every script takes one file and the portfolio is
+  single-symbol), external series such as volatility indices or fundamentals, and leverage
+  (position size is capped at 1).
+- **A database for the state.** Postgres for the queue, statuses, verdicts and holdout
+  ledger, with Elasticsearch kept for run output. Worth doing when the queue is in the
+  thousands, when questions need joins, or when the nightly state commits become noise. No
+  message queue: one worker takes a few items a night.
+- **A cloud routine** for discovery and implementation. It cannot reach local data or a
+  local Elasticsearch, so the test funnel stays on the machine that holds the frozen files.
+- **A forward holdout per strategy.** Bars after a strategy's implementation date are data it
+  cannot have been fitted to. The date is recorded from step 3; using it needs a way to
+  refresh data and months of new bars.
+- **A stronger correction across strategies** than "best of N" - the effective trial count
+  and the "one search only" item under **Research rigor**.
+- **A tool that cuts research and holdout files.** They are separate manual downloads today.
 
 ## Longer term
 
