@@ -119,6 +119,12 @@ In dependency order:
   document carries the run's header, because Elasticsearch has no joins. The
   `SELECTION_TRUNCATED` discipline carried over: a truncated result set exports flagged,
   with its grid statistics null.
+- **Nothing has been run against a live Elasticsearch.** Every exporter test mocks the
+  client, so nobody has watched the indices fill or the dashboard render. Two things to
+  settle in that first run: `elasticsearch_exporter.py` annualises rolling Sharpe and
+  volatility with a hardcoded 252, against this project's own invariant; and the dashboard's
+  `now-5y` range with a `created_at` datasource time field either cuts off old bars or
+  filters on export time. Indices created before #24-#26 need recreating for the new fields.
 - **A cross-strategy dashboard.** Not started; the data it needs is now in Elasticsearch.
   Three levels: a leaderboard over `niffler-runs` (one row per experiment, sorted by
   out-of-sample result, with the walk-forward efficiency ratio, the share of the grid
@@ -139,24 +145,79 @@ discovering later:
 ## Research rigor
 
 What stands between "the optimizer returned a winner" and "this strategy has an edge".
-The platform is already honest about each of these in its console output; none is corrected
-for.
+Three of these were delivered on 2026-10-07; what each one still does not do is listed under
+it, because a correction that is read as complete is worse than none.
 
-- **No multiple-testing correction, no deflated Sharpe ratio.** A grid search maximises over
-  hundreds of estimates and the significance test then judges the winner as if it were the
-  only trial. Worked example, `breakout` on BTCUSDT 2019-07 to 2024-07: the winner returns
-  935.64% against a 540.48% buy-and-hold baseline, but the *median* of the 396 combinations
-  returns 438.42% — below the baseline — and only 24.7% of the grid beats holding at all.
-  The inputs for a deflated Sharpe are all already in hand (trial count, the spread of
-  scores across the complete result set, the winner's return moments, the bar count).
+- ~~**No multiple-testing correction, no deflated Sharpe ratio.**~~ — shipped in #26 for the
+  optimizer's winner. `optimize.py` prints a `SEARCH LUCK` block with two figures: the
+  grid-relative one (is the winner better than the best of N equally good combinations),
+  which leads and drives the verdict, and the published deflated Sharpe ratio (null: no
+  edge at all), which a long-only strategy on a rising asset clears from market exposure
+  alone. Worked example, `breakout` on BTCUSDT 2019-07 to 2024-07, 396 combinations: the
+  winner's Sharpe is 1.263 against a grid-relative luck line of 1.373, a 40.1% probability of
+  being above it - no evidence for those parameters - while the published figure reads
+  97.9%. Still open:
+  - **Effective trial count.** Every combination counts as independent, which over-corrects
+    because neighbouring parameter sets are near-duplicates. `--effective-trials` is a manual
+    override; nothing estimates it. Deferred on purpose (2026-10-08): the usual estimators
+    read the similarity of trial returns, and long-only variants on one asset all move with
+    the market, so they would under-count. It becomes worth building when a leaderboard has
+    to rank many strategies, together with the item below.
+  - **One search only.** Trying three strategies and keeping the best is the same selection
+    one level up, and nothing counts it, although every run's `experiment` is now recorded.
+  - ~~**Not a gate.**~~ — `screen.py` reports the grid-relative probability at stage 2 since
+    #29 and can stop on it (`--min-grid-relative-probability`), but only when asked: the
+    gate is off by default. That is deliberate. The figure over-corrects for the reason
+    above, and a funnel should be lenient early and strict late - a winner let through
+    here is still tested on data the search never saw, while one stopped here is lost.
+- ~~**No untouched data.**~~ — shipped in #24. Walk-forward is out-of-sample per fold, but the
+  loop around it is not: a strategy adjusted until it passes has been fitted by whoever was
+  adjusting. `screen.py --holdout-data` runs one backtest of the winning parameters on data
+  no stage saw, gated on completed round trips and on excess over buy-and-hold; `--force`
+  does not spend it, and every look exports the file's hash so the looks can be counted. How
+  the files are made is in [data-management.md](data-management.md#research-and-holdout-files).
+  Since #29 `--holdout-data` takes several files and pools them - round trips summed, excess
+  the median across files, each file its own exported row - and every other script warns
+  when a data file is named like a holdout. Still open: the warning goes by file name only
+  and refuses nothing, and no cap on looks per holdout file is enforced.
 - ~~**One asset, one window.**~~ — shipped in #11 and #14. `scripts/compare.py` takes several
   `--data` files, runs the same walk-forward over each and reports excess over buy-and-hold
   per dataset; `scripts/screen.py` makes that cross-asset comparison the last gate of its
   funnel. `backtest.py`, `optimize.py` and `analyze.py` still take one CSV each, by design.
-- **Walk-forward folds overlap by default.** `test_window=6` with `step=3` means
-  consecutive out-of-sample windows share half their bars. The run reports
-  `oos_overlap_pct` and the pooled metrics deduplicate, but 15 folds are not 15
-  independent observations, and the per-fold counters still treat them as such.
+- ~~**Walk-forward folds overlap by default.**~~ — fixed in #25. `analyze.py --step` and
+  `WalkForwardAnalyzer` now default to the test window, as `compare.py` and `screen.py`
+  already did: `simple_ma` on BTCUSDT research data goes from 15 folds with 46.4% of
+  out-of-sample bars repeated to 8 independent ones, and the pooled Sharpe from 1.17 to 0.91.
+  Explicit overlap is still allowed; its per-fold figures are then labelled as
+  non-independent - labelled, not corrected - and the run exports `folds_independent`.
+
+## A system for new strategies
+
+Recorded as a direction on 2026-10-07. Nothing is built and the design is not agreed.
+
+The goal: a scheduled agent finds strategies published on the internet, writes each one as
+a Niffler strategy, runs the whole experiment on it, and the results appear somewhere they
+can be compared - a leaderboard, with the detail behind each row. That needs a way to
+document a strategy first, by hand or by the agent, because today a strategy is only a class
+and a registry line: where the idea came from, what its rules are and what has already been
+tried on it are written down nowhere.
+
+What a design has to answer before any of it is built:
+
+- **A strategy catalog.** One reviewed record per strategy - source, rules, parameters,
+  status - that survives independently of Elasticsearch, and tells a new idea from one
+  already tested under another name.
+- **One fixed test protocol.** The same datasets, costs, folds and gates for every strategy,
+  pinned and versioned, or the leaderboard compares runs that were never comparable.
+- **Selection across strategies.** Testing fifty strategies and reading the top of the list
+  is the grid-search problem one level up (see **Research rigor**); the leaderboard has to
+  show "best of N" beside the winner.
+- **Who spends the holdout.** An agent that screens every night would use the holdout up in
+  a week. It should stop before that stage and leave the look to a person.
+- **Generated code is untrusted.** Rules read from a web page are reimplemented and
+  reviewed, never executed as found, and nothing merges itself.
+- **Where it shows.** This is the cross-strategy dashboard under **Experiment tracking**,
+  which therefore comes first, as does the first run against a live Elasticsearch.
 
 ## Longer term
 
@@ -176,6 +237,6 @@ These are the genuinely large items, and none of them is started.
 
 Recorded here so they are not mistaken for oversights. Niffler is long-only and has no live
 trading. The Kelly risk manager is a stub — the class exists and every
-method raises. There is no multiple-testing correction and no deflated Sharpe ratio, so a
-p-value from a run whose parameters were fitted on the same data overstates the evidence;
-the documentation and the console output say so rather than pretending otherwise.
+method raises. A single backtest's p-value is not corrected for the search that found its
+parameters: the correction exists for the optimizer's winner only (see **Research rigor**),
+and the documentation and the console output say so rather than pretending otherwise.
