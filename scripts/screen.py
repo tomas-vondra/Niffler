@@ -47,12 +47,18 @@ failed a gate has its verdict, and a look spent confirming it is a look lost.
 Thresholds
 ----------
 Every threshold is a flag, and the chosen value is printed whether or not the
-gate fires - a gate you cannot see is not a gate. Four of the five research-stage
+gate fires - a gate you cannot see is not a gate. Three of the four research-stage
 defaults are **judgment calls, not results**: there is no theory that says a
 median efficiency ratio of 0.30 is the line between a real edge and a fitted
 one. They are set where a reasonable person would want to look again, and they
 are meant to be argued with. The exception is the trade-count gate, which reuses
-the framework's existing ``DEFAULT_MIN_TRADES``. The holdout gates default to one
+the framework's existing ``DEFAULT_MIN_TRADES``.
+
+Search luck is the one figure that is **reported and not gated on** unless
+``--min-grid-relative-probability`` is set. It counts every combination as an
+independent trial, which over-corrects, and the later stages test the winner on
+data the search did not see; so it informs by default and is strict only if
+asked. That it is not set is printed where the thresholds are. The holdout gates default to one
 completed round trip and to zero excess over buy-and-hold: the least that counts
 as having traded, and a break-even line, rather than judgments.
 
@@ -150,12 +156,15 @@ DEFAULT_MIN_RETENTION = plateau_analysis.ISOLATED_SPIKE_RETENTION
 #: nothing, and the best cell of such a grid is the most likely to be noise.
 DEFAULT_MIN_GRID_BEAT = 0.10
 
-#: Judgment call. The grid-relative probability is the chance that the winner's
-#: true Sharpe is above the best a search this size finds among equally good
-#: combinations. Below a half the winner is more likely the luckiest draw than a
-#: better parameter set; the conventional 95% would stop nearly every grid,
-#: because counting every combination as independent over-corrects.
-DEFAULT_MIN_GRID_RELATIVE_PROBABILITY = 0.5
+#: Off. The grid-relative probability is the chance that the winner's true
+#: Sharpe is above the best a search this size finds among equally good
+#: combinations. It counts every combination as independent, which
+#: over-corrects, and stages 3-5 test the winner on data the search did not
+#: see - so it is reported by default and gated on only when a threshold is
+#: set. None rather than 0.0: "not set" and "set to zero" are different runs.
+DEFAULT_MIN_GRID_RELATIVE_PROBABILITY: Optional[float] = None
+
+SEARCH_LUCK_FLAG = '--min-grid-relative-probability'
 
 #: Judgment call. The efficiency ratio is out-of-sample performance per bar over
 #: in-sample performance per bar; 1.0 means the fitted edge survived intact and
@@ -265,6 +274,8 @@ class StageResult:
         name: Stage name.
         gates: Gates evaluated by this stage, in the order they are reported.
         detail: Context lines printed above the gate verdicts.
+        reported: Lines printed with the gate verdicts for a measurement that
+            has no threshold set, so "not gated on" is as visible as a pass.
         payload: JSON-safe record of the stage for ``--output``.
         skipped_reason: Set when the stage did not run at all, which is neither
             a pass nor a stop and is reported as itself.
@@ -273,6 +284,7 @@ class StageResult:
     name: str
     gates: List[Gate] = field(default_factory=list)
     detail: List[str] = field(default_factory=list)
+    reported: List[str] = field(default_factory=list)
     payload: Dict[str, Any] = field(default_factory=dict)
     skipped_reason: Optional[str] = None
 
@@ -336,7 +348,7 @@ def run_optimize_stage(data, strategy_name: str, run_config: RunConfig,
                        method: str, metric: str, trials: int, seed: Optional[int],
                        n_jobs: Optional[int], min_retention: float,
                        min_grid_beat: float,
-                       min_grid_relative_probability: float =
+                       min_grid_relative_probability: Optional[float] =
                        DEFAULT_MIN_GRID_RELATIVE_PROBABILITY) -> StageResult:
     """Stage 2: is the winner a plateau, on a grid that beat doing nothing?
 
@@ -346,10 +358,11 @@ def run_optimize_stage(data, strategy_name: str, run_config: RunConfig,
     score-truncated result set reports **no** distribution rather than one
     computed from its best-scoring survivors, and would gate on ``None``.
 
-    The search-luck gate reads the same results. When the luck could not be
-    assessed (a truncated result set, too few trials, no spread between them)
-    its value is ``None`` and, like every other gate, that stops the funnel: a
-    winner whose luck could not be judged has not cleared the gate.
+    Search luck reads the same results and is always reported. It is a gate
+    only when a threshold was set. Luck that could not be assessed (a truncated
+    result set, too few trials, no spread between them) is fenced off and called
+    not-a-pass either way; with a threshold its value is ``None`` and, like
+    every other gate, that stops the funnel, and without one the run continues.
 
     Args:
         data: The primary OHLCV dataset.
@@ -365,7 +378,8 @@ def run_optimize_stage(data, strategy_name: str, run_config: RunConfig,
         min_retention: Plateau-retention gate.
         min_grid_beat: Gate on the fraction of the grid beating the baseline.
         min_grid_relative_probability: Gate on the probability that the winner
-            is above the best of that many equally good combinations.
+            is above the best of that many equally good combinations, or None
+            to report the figure without gating on it.
 
     Returns:
         The stage result, gated on plateau retention, on the share of the grid
@@ -418,7 +432,7 @@ def run_optimize_stage(data, strategy_name: str, run_config: RunConfig,
         f"{len(results)} combination(s) evaluated by {method} on {metric} "
         f"({selection})",
         f"winner {results[0].parameters}  plateau verdict: {verdict}",
-    ] + search_luck_detail(luck)
+    ] + search_luck_detail(luck, gated=min_grid_relative_probability is not None)
     stage.gates = [
         Gate(stage=STAGE_OPTIMIZE, quantity='plateau retention', value=retention,
              threshold=min_retention, flag='--min-retention',
@@ -426,12 +440,20 @@ def run_optimize_stage(data, strategy_name: str, run_config: RunConfig,
         Gate(stage=STAGE_OPTIMIZE, quantity='grid fraction beating buy-and-hold',
              value=beat_fraction, threshold=min_grid_beat, flag='--min-grid-beat',
              unknown_reason=beat_reason),
-        Gate(stage=STAGE_OPTIMIZE, quantity='grid-relative probability',
-             value=luck.grid_relative_probability,
-             threshold=min_grid_relative_probability,
-             flag='--min-grid-relative-probability',
-             unknown_reason=f"search luck not assessable: {luck.status}"),
     ]
+    if min_grid_relative_probability is not None:
+        stage.gates.append(Gate(
+            stage=STAGE_OPTIMIZE, quantity='grid-relative probability',
+            value=luck.grid_relative_probability,
+            threshold=min_grid_relative_probability,
+            flag=SEARCH_LUCK_FLAG,
+            unknown_reason=f"search luck not assessable: {luck.status}"))
+    else:
+        measured = (f"{luck.grid_relative_probability:.2f}" if luck.is_computed
+                    else f"None (search luck not assessable: {luck.status})")
+        stage.reported = [
+            f"not gated at {STAGE_OPTIMIZE}: grid-relative probability {measured}, "
+            f"no threshold set ({SEARCH_LUCK_FLAG})"]
     stage.payload = {
         'method': method,
         'metric': metric,
@@ -443,6 +465,7 @@ def run_optimize_stage(data, strategy_name: str, run_config: RunConfig,
         'grid_fraction_beating_baseline': beat_fraction,
         'baseline_label': distribution.baseline_label,
         'search_luck': search_luck_analysis.summary_fields(luck),
+        'search_luck_gated': min_grid_relative_probability is not None,
     }
     return stage
 
@@ -474,21 +497,30 @@ def assess_search_luck(results, selection: str,
             trials_evaluated=len(results))
 
 
-def search_luck_detail(luck: search_luck_analysis.DeflatedSharpe) -> List[str]:
+def search_luck_detail(luck: search_luck_analysis.DeflatedSharpe,
+                       gated: bool) -> List[str]:
     """Render the search-luck figures, or say loudly that there are none.
 
     Args:
         luck: The analysis from :func:`assess_search_luck`.
+        gated: Whether a threshold was set, which decides what an unassessable
+            result does to the run - not whether it is said out loud.
 
     Returns:
         Context lines for the optimize stage.
     """
     if not luck.is_computed:
+        consequence = (
+            ["It stops the funnel like a failed gate: a winner whose luck could",
+             "not be judged has not been shown to be above it."]
+            if gated else
+            [f"No threshold is set ({SEARCH_LUCK_FLAG}), so the funnel",
+             "continues - with a winner whose luck was NOT judged."])
         return [
             _BANNER,
             f"SEARCH LUCK NOT ASSESSABLE ({luck.status}): {luck.reason}",
-            "This is not a pass. It stops the funnel like a failed gate: a winner",
-            "whose luck could not be judged has not been shown to be above it.",
+            "This is not a pass.",
+            *consequence,
             _BANNER,
         ]
 
@@ -496,8 +528,25 @@ def search_luck_detail(luck: search_luck_analysis.DeflatedSharpe) -> List[str]:
         f"search luck over {luck.trials:g} trial(s): winner Sharpe "
         f"{_number(luck.annualised(luck.winner.sharpe), 3)} vs grid-relative luck "
         f"line {_number(luck.annualised(luck.grid_relative_luck_line), 3)} "
-        f"(annualised)",
+        f"(annualised), probability the winner is truly above it "
+        f"{luck.grid_relative_probability:.1%}",
     ]
+
+
+def search_luck_summary(stage: Optional[StageResult]) -> Dict[str, Any]:
+    """The search-luck figures a run summary carries, gated on or not.
+
+    Args:
+        stage: The optimize stage, or None when the funnel stopped before it.
+
+    Returns:
+        ``grid_relative_probability``, ``grid_relative_luck_line`` and
+        ``search_luck_status``, all None when the stage did not run.
+    """
+    fields = ('grid_relative_probability', 'grid_relative_luck_line',
+              'search_luck_status')
+    figures = (stage.payload.get('search_luck') or {}) if stage is not None else {}
+    return {name: figures.get(name) for name in fields}
 
 
 def run_walk_forward_stage(row: Dict[str, Any], min_efficiency: float) -> StageResult:
@@ -887,6 +936,8 @@ def report_stage(stage: StageResult) -> None:
         print(f"  {line}")
     for gate in stage.gates:
         print(f"  {gate.describe()}")
+    for line in stage.reported:
+        print(f"  {line}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -966,8 +1017,9 @@ outcome), 1 = the run failed.
         'Judgment calls, not results. --min-trades-for-significance reuses the '
         'framework constant, --min-holdout-excess defaults to break-even and '
         '--min-holdout-trades to one round trip; '
-        'the other four are set where a reasonable person would want to look '
-        'again, and are meant to be argued with.')
+        'the other three are set where a reasonable person would want to look '
+        'again, and are meant to be argued with. --min-grid-relative-probability '
+        'is not set by default: search luck is then reported, not gated on.')
     gates.add_argument('--min-retention', type=float, default=DEFAULT_MIN_RETENTION,
                        help=f"Stage 2: plateau retention the winner's neighbourhood "
                             f"must keep, where 1.0 is a flat plateau and 0.0 an "
@@ -980,12 +1032,15 @@ outcome), 1 = the run failed.
                             f"judgment call)")
     gates.add_argument('--min-grid-relative-probability', type=float,
                        default=DEFAULT_MIN_GRID_RELATIVE_PROBABILITY,
-                       help=f"Stage 2: probability that the winner is truly above "
-                            f"the best of that many equally good combinations "
-                            f"(default: {DEFAULT_MIN_GRID_RELATIVE_PROBABILITY:g} - a "
-                            f"judgment call: below it the winner is more likely the "
-                            f"luckiest draw than a better parameter set). When it "
-                            f"cannot be assessed the gate stops the run")
+                       help="Stage 2: probability that the winner is truly above "
+                            "the best of that many equally good combinations "
+                            "(default: not set - the figure is always printed and "
+                            "exported but stops the run only when a threshold is "
+                            "given. It counts every combination as independent, "
+                            "which over-corrects, and the later stages test the "
+                            "winner on data the search did not see). With a "
+                            "threshold, luck that cannot be assessed stops the run; "
+                            "without one it is a loud warning")
     gates.add_argument('--min-efficiency', type=float, default=DEFAULT_MIN_EFFICIENCY,
                        help=f"Stage 3: median walk-forward efficiency ratio, i.e. how "
                             f"much of the fitted edge survived out-of-sample "
@@ -1136,6 +1191,8 @@ def main() -> int:
     walk_forward_rows: List[Dict[str, Any]] = []
     # Set only when the holdout backtest actually ran.
     holdout_stage: Optional[StageResult] = None
+    # Set only when the funnel reached stage 2.
+    optimize_stage: Optional[StageResult] = None
 
     def record(stage: StageResult) -> bool:
         """Report a stage and say whether the funnel should continue."""
@@ -1247,10 +1304,16 @@ def main() -> int:
     print()
     print(_SEPARATOR)
     if stopped_at is None:
+        if args.min_grid_relative_probability is not None:
+            correction = ("the search-luck gate corrects for this one parameter "
+                          "search only, counting every combination as independent, "
+                          "and for none of the strategies or grids tried before it.")
+        else:
+            correction = (f"no gate corrected for the parameter search behind these "
+                          f"numbers. Search luck was reported in stage 2 and not "
+                          f"gated on ({SEARCH_LUCK_FLAG} is not set).")
         print(f"PASSED all {len(stages)} stage(s). That is a reason to look harder, "
-              f"not a result: the search-luck gate corrects for this one "
-              f"parameter search only, counting every combination as independent, "
-              f"and for none of the strategies or grids tried before it.")
+              f"not a result: {correction}")
         if holdout_stage is not None:
             print("The holdout is the one number here that search never saw, and "
                   "it is now spent: adjust the strategy and screen again, and the "
@@ -1343,6 +1406,8 @@ def main() -> int:
             'stopped_at_quantity': stopped_at.quantity if stopped_at is not None else None,
             'forced': bool(args.force),
             'n_stages': len(stages),
+            # Exported whether or not a threshold made it a gate.
+            **search_luck_summary(optimize_stage),
             # None unless the holdout backtest ran: a requested holdout a gate
             # stopped short of was not looked at.
             **holdout_summary(holdout_stage),

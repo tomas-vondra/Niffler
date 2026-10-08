@@ -118,9 +118,12 @@ data = [
 
 [screen]
 min_efficiency = 0.5
-# Stage 2: probability that the winner is above the best a search that size finds
-# among equally good combinations. Not assessable is a stop, not a pass.
-min_grid_relative_probability = 0.5
+# Stage 2 search luck: probability that the winner is above the best a search that size
+# finds among equally good combinations. Not set by default - the figure is printed and
+# exported but stops nothing, because it counts every combination as independent
+# (which over-corrects) and the later stages test the winner on unseen data. Uncomment to
+# make it a gate; luck that cannot be assessed then stops the run.
+# min_grid_relative_probability = 0.5
 # The holdout threshold may live here. The holdout PATH may not: holdout_data in
 # this file is an error, because every run of the funnel would then score the
 # holdout, and a file scored on every iteration is research data.
