@@ -36,7 +36,7 @@ from .grid_search_optimizer import GridSearchOptimizer
 from .random_search_optimizer import RandomSearchOptimizer
 from .parameter_space import ParameterSpace
 from .optimization_result import OptimizationResult
-from .optimizer_factory import create_optimizer
+from .optimizer_factory import create_optimizer, get_available_optimizers, get_optimizer_class
 
 __all__ = [
     'BaseOptimizer',
@@ -44,7 +44,9 @@ __all__ = [
     'RandomSearchOptimizer',
     'ParameterSpace',
     'OptimizationResult',
-    'create_optimizer'
+    'create_optimizer',
+    'get_available_optimizers',
+    'get_optimizer_class',
 ]
 
 __version__ = '1.0.0'

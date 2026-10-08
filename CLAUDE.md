@@ -384,9 +384,13 @@ Exit codes: `0` every gate passed, `3` a gate stopped the run, `1` the run faile
     `n_jobs`**: `n_jobs=1` keeps the lazy path that never materialises the combination
     list, above that the shared process pool is used
   - `random_search_optimizer.py` - Random parameter sampling optimization
-  - `optimizer_factory.py` - Factory for creating optimizers, plus `get_parameter_space`,
-    which wraps a strategy's `PARAMETER_SPEC` in a `ParameterSpace`. The strategy name to
-    class lookup is **not** here - it lives in `niffler/strategies/registry.py`
+  - `registry.py` - The single optimizer registry (`OPTIMIZER_CLASSES`,
+    `get_available_optimizers`, `create_optimizer`), the same shape as the strategy, risk
+    and exporter registries. Adding an optimizer is one entry here
+  - `optimizer_factory.py` - Re-exports the registry for existing imports, plus
+    `get_parameter_space`, which wraps a strategy's `PARAMETER_SPEC` in a `ParameterSpace`.
+    The strategy name to class lookup is **not** here - it lives in
+    `niffler/strategies/registry.py`
   - `parameter_space.py` - `ParameterSpace` validation only. It holds **no** per-strategy
     constant; a strategy owns its own space
   - `optimization_result.py` - Stores and analyzes optimization results
