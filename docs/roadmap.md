@@ -158,13 +158,17 @@ it, because a correction that is read as complete is worse than none.
   97.9%. Still open:
   - **Effective trial count.** Every combination counts as independent, which over-corrects
     because neighbouring parameter sets are near-duplicates. `--effective-trials` is a manual
-    override; nothing estimates it.
+    override; nothing estimates it. Deferred on purpose (2026-10-08): the usual estimators
+    read the similarity of trial returns, and long-only variants on one asset all move with
+    the market, so they would under-count. It becomes worth building when a leaderboard has
+    to rank many strategies, together with the item below.
   - **One search only.** Trying three strategies and keeping the best is the same selection
     one level up, and nothing counts it, although every run's `experiment` is now recorded.
-  - ~~**Not a gate.**~~ — `screen.py` stops at stage 2 on the grid-relative probability
-    since #29 (`--min-grid-relative-probability`, default 0.5, a judgment call). A search
-    whose luck cannot be assessed stops too, and says it is not a pass. The gate always
-    counts every combination, so the BTCUSDT example above (40.1%) now stops there.
+  - ~~**Not a gate.**~~ — `screen.py` reports the grid-relative probability at stage 2 since
+    #29 and can stop on it (`--min-grid-relative-probability`), but only when asked: the
+    gate is off by default. That is deliberate. The figure over-corrects for the reason
+    above, and a funnel should be lenient early and strict late - a winner let through
+    here is still tested on data the search never saw, while one stopped here is lost.
 - ~~**No untouched data.**~~ — shipped in #24. Walk-forward is out-of-sample per fold, but the
   loop around it is not: a strategy adjusted until it passes has been fitted by whoever was
   adjusting. `screen.py --holdout-data` runs one backtest of the winning parameters on data
