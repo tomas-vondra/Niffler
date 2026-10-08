@@ -41,6 +41,7 @@ from scripts.common import (
     report_export_outcome,
     report_run_identity,
     resolve_strategy_parameters,
+    warn_if_holdout_data,
 )
 from scripts.config_file import (
     add_config_arguments,
@@ -217,6 +218,7 @@ Examples:
     
     try:
         # Load data
+        warn_if_holdout_data(args.data)
         print(f"Loading data from {args.data}...")
         data = load_data(args.data, clean=args.clean)
         print(f"Loaded {len(data)} data points from {data.index[0]} to {data.index[-1]}")

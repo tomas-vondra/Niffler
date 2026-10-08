@@ -218,6 +218,17 @@ winner's Sharpe is at most the grid's best, so judging it against the expected *
 is the stricter reading. The probability is computed in per-bar Sharpe; the annualised
 figures shown use the engine's own inferred annualisation.
 
+`screen.py` prints and exports the grid-relative probability in its optimize stage, and
+gates on it only when `--min-grid-relative-probability` is set. It is off by default
+because the figure counts every combination as independent, which over-corrects, and the
+funnel's later stages test the winner on data the search did not see; so it informs by
+default and is strict only if asked. The breakout example above reads 40.1%: unset, the
+funnel prints `not gated at optimize: grid-relative probability 0.40, no threshold set` and
+carries on; with `--min-grid-relative-probability 0.5` it stops there. `screen.py` always
+counts every combination; it has no `--effective-trials`. When the figure is
+`NOT COMPUTED` the stage says so in a fenced block that calls it not a pass - a warning
+when no threshold is set, a stop when one is.
+
 ### Output Format
 
 #### JSON Output Structure

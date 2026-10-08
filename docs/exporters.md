@@ -228,7 +228,7 @@ Indexes every kind of run (prefix configurable, default `niffler`):
 | `niffler-trials` | Parameter combination an optimization evaluated | `optimize.py` |
 | `niffler-folds` | Walk-forward fold | `analyze.py` |
 | `niffler-simulations` | Monte Carlo simulation | `analyze.py` |
-| `niffler-comparisons` | Dataset × strategy row; a `screen.py` holdout run adds one row with `stage: holdout` and the holdout file's `data_sha256` | `compare.py`, `screen.py` |
+| `niffler-comparisons` | Dataset × strategy row; a `screen.py` holdout run adds one row **per holdout file**, each with `stage: holdout` and that file's `data_sha256` | `compare.py`, `screen.py` |
 
 Mappings live in `config/elasticsearch/mappings/` (`run_details.json` is shared by folds,
 simulations and comparisons, whose columns differ by run).
@@ -253,7 +253,7 @@ header, `build_run_header` in `exporter_manager.py`.
 | `optimize` | `n_trials`, `method`, `sort_by`, `selection`, `results_truncated`, `best_parameters`, the winner's metrics under the same names a backtest uses, `plateau_metric`, `grid_baseline`, `grid_median`, `fraction_beating_baseline`, `plateau_retention`, and the search-luck figures: `grid_relative_probability` with its line `grid_relative_luck_line` (the one to rank on), `deflated_sharpe` with its line `expected_max_sharpe` (the published deflated Sharpe ratio), `search_luck_status`, `search_luck_trials`, `search_luck_trials_source`, `trial_sharpe_mean`, `trial_sharpe_std`. The two probabilities are in [0, 1]; the Sharpe figures are annualised, like `sharpe_ratio` |
 | `walk_forward`, `monte_carlo` | `n_periods`, `combined_metrics`, `stability_metrics`, `analysis_parameters`, `attempted_runs`, `failed_runs`, `failure_rate` |
 | `compare` | the fold windows, `n_rows`, `n_failed_rows`, `strategies`, `symbols` |
-| `screen` | `passed`, `stopped_at`, `stopped_at_quantity`, `forced`, and `stages` (one entry per gate) |
+| `screen` | `passed`, `stopped_at`, `stopped_at_quantity`, `forced`, `stages` (one entry per gate), the search-luck figures `grid_relative_probability`, `grid_relative_luck_line` and `search_luck_status` (exported whether or not `--min-grid-relative-probability` made them a gate; null when the funnel stopped before stage 2), and the holdout figures: `holdout_files`, `holdout_files_beating`, `holdout_round_trips`, `holdout_excess_pct` (the one file's excess, or the median over several) and `holdout_data_sha256` (set for exactly one file; several have no single fingerprint, so each row names its own). All null when no holdout backtest ran |
 
 Rules the export keeps:
 

@@ -210,10 +210,30 @@ first gate that fails, saying exactly why**:
   STOPPED at backtest: round trips 4 < 30 (--min-trades-for-significance)
 ```
 
+Stage 2 gates on plateau retention and on the share of the grid that beat buy-and-hold.
+It also **reports search luck** - the probability that the winner is truly above the best
+a search that size finds among equally good combinations (see
+[Search luck](docs/optimization.md#search-luck)) - and does not gate on it by default:
+
+```
+  search luck over 396 trial(s): winner Sharpe 1.263 vs grid-relative luck line 1.373 (annualised), probability the winner is truly above it 40.1%
+  passed optimize: plateau retention 0.45 >= 0.25 (--min-retention)
+  passed optimize: grid fraction beating buy-and-hold 0.25 >= 0.10 (--min-grid-beat)
+  not gated at optimize: grid-relative probability 0.40, no threshold set (--min-grid-relative-probability)
+```
+
+The figure counts every combination as an independent trial, which over-corrects, and
+stages 3-5 test the winner on data the search did not see; so it informs by default and
+is strict only if asked. `--min-grid-relative-probability 0.5` (or the same key in
+`niffler.toml`) makes it a gate like the others. A search whose luck could not be assessed
+- a truncated result set, too few trials, no spread between them - says so in a fenced
+block that calls it not a pass; without a threshold the funnel continues, with one it
+stops. The figure, the luck line and the status are exported on the run either way.
+
 Every threshold is a flag and is printed whether or not it fires. Three of the four
-defaults are judgment calls and say so in `--help`; the fourth reuses the framework's own
-`DEFAULT_MIN_TRADES` (the optional holdout gates, below, default to one round trip and
-to break-even). A stop exits **3** — it is a normal outcome, not an error (1 is a
+research-stage defaults are judgment calls and say so in `--help`; the fourth reuses the
+framework's own `DEFAULT_MIN_TRADES` (the optional holdout gates, below, default to one
+round trip and to break-even). A stop exits **3** — it is a normal outcome, not an error (1 is a
 real failure, and argparse owns 2). `--force` runs every stage anyway - except the
 holdout, below - and still exits 3.
 
@@ -232,7 +252,9 @@ python scripts/screen.py --data data/SPY_research.csv --strategy breakout \
 ```
 
 - Nothing is fitted on the holdout: one backtest, the parameters stage 2 already chose.
-- The holdout must start strictly after `--data` ends, or the run exits 1 naming both dates.
+- The holdout must start strictly after `--data` **and every `--compare-data` file** ends,
+  or the run exits 1 naming the dates and the files. A walk-forward on another asset over
+  a period is still a decision made with that period in view.
 - The gates are completed round trips, `--min-holdout-trades` (default 1), and excess
   return over buy-and-hold, `--min-holdout-excess` (default 0). The first exists because a
   strategy that stays flat while the asset falls has positive excess without having done
@@ -244,6 +266,32 @@ python scripts/screen.py --data data/SPY_research.csv --strategy breakout \
   same file is research data. So the path must be typed - `holdout_data` in `niffler.toml`
   is an error - and every holdout run exports the file's hash (`stage: holdout` in
   `niffler-comparisons`, `holdout_data_sha256` on the run), so the looks can be counted.
+- **Anywhere else, a holdout file gets a warning.** `backtest.py`, `optimize.py`,
+  `analyze.py`, `compare.py`, and `screen.py`'s own `--data` / `--compare-data` print a
+  fenced warning when a data file's name contains `holdout`: a backtest or a search on it
+  is a look too. It is a warning and not a refusal, because the name is only a convention.
+
+**Several holdout files.** One file is one asset, and often too few round trips to say
+much. `--holdout-data` takes several, and they are pooled into one verdict:
+
+```bash
+python scripts/screen.py --data data/SPY_research.csv --strategy breakout \
+  --compare-data data/QQQ_research.csv \
+  --holdout-data data/SPY_holdout.csv data/QQQ_holdout.csv
+```
+
+- One backtest per file, all with the same stage-2 winner. No parameters are refitted per
+  instrument.
+- `--min-holdout-trades` reads the round trips **summed** over the files.
+- `--min-holdout-excess` reads the **median** of the per-file excess over buy-and-hold -
+  the convention `compare.py` uses for folds, so one exceptional file cannot carry the
+  verdict - and the output says how many files beat buy-and-hold.
+- A file the strategy never traded on is left out of that median and named: flat while the
+  asset fell is positive excess for nothing.
+- Each file is printed on its own lines and exported as its own `stage: holdout` row with
+  its own hash, so looks stay countable per file. The run summary carries `holdout_files`,
+  `holdout_files_beating` and `holdout_round_trips`, and no single hash.
+- Every file listed is spent by the run.
 
 Without `--holdout-data` the funnel says so: `SKIPPED: no --holdout-data given`.
 
@@ -628,9 +676,11 @@ Being explicit, so nobody discovers these the expensive way:
   significance test answers "is this one strategy's mean trade return distinguishable from
   zero on this one sample". It knows nothing about how many parameter sets were tried to
   find it, so if you optimised on the same data it overstates the evidence. The correction
-  exists in one place only: `optimize.py` prints a `SEARCH LUCK` block for the winner of
-  the search it just ran - a grid-relative probability and the published deflated Sharpe
-  ratio (see [Search luck](docs/optimization.md#search-luck)). It
+  exists for the optimizer's winner only: `optimize.py` prints a `SEARCH LUCK` block for
+  the winner of the search it just ran - a grid-relative probability and the published
+  deflated Sharpe ratio (see [Search luck](docs/optimization.md#search-luck)) - and
+  `screen.py` reports the first of the two in its optimize stage, gating on it only when
+  `--min-grid-relative-probability` is set. It
   counts that one search - not the other strategies or grids tried before it - and it
   counts every combination as an independent trial.
 - **Only one benchmark: buy-and-hold of the traded asset.** No index, no risk-free rate, no

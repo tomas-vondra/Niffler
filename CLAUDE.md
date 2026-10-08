@@ -37,8 +37,9 @@ The short version, because these are easy to "helpfully" undo:
 | There is **one** strategy registry (`niffler/strategies/registry.py`) and every CLI's `--strategy` choices derive from it | Hardcode a `choices=[...]` list, or define a second name→class map in a script (that exact shadowing bug made `analyze.py` reject strategies `optimize.py` accepted) |
 | `niffler/strategies/` imports **nothing** from `niffler/optimization/`; a strategy declares `PARAMETER_SPEC` as a plain dict | Import `ParameterSpace` into a strategy module - `niffler/optimization/__init__` imports `optimizer_factory`, which imports the registry, so it is a circular import |
 | Engine settings travel as **one** `RunConfig`, built once by `scripts/common.build_run_config` | Add an eleventh knob to `BacktestEngine.__init__` without a field on `RunConfig`, hand an analyzer or a worker a loose `initial_capital`/`commission`/`cost_model` triple, or re-check a range that `RunConfig.__post_init__` already checks |
-| A screening gate with **no** measurable value stops the run | Treat a `None` retention / efficiency / BEAT% as a pass, or as a 0.0 |
-| The holdout is scored by **one backtest**, on bars strictly after the research data, and its path is **typed** | Optimise or walk-forward on the holdout file, accept `holdout_data` from `niffler.toml`, run the stage after any earlier gate failed (`--force` included), or let a holdout with no completed round trip pass on its excess |
+| A screening gate with **no** measurable value stops the run | Treat a `None` retention / efficiency / BEAT% / grid-relative probability as a pass, or as a 0.0 |
+| Search luck is **reported, not gated on**, unless `--min-grid-relative-probability` is set; unset is `None`, never `0.0` | Give the flag a numeric default, drop the `not gated at optimize` line or the fenced not-assessable block when it is unset, or let unassessable luck pass a threshold that was set |
+| The holdout is scored by **one backtest per file**, on bars strictly after **every** research file in the run, and its path is **typed** | Optimise or walk-forward on a holdout file, accept `holdout_data` from `niffler.toml`, run the stage after any earlier gate failed (`--force` included), let a holdout with no completed round trip pass on its excess, check a holdout's dates against `--data` only, or pool several files by anything but summed round trips and the median per-file excess |
 | A cross-asset comparison pairs each fold with buy-and-hold over the **same bars** | Compare a fold return against a benchmark computed over the whole file, or against a fixed number - the window length would drive the verdict |
 | A strategy parameter the chosen strategy does not accept is an **error** | Silently drop an unknown `--params` key or a foreign flag, which runs the strategy with defaults while the user thinks it was configured |
 | There is **one** registry per extension point - strategies, exporters (`niffler/exporters/registry.py`), data sources (`niffler/data/downloaders/registry.py`) - and what each accepts is derived with `inspect.signature` | Hand-write a per-name kwargs filter or an `--source`/`--exporters` `choices=[...]` list; a forgotten branch builds the exporter on **defaults**, reports success and exits 0 |
@@ -259,6 +260,12 @@ python scripts/screen.py --data data/SPY_research.csv --strategy breakout \
 python scripts/screen.py --data data/SPY_research.csv --strategy simple_ma \
   --min-efficiency 0.5 --min-beat-pct 60 --cost-model fixed --slippage-bps 5
 
+# Search luck is printed and exported but not gated on by default. Make it a gate: the
+# winner must be 50% likely to be above the best a search that size finds by luck. With a
+# threshold set, luck that cannot be assessed is a stop
+python scripts/screen.py --data data/SPY_research.csv --strategy breakout \
+  --min-grid-relative-probability 0.5
+
 # Report every stage even after one fails (still exits 3)
 python scripts/screen.py --data data/SPY_research.csv --strategy rsi --force
 
@@ -268,6 +275,12 @@ python scripts/screen.py --data data/SPY_research.csv --strategy rsi --force
 # so it only runs once every earlier gate passed, and --force does not override that
 python scripts/screen.py --data data/SPY_research.csv --strategy breakout \
   --compare-data data/QQQ_research.csv --holdout-data data/SPY_holdout.csv
+
+# The same look pooled over several instruments: one backtest per file, round trips
+# summed, excess the median of the per-file figures. Every file is spent by it
+python scripts/screen.py --data data/SPY_research.csv --strategy breakout \
+  --compare-data data/QQQ_research.csv \
+  --holdout-data data/SPY_holdout.csv data/QQQ_holdout.csv
 ```
 
 Exit codes: `0` every gate passed, `3` a gate stopped the run, `1` the run failed.
@@ -487,13 +500,26 @@ Exit codes: `0` every gate passed, `3` a gate stopped the run, `1` the run faile
   - `screen.py` - The pipeline as a funnel: backtest → optimize → walk-forward →
     cross-asset compare → holdout (only with `--holdout-data`), stopping at the first
     gate that fails with a line that names the stage, the measurement, the threshold and
-    the flag that set it. The holdout stage is one backtest of the stage-2 winner, never
+    the flag that set it. The optimize stage gates on plateau retention and on the share
+    of the grid beating buy-and-hold, and always prints and exports search luck (read from
+    `niffler/optimization/deflated_sharpe.py`). Search luck is a gate only when
+    `--min-grid-relative-probability` is set - it counts every combination as independent,
+    which over-corrects, and the later stages test the winner on unseen data - and unset
+    is printed as `not gated at optimize: ... no threshold set`. Luck that cannot be
+    assessed is fenced off as not-a-pass either way: a warning without a threshold, a stop
+    with one. The holdout stage is one backtest of the stage-2 winner, never
     a search; the file must start strictly after `--data` ends (else exit 1), must be
     typed rather than read from `niffler.toml`, is skipped - not spent - when an earlier
     gate failed even under `--force`, cannot pass below `--min-holdout-trades` completed
     round trips (default 1), and is exported as a `niffler-comparisons`
     row with `stage: holdout` and its own `data_sha256` (also `holdout_data_sha256` on the
-    run summary), so the number of looks at one holdout file is a count. It computes
+    run summary), so the number of looks at one holdout file is a count. `--holdout-data`
+    takes several files: every one must start after the latest last bar of `--data` and
+    every `--compare-data` file, each gets one backtest and its own row and hash, and the
+    gates read the pool - round trips summed, excess the median of the per-file figures
+    (`compare.py`'s convention for folds), a file never traded on left out of that median
+    and named. The run summary then carries `holdout_files`, `holdout_files_beating` and
+    `holdout_round_trips`, and no single `holdout_data_sha256`. It computes
     nothing itself - every gated number comes from the library or from
     `compare.evaluate`, which it calls once for the primary asset and reads twice
     (stages 3 and 4). `Gate` is a pure dataclass, so every threshold decision is
@@ -520,6 +546,11 @@ Exit codes: `0` every gate passed, `3` a gate stopped the run, `1` the run faile
     (`timestamp`/`date`/`datetime`/`time` plus pandas' unnamed index column), datetime
     parsing, required-column and duplicate-timestamp validation, index sorting, optional
     `--clean` pass. Do not add a fourth loader
+  - `common.py` also holds `warn_if_holdout_data`: every script that reads research data
+    (`backtest.py`, `optimize.py`, `analyze.py`, `compare.py`, and `screen.py` for
+    `--data` / `--compare-data`) prints a fenced warning to stderr when a data file's name
+    contains `holdout`, because using it there spends it. A warning, never a refusal - the
+    name is only a convention - and `screen.py --holdout-data` itself does not warn
   - Every `main()` returns an `int` exit code and is invoked as `sys.exit(main())`
   - Scripts insert into `sys.path` only under `if __package__ in (None, '')`, so importing
     them as `scripts.<name>` (tests, discovery) touches nothing

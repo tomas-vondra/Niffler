@@ -57,6 +57,7 @@ from scripts.common import (
     report_export_outcome,
     report_run_config,
     report_run_identity,
+    warn_if_holdout_data,
 )
 from scripts.config_file import (
     add_config_arguments,
@@ -387,6 +388,8 @@ Examples:
     if missing:
         print(f"Error: data file(s) not found: {', '.join(missing)}", file=sys.stderr)
         return 1
+
+    warn_if_holdout_data(args.data)
 
     run_config = build_run_config(args)
     report_run_config(run_config)
