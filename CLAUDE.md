@@ -44,6 +44,7 @@ The short version, because these are easy to "helpfully" undo:
 | A strategy parameter the chosen strategy does not accept is an **error** | Silently drop an unknown `--params` key or a foreign flag, which runs the strategy with defaults while the user thinks it was configured |
 | There is **one** registry per extension point - strategies, exporters (`niffler/exporters/registry.py`), data sources (`niffler/data/downloaders/registry.py`) - and what each accepts is derived with `inspect.signature` | Hand-write a per-name kwargs filter or an `--source`/`--exporters` `choices=[...]` list; a forgotten branch builds the exporter on **defaults**, reports success and exits 0 |
 | The exported metadata document has **one** builder, `ExporterManager.create_metadata` | Add a `create_metadata` back to `BaseExporter` - the deleted one silently omitted `profit_factor`, the six trade statistics and every benchmark and significance field |
+| Strategy-set exits fill like **resting orders**: stop at `min(open, stop)`, target at `max(open, target)`, time exit at the open, all through the cost model; a bar touching both stop and target is the **stop**; the trail moves on **completed** bars only; a later `stop_price` only **tightens** | Fill a target at the target when the bar opened above it (or a stop at the stop below the open), check the target before the stop, lift the trail with the bar's own high, or let a later `stop_price` loosen the stop |
 | Every strategy parameter has a **default** and every strategy accepts `position_size` / `risk_manager` | Add a required constructor argument - the library builds strategies as `strategy_class(**parameters)` |
 | There is **one** risk registry (`niffler/risk/registry.py`); `--risk-manager` choices derive from it, and `niffler/risk/` imports nothing from `niffler/backtesting/` or `niffler/strategies/` | Hardcode `choices=['none', 'fixed']`, or import the engine into a risk module - the engine imports the `RiskManager` protocol, so it closes an import cycle |
 | A risk manager holds **no position state**; it receives a `PortfolioSnapshot` per call, and `evaluate_trade` has **no default** for it | Put `self._positions` back, or default the snapshot to flat - which silently disables `max_positions` and re-breaks parallel walk-forward folds |
@@ -325,8 +326,13 @@ Exit codes: `0` every gate passed, `3` a gate stopped the run, `1` the run faile
     Subclasses implement `adverse_fraction`, **not** `fill_price`: the base class owns the
     sign, so no parameterisation can produce a favourable fill. `max_fillable_quantity`
     caps how much of a bar one order may take
-  - `trade.py` - Trade execution and tracking (`Trade` carries optional `commission` and
-    `slippage_cost` fields, defaulted, as its last positional fields)
+  - `trade.py` - Trade execution and tracking (`Trade` carries optional `commission`,
+    `slippage_cost` and `exit_reason` fields, defaulted, as its last positional fields)
+  - `exits.py` - Exits a strategy sets itself. `ExitColumns` reads and validates the four
+    optional strategy columns (`stop_price`, `take_profit_price`, `trailing_stop_pct`,
+    `max_bars_held`, names in `base_strategy.py`); `ExitPlan` is the open position's exit
+    state, held on `Portfolio.exit_plan`; `EXIT_REASONS` are the `Trade.exit_reason`
+    values
   - `metrics.py` - `periodic_returns`, `max_drawdown_pct`, `sharpe_ratio`,
     `sharpe_ratio_of_returns`. The **single** implementation of both equity-curve metrics;
     the engine and the benchmark both go through it so the two curves cannot drift apart.
@@ -588,6 +594,11 @@ Exit codes: `0` every gate passed, `3` a gate stopped the run, `1` the run faile
   price and only ever tightens the stop (a `None` stop leaves the existing one armed)
 - **Stops**: probed against the bar's traded range (low for longs, high for shorts) and
   filled at `min(open, stop)` for a long, so a gap-through fills at the open
+- **Strategy-set exits** (`niffler/backtesting/exits.py`): read from the signal bar. Per bar
+  the order is time exit (at the open), stops highest first (risk manager's and the
+  strategy's stop/trail), then target; the bar an exit trades on ignores its own signal.
+  Under `next_bar_open` the entry bar is probed after the entry fills. Exits come from the
+  entry that opened the position; a scale-in or later `stop_price` only tightens the stop
 - **Buy sizing**: `_affordable_trade_value` returns the largest notional for which
   `trade_value + trade_value * commission <= budget` holds *in floating point*, stepping the
   quotient down with `math.nextafter` when the round trip overshoots. A bare

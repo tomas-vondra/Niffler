@@ -153,7 +153,7 @@ class TestCSVExporter(unittest.TestCase):
         df = pd.read_csv(expected_file)
         self.assertEqual(len(df), 2)
         expected_columns = ['timestamp', 'symbol', 'side', 'price', 'quantity', 'value',
-                            'commission', 'slippage_cost', 'run_id']
+                            'commission', 'slippage_cost', 'exit_reason', 'run_id']
         self.assertListEqual(list(df.columns), expected_columns)
         
         # Check first trade

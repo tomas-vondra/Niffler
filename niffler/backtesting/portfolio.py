@@ -2,6 +2,7 @@ from typing import Optional
 
 from niffler.risk.contract import PortfolioSnapshot
 
+from .exits import ExitPlan
 from .trade import Trade, TradeSide
 
 
@@ -22,6 +23,8 @@ class Portfolio:
         entry_price: Fill price of the currently open position, None when flat
         stop_loss: Stop-loss price of the open position, None when flat or unset
         side: 1 for a long position, -1 for short, 0 when flat
+        exit_plan: Exits the strategy set for the open position, None when flat
+            or when it set none
     """
 
     #: Positions smaller than this are treated as dust, i.e. effectively flat.
@@ -46,6 +49,7 @@ class Portfolio:
         self.entry_price: Optional[float] = None
         self.stop_loss: Optional[float] = None
         self.side = 0
+        self.exit_plan: Optional[ExitPlan] = None
 
     @property
     def is_flat(self) -> bool:
@@ -220,3 +224,4 @@ class Portfolio:
         self.entry_price = None
         self.stop_loss = None
         self.side = 0
+        self.exit_plan = None

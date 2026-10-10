@@ -240,12 +240,13 @@ from a different starting point - which is why the manual path is built first.
 
 ### Build order
 
-1. **Exits a strategy can set itself.** A stop price chosen by the strategy, a take-profit, a
-   trailing stop and an exit after a number of bars. The only stop today is a fixed
-   percentage from the risk manager, and there is no take-profit or trailing code at all.
-   Nearly every published strategy states a stop and a target, so without these almost
-   everything the agent writes would be an approximation. The stop invariants hold: a stop
-   fills at `min(open, stop)` and pays costs.
+1. ~~**Exits a strategy can set itself.**~~ — shipped. A strategy emits `stop_price`,
+   `take_profit_price`, `trailing_stop_pct` and `max_bars_held` next to `signal`
+   (`niffler/backtesting/exits.py`); a later `stop_price` moves the stop up only, so a
+   strategy can run its own trail. The stop invariants hold: a stop fills at
+   `min(open, stop)`, a target at `max(open, target)`, both pay costs, a bar touching
+   both is booked as the stop, and every sell records its `exit_reason`. None of the
+   three shipped strategies uses them yet.
 2. **The first run against a live Elasticsearch** (see **Experiment tracking**). Everything
    after this point writes to it.
 3. **Spec and scaffold.** The spec format, the scaffold script, a declared list of what the

@@ -223,6 +223,7 @@ class CSVExporter(BaseExporter):
                 # Optional on the Trade dataclass - read defensively.
                 'commission': getattr(trade, 'commission', 0.0),
                 'slippage_cost': getattr(trade, 'slippage_cost', 0.0),
+                'exit_reason': getattr(trade, 'exit_reason', None),
                 'run_id': run_id
             })
 
