@@ -1,0 +1,49 @@
+# Strategy spec. The format is documented in docs/strategy-specs.md.
+spec_version = 1
+key = "simple_ma"
+class_name = "SimpleMAStrategy"
+name = "Simple MA Crossover"
+family = "trend_following"
+summary = "Buy when a short simple moving average of the close crosses above a long one; sell when it crosses back below."
+
+[source]
+kind = "textbook"
+reference = "The moving-average crossover, a standard trend-following rule described in most technical-analysis texts. No single source owns it and none fixes the two windows."
+
+[dates]
+found = 2025-07-16
+implemented = 2025-07-16
+
+[rules]
+entry = """
+On the close of a bar, when the short_window simple moving average of the close
+moves from at or below the long_window simple moving average on the previous bar
+to strictly above it on this bar, buy.
+"""
+exit = """
+On the close of a bar, when the short moving average moves from at or above the
+long moving average on the previous bar to strictly below it on this bar, sell
+the open position.
+"""
+inputs = ["close"]
+notes = """
+Only the crossing bar signals; a bar on which one average merely stays above the
+other does not. No signal fires before both averages have a full window of bars.
+Nothing requires short_window to be below long_window; with the two equal the
+averages never cross and the strategy never trades.
+"""
+
+[parameters.short_window]
+type = "int"
+default = 10
+description = "Number of bars in the short (fast) simple moving average of the close."
+search = { min = 5, max = 20, step = 1 }
+
+[parameters.long_window]
+type = "int"
+default = 30
+description = "Number of bars in the long (slow) simple moving average of the close."
+search = { min = 20, max = 100, step = 5 }
+
+[requires]
+capabilities = ["long_entry", "signal_exit", "fractional_position", "single_instrument_bars"]

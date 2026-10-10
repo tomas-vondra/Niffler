@@ -1,0 +1,60 @@
+# Strategy spec. The format is documented in docs/strategy-specs.md.
+spec_version = 1
+key = "breakout"
+class_name = "BreakoutStrategy"
+name = "Donchian Breakout"
+family = "breakout"
+summary = "Buy a close above the highest high of the preceding entry_window bars; sell a close below the lowest low of the preceding exit_window bars."
+
+[source]
+kind = "book"
+reference = "Richard Donchian's channel rule, with the 20-bar entry and 10-bar exit of the Turtle Trading System 1 as described in Curtis Faith, Way of the Turtle (2007)."
+
+[dates]
+found = 2026-08-07
+implemented = 2026-08-07
+
+[rules]
+entry = """
+The upper channel is the highest high of the entry_window bars before the current
+one; the current bar is not part of it. On the close of a bar, when the close is
+strictly above the upper channel and the previous bar's close was not above its
+own upper channel, buy.
+"""
+exit = """
+The lower channel is the lowest low of the exit_window bars before the current
+one, the current bar excluded. On the close of a bar, when the close is strictly
+below the lower channel and the previous bar's close was not below its own lower
+channel, sell the open position.
+"""
+inputs = ["high", "low", "close"]
+notes = """
+The channels exclude the current bar: a channel that included it would contain
+the bar's own high, which no close can exceed. No signal fires before a channel
+has a full window of prior bars. One breakout is one signal, not one per bar that
+stays outside the channel.
+"""
+deviations = """
+The Turtles entered intraday, with a stop order at the channel price, and exited
+at 2N (twice the 20-day average true range) or on the 10-bar channel, adding a
+unit every half N. This strategy judges the close and fills at the next bar's
+open (stop_entry is not supported), and has no 2N stop (strategy_stop is not
+supported) and no pyramiding. It is the channel rule, not the Turtle system.
+"""
+
+[parameters.entry_window]
+type = "int"
+default = 20
+published = 20
+description = "Number of preceding bars whose highest high the close must exceed to buy."
+search = { min = 10, max = 60, step = 5 }
+
+[parameters.exit_window]
+type = "int"
+default = 10
+published = 10
+description = "Number of preceding bars whose lowest low the close must break below to sell."
+search = { min = 5, max = 30, step = 5 }
+
+[requires]
+capabilities = ["long_entry", "signal_exit", "fractional_position", "single_instrument_bars"]

@@ -195,7 +195,7 @@ it, because a correction that is read as complete is worse than none.
 ## A system for new strategies
 
 Agreed as a plan on 2026-10-08, replacing the open questions recorded here the day before.
-Nothing is built.
+Step 3 is built; the rest is not.
 
 The goal: every evening an agent takes strategies published on the internet that have not
 been tested here, writes each one as a Niffler strategy, runs every one through the same
@@ -248,10 +248,15 @@ from a different starting point - which is why the manual path is built first.
    fills at `min(open, stop)` and pays costs.
 2. **The first run against a live Elasticsearch** (see **Experiment tracking**). Everything
    after this point writes to it.
-3. **Spec and scaffold.** The spec format, the scaffold script, a declared list of what the
-   engine supports, the generated test template, and specs written for `simple_ma`, `rsi`
-   and `breakout`. An idea the engine cannot express is recorded as unsupported with the
-   reason rather than approximated.
+3. ~~**Spec and scaffold.**~~ — shipped; see [strategy-specs.md](strategy-specs.md). The spec
+   format (`niffler/strategies/spec.py`), `scripts/scaffold_strategy.py`, the declared list
+   of what the engine supports (`niffler/strategies/capabilities.py`), the generated rule-test
+   template, and specs for `simple_ma`, `rsi` and `breakout`, held to their classes by
+   `tests/test_strategies/test_specs.py`. An idea the engine cannot express is recorded as
+   unsupported with the reason rather than approximated. When step 1 lands, its four exits
+   (`strategy_stop`, `take_profit`, `trailing_stop`, `time_exit`) flip to supported in the
+   capability list. Still open: the spec has no field for the exits themselves, so a
+   strategy that sets a stop declares the capability and states the stop in its rules prose.
 4. **The protocol.** The first protocol file, a runner that checks the dataset hashes and
    runs the funnel, and the protocol id on every exported document. Not yet checked: whether
    the cross-asset stage can charge different costs per dataset.
