@@ -702,6 +702,7 @@ Detailed documentation is available in the `docs/` directory:
 - **[Analysis](docs/analysis.md)** - Advanced robustness testing
 - **[Risk Management](docs/risk-management.md)** - Position sizing and risk controls
 - **[Exporters](docs/exporters.md)** - Result export system and configuration
+- **[Strategy Specs](docs/strategy-specs.md)** - The spec format and the strategy scaffold
 - **[Roadmap](docs/roadmap.md)** - What is missing, and what is deliberately out of scope
 - **[Original course write-up](docs/ROBOTDREAMS.md)** - The project's starting point (Czech)
 
@@ -805,8 +806,24 @@ counterweight to a report that otherwise shows only its best row.
 
 ## Adding a strategy
 
-Adding a strategy is **one class plus one registry line**. Everything that offers a
-strategy by name derives its choices from
+A strategy starts as a **spec**: one TOML file in
+[`niffler/strategies/specs/`](niffler/strategies/specs/) saying where the idea came from, its
+rules in prose, its parameters and what it needs from the engine. The format, the statuses
+and the checks are in [docs/strategy-specs.md](docs/strategy-specs.md).
+
+```bash
+python scripts/scaffold_strategy.py my_idea --dry-run   # reads specs/my_idea.toml
+python scripts/scaffold_strategy.py my_idea
+```
+
+The scaffold writes the class (constructor, defaults, `PARAMETER_SPEC`), a rule-test
+template and the registry line, and leaves `generate_signals` and the rule tests failing
+until someone writes them from the spec. It refuses a spec that needs something the engine
+cannot do - shorting, a take-profit, a second instrument - and `--list` shows why, so an
+idea the engine cannot express is recorded rather than approximated.
+
+What the scaffold generates is what a hand-written strategy needs anyway. Everything that
+offers a strategy by name derives its choices from
 [`niffler/strategies/registry.py`](niffler/strategies/registry.py), so a registered
 strategy is immediately available to `backtest.py`, `optimize.py` and `analyze.py`
 without editing any of them.
@@ -822,9 +839,12 @@ without editing any of them.
    wraps it, which is what keeps `niffler/strategies/` free of any import from
    `niffler/optimization/`. The dependency runs one way only.
 3. Add one line to `STRATEGY_CLASSES` in `niffler/strategies/registry.py`.
+4. Set `dates.implemented` in the spec. `tests/test_strategies/test_specs.py` fails for a
+   registered strategy without a spec, and for a spec whose parameters, defaults, search
+   ranges or names disagree with the class.
 
-That is the whole procedure. `tests/test_strategies/test_registry.py` then applies the
-shared contract to it automatically, with no new test file required:
+`tests/test_strategies/test_registry.py` then applies the shared contract to it
+automatically, with no new test file required:
 
 - every `PARAMETER_SPEC` key is accepted by the constructor;
 - both corners of the search space construct and generate signals;
@@ -974,7 +994,7 @@ The suite is the source of truth for its own size. Run it:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-At the time of writing this reports **1726 tests, 0 failures, 0 errors**. Treat that as a
+At the time of writing this reports **1810 tests, 0 failures, 0 errors**. Treat that as a
 sanity check, not a spec — if the command disagrees with this paragraph, believe the
 command. It is the only place in the documentation that quotes a count.
 

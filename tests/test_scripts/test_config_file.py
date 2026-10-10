@@ -309,7 +309,7 @@ class TestKeyValidation(ConfigFileTestCase):
         self.assertEqual(
             sorted(script_sections()),
             ['analyze', 'backtest', 'compare', 'download_data', 'optimize',
-             'preprocessor', 'screen'])
+             'preprocessor', 'scaffold_strategy', 'screen'])
 
 
 class TestCostModelOrigin(ConfigFileTestCase):

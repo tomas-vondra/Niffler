@@ -24,10 +24,12 @@ from scripts import (
     download_data,
     optimize,
     preprocessor,
+    scaffold_strategy,
     screen,
 )
 
-SCRIPTS = (analyze, backtest, compare, download_data, optimize, preprocessor, screen)
+SCRIPTS = (analyze, backtest, compare, download_data, optimize, preprocessor,
+           scaffold_strategy, screen)
 
 
 class _ParserCaptured(Exception):

@@ -65,6 +65,9 @@ The short version, because these are easy to "helpfully" undo:
 | `experiment` may be set only in `[profile.<name>]` or on the command line | Accept it in `[common]` or a per-script section, where it would apply to every run and collide with every params file from another experiment |
 | A params file is opened in **one** place (`scripts/common.read_params_file`), which returns the parameters *and* the parent run | Read the winner's parameters in a script and discard the rest - that is how the only link between an optimization and its validation used to be dropped |
 | Strategy parameters resolve as defaults < toml `params` table < `--params-file` < `--params` < per-strategy flags, validated **after** the merge | Put the toml table above the file - a default saved in a profile would silently override an optimized winner |
+| Every registered strategy has **one** spec, `niffler/strategies/specs/<key>.toml`, and `tests/test_strategies/test_specs.py` holds the class to it (names, parameters, defaults, `PARAMETER_SPEC`, `dates.implemented`) | Register a class without a spec, or change a default or a search range in the class and not the spec |
+| An idea the engine cannot express is **unsupported**: recorded with the reasons from `niffler/strategies/capabilities.py`, and refused by the scaffold | Approximate it, mark a capability supported before the engine does it, or ever flip `same_bar_close_fill` - it is look-ahead |
+| A scaffolded strategy is **red** until its algorithm and rule tests are written | Make the generated `generate_signals` return zeros or the generated stubs pass - a strategy that never trades would merge |
 
 Scope limits that are deliberate, not oversights: long-only, no live trading, three
 textbook strategies rather than an edge, Kelly risk manager is a stub. Slippage/spread/market impact **are** modelled now
@@ -219,6 +222,16 @@ Note: `--sort-by max_drawdown` now ranks the **shallowest** drawdown first. `max
 is a negative percentage, and it used to be flagged "lower is better", which selected the
 worst parameter set every time (including inside walk-forward folds).
 
+### Strategy specs
+Every strategy has a spec in `niffler/strategies/specs/`; a new one starts there
+([docs/strategy-specs.md](docs/strategy-specs.md)):
+
+```bash
+python scripts/scaffold_strategy.py --list                 # every spec and its status
+python scripts/scaffold_strategy.py my_idea --dry-run      # reads specs/my_idea.toml
+python scripts/scaffold_strategy.py my_idea                # class, rule-test template, registry line
+```
+
 ### Strategy Analysis
 Advanced robustness testing via `scripts/analyze.py`:
 
@@ -371,6 +384,19 @@ Exit codes: `0` every gate passed, `3` a gate stopped the run, `1` the run faile
   - `breakout_strategy.py` - Donchian channel breakout. The rolling extremes are
     `.shift(1)`-ed off the current bar; without that the close is compared against a
     band its own high helped set
+  - `spec.py` - `load_spec`, `load_all_specs`, `StrategySpec`, `SpecError`, `SPEC_DIR`.
+    The strategy spec format ([docs/strategy-specs.md](docs/strategy-specs.md)): strict
+    (an unknown key is an error), every problem reported at once, status derived
+    (`implemented` / `specified` / `unsupported`). `position_size` is never a spec parameter;
+    `StrategySpec.parameter_spec()` adds the standard one. Imports nothing outside
+    `niffler/strategies/`
+  - `capabilities.py` - `CAPABILITIES`: **the** declared list of what a spec may require and
+    whether the engine supports it. An unsupported capability's `note` is the recorded reason
+  - `scaffold.py` - Pure rendering of a spec into the class, the rule-test template and the
+    registry edit (`render_strategy_module`, `render_test_module`, `add_registry_entry`),
+    plus `plan_scaffold` / `write_scaffold`. Never overwrites, refuses unsupported or
+    implemented specs
+  - `specs/` - One `<key>.toml` per strategy, shipped and specified-but-unbuilt alike
 - `niffler/optimization/` - Parameter optimization framework
   - `base_optimizer.py` - Abstract base class for optimizers. `_lattice_size` is the
     **single** definition of the values a stepped parameter can take (`min + k * step`);
@@ -550,6 +576,8 @@ Exit codes: `0` every gate passed, `3` a gate stopped the run, `1` the run faile
     (`timestamp`/`date`/`datetime`/`time` plus pandas' unnamed index column), datetime
     parsing, required-column and duplicate-timestamp validation, index sorting, optional
     `--clean` pass. Do not add a fourth loader
+  - `scaffold_strategy.py` - Spec to class skeleton, registry line and rule-test template
+    (`--dry-run`, `--list`, `--root`). The generated code fails until written, by design
   - `common.py` also holds `warn_if_holdout_data`: every script that reads research data
     (`backtest.py`, `optimize.py`, `analyze.py`, `compare.py`, and `screen.py` for
     `--data` / `--compare-data`) prints a fenced warning to stderr when a data file's name

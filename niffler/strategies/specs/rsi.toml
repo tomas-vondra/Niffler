@@ -1,0 +1,63 @@
+# Strategy spec. The format is documented in docs/strategy-specs.md.
+spec_version = 1
+key = "rsi"
+class_name = "RSIStrategy"
+name = "RSI Mean Reversion"
+family = "mean_reversion"
+summary = "Buy when Wilder's RSI climbs back out of oversold territory; sell when it falls back out of overbought territory."
+
+[source]
+kind = "book"
+reference = "J. Welles Wilder Jr., New Concepts in Technical Trading Systems (1978): the RSI, its 14-bar period and the 70/30 levels. Trading the crossing back out of a zone is a common later convention, not Wilder's own rule."
+
+[dates]
+found = 2026-08-07
+implemented = 2026-08-07
+
+[rules]
+entry = """
+Compute Wilder's RSI of the close over rsi_period bars (Wilder smoothing, an
+exponential mean with alpha = 1 / rsi_period). On the close of a bar, when the
+RSI was at or below oversold on the previous bar and is strictly above it on this
+bar, buy.
+"""
+exit = """
+On the close of a bar, when the RSI was at or above overbought on the previous bar
+and is strictly below it on this bar, sell the open position.
+"""
+inputs = ["close"]
+notes = """
+The RSI is undefined for the first rsi_period bars and no signal fires there. A
+window with no losing bar has RSI 100; a window with neither gains nor losses has
+RSI 50. A market that stays oversold for many bars produces one buy, on the bar it
+leaves the zone. oversold must be strictly below overbought.
+"""
+deviations = """
+Wilder treated 30 and 70 as levels to watch, not as an entry and exit rule.
+Entering on the crossing back out of the zone, rather than on entering it, is the
+convention this strategy uses.
+"""
+
+[parameters.rsi_period]
+type = "int"
+default = 14
+published = 14
+description = "Lookback period for Wilder's RSI."
+search = { min = 7, max = 21, step = 1 }
+
+[parameters.oversold]
+type = "int"
+default = 30
+published = 30
+description = "RSI level below which the market is oversold; a buy fires when the RSI crosses back above it."
+search = { min = 20, max = 35, step = 5 }
+
+[parameters.overbought]
+type = "int"
+default = 70
+published = 70
+description = "RSI level above which the market is overbought; a sell fires when the RSI crosses back below it."
+search = { min = 65, max = 80, step = 5 }
+
+[requires]
+capabilities = ["long_entry", "signal_exit", "fractional_position", "single_instrument_bars"]
