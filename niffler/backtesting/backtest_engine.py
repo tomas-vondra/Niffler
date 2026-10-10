@@ -11,6 +11,13 @@ from .trade import Trade, TradeSide
 from .backtest_result import BacktestResult
 from .portfolio import Portfolio
 from .cost_model import CostModel, FillRequest, ZeroCostModel
+from .exits import (
+    EXIT_RISK_STOP,
+    EXIT_SIGNAL,
+    EXIT_TAKE_PROFIT,
+    EXIT_TIME,
+    ExitColumns,
+)
 from .round_trip import RoundTrip, QUANTITY_EPSILON, pair_trades
 from . import metrics as equity_metrics
 from .benchmark import (
@@ -74,6 +81,20 @@ class BacktestEngine:
     up, a sell gives up, stop exits included. A model may also cap how much of a
     bar's volume one order takes; the order is then truncated to a partial fill
     and logged, never silently dropped.
+
+    Exits the strategy sets
+    -----------------------
+    Next to ``signal`` a strategy may emit a stop price, a take-profit, a
+    trailing stop and a holding limit (see :mod:`niffler.backtesting.exits`),
+    read from the signal bar like the signal itself. They behave as orders
+    resting at the broker: a time exit leaves at the open; a stop fills at
+    ``min(open, stop)`` and a target at ``max(open, target)`` once the bar's
+    range reaches them; every one of them is priced by the cost model. When a
+    bar's range touches both the stop and the target, the stop is assumed to
+    have come first - the engine cannot see the order within a bar, and the
+    pessimistic answer is the one that cannot manufacture an edge. Under
+    ``next_bar_open`` the entry bar is checked too, because the entry fills at
+    its open and the rest of the bar's range comes after it.
 
     Risk management
     ---------------
@@ -273,6 +294,7 @@ class BacktestEngine:
         # Generate trading signals
         signals_df = strategy.generate_signals(data.copy())
         signals, position_sizes = self._extract_signal_columns(signals_df, len(data))
+        exit_columns = ExitColumns.from_signals(signals_df, len(data))
 
         portfolio = Portfolio(self.initial_capital)
         trades: List[Trade] = []
@@ -310,23 +332,44 @@ class BacktestEngine:
             )
 
             bar_volume = float(volumes[i])
+            bar_low = float(low_prices[i])
+            bar_high = float(high_prices[i])
 
-            # An existing position is checked against its stop before new orders.
-            stop_loss_triggered = self._process_stop_loss(
+            plan = portfolio.exit_plan
+            if plan is not None and not portfolio.is_flat:
+                # A stop the strategy chose on the signal bar is known before
+                # this bar opens, so it is in force for the whole of it.
+                plan.tighten_stop(exit_columns.stop_update(signal_index))
+
+            # An existing position is checked against its exits before new orders.
+            exited = self._process_open_position_exits(
                 strategy, portfolio, trades, timestamp, symbol, execution_price,
-                bar_low=float(low_prices[i]), bar_high=float(high_prices[i]),
-                bar_volume=bar_volume
+                bar_low=bar_low, bar_high=bar_high, bar_volume=bar_volume
             )
 
-            if not stop_loss_triggered:
+            if not exited:
                 if signal == 1 and portfolio.cash > 0:
+                    was_flat = portfolio.is_flat
                     self._process_buy(portfolio, trades, timestamp, symbol,
                                       execution_price, position_size, stop_loss_price,
                                       bar_volume=bar_volume)
+                    if was_flat and not portfolio.is_flat:
+                        self._open_exit_plan(portfolio, trades, exit_columns,
+                                             signal_index, i, timestamp, symbol,
+                                             execution_price, bar_low, bar_high,
+                                             bar_volume)
                 elif signal == -1 and portfolio.position > 0:
                     self._process_sell(portfolio, trades, timestamp, symbol,
                                        execution_price, position_size,
                                        bar_volume=bar_volume)
+
+            plan = portfolio.exit_plan
+            if plan is not None and not portfolio.is_flat:
+                # Under same_bar_close the entry fills at this bar's close: the
+                # bar counts as held, but its high came before the position
+                # existed and must not lift the trail.
+                plan.record_bar(bar_high,
+                                update_anchor=lag > 0 or plan.entry_bar != i)
 
             # Mark to market at the bar's close, AFTER trades
             portfolio_values[i] = portfolio.market_value(float(close_prices[i]))
@@ -673,6 +716,7 @@ class BacktestEngine:
             )
             return False
 
+        stop_trade.exit_reason = EXIT_RISK_STOP
         trades.append(stop_trade)
         portfolio.apply_sell(stop_trade)
 
@@ -691,6 +735,219 @@ class BacktestEngine:
         portfolio.close_position()
 
         logger.info(f"STOP LOSS: {stop_trade.quantity:.4f} shares at ${stop_trade.price:.2f} - {reason}")
+        return True
+
+    def _process_open_position_exits(self, strategy: BaseStrategy, portfolio: Portfolio,
+                                     trades: List[Trade], timestamp: pd.Timestamp,
+                                     symbol: str, price: float, bar_low: float,
+                                     bar_high: float,
+                                     bar_volume: Optional[float] = None) -> bool:
+        """
+        Run every exit an open position carries, in the order the market would.
+
+        A time exit is a market order at the open, so it goes first. Then the
+        stops: the risk manager's and the strategy's (its own stop or its trail,
+        whichever is higher) are probed highest first, because for a long the
+        higher stop is the one price reaches first on the way down. The target
+        comes last, so a bar that touches both a stop and the target is booked
+        as the stop.
+
+        Args:
+            strategy: Strategy being tested
+            portfolio: Current portfolio state
+            trades: Trade log to append to
+            timestamp: Current bar timestamp
+            symbol: Traded symbol
+            price: Execution price for this bar (its open under next_bar_open)
+            bar_low: Lowest price traded on this bar
+            bar_high: Highest price traded on this bar
+            bar_volume: Volume traded on this bar, for liquidity-aware cost models
+
+        Returns:
+            True if any exit traded on this bar, in which case the bar's own
+            signal is not acted on
+        """
+        plan = portfolio.exit_plan
+        if plan is not None and not portfolio.is_flat and plan.time_exit_due():
+            if self._execute_exit(portfolio, trades, timestamp, symbol, price,
+                                  EXIT_TIME,
+                                  f"held {plan.bars_held} bars, limit {plan.max_bars_held}",
+                                  bar_volume):
+                return True
+
+        strategy_stop = plan.stop_level() if plan is not None else None
+        risk_stop = portfolio.stop_loss
+        risk_first = (strategy_stop is None
+                      or (risk_stop is not None and risk_stop > strategy_stop))
+
+        if risk_first:
+            if self._process_stop_loss(strategy, portfolio, trades, timestamp, symbol,
+                                       price, bar_low=bar_low, bar_high=bar_high,
+                                       bar_volume=bar_volume):
+                return True
+            if self._process_strategy_stop(portfolio, trades, timestamp, symbol, price,
+                                           bar_low, bar_volume):
+                return True
+        else:
+            if self._process_strategy_stop(portfolio, trades, timestamp, symbol, price,
+                                           bar_low, bar_volume):
+                return True
+            if self._process_stop_loss(strategy, portfolio, trades, timestamp, symbol,
+                                       price, bar_low=bar_low, bar_high=bar_high,
+                                       bar_volume=bar_volume):
+                return True
+
+        return self._process_take_profit(portfolio, trades, timestamp, symbol, price,
+                                         bar_high, bar_volume)
+
+    def _open_exit_plan(self, portfolio: Portfolio, trades: List[Trade],
+                        exit_columns: ExitColumns, signal_index: int, bar_index: int,
+                        timestamp: pd.Timestamp, symbol: str, price: float,
+                        bar_low: float, bar_high: float,
+                        bar_volume: Optional[float]) -> None:
+        """
+        Arm the exits a fresh position's signal bar asked for.
+
+        Under ``next_bar_open`` the entry filled at this bar's open and the rest
+        of the bar's range traded after it, so the new stop and target are
+        probed against that range at once - a stop hit on the entry bar is a
+        real loss, and skipping it would flatter every tight stop. Under
+        ``same_bar_close`` the range came before the fill and is not probed.
+        The time exit is never due on the entry bar.
+
+        Args:
+            portfolio: Portfolio that has just opened a position from flat
+            trades: Trade log; its last entry is the opening buy
+            exit_columns: The strategy's exit columns
+            signal_index: Bar that produced the buy signal
+            bar_index: Bar the buy filled on
+            timestamp: Current bar timestamp
+            symbol: Traded symbol
+            price: Execution price for this bar
+            bar_low: Lowest price traded on this bar
+            bar_high: Highest price traded on this bar
+            bar_volume: Volume traded on this bar
+        """
+        plan = exit_columns.plan_for_entry(signal_index, entry_price=trades[-1].price,
+                                           entry_bar=bar_index)
+        portfolio.exit_plan = plan
+        if plan is None:
+            return
+
+        if plan.stop_price is not None and plan.stop_price >= trades[-1].price:
+            logger.warning(
+                f"STOP AT OR ABOVE ENTRY: {symbol} filled at ${trades[-1].price:.2f} "
+                f"against a stop of ${plan.stop_price:.2f}; the stop triggers at once."
+            )
+
+        if self.execution_lag == 0:
+            return
+        if self._process_strategy_stop(portfolio, trades, timestamp, symbol, price,
+                                       bar_low, bar_volume):
+            return
+        self._process_take_profit(portfolio, trades, timestamp, symbol, price,
+                                  bar_high, bar_volume)
+
+    def _process_strategy_stop(self, portfolio: Portfolio, trades: List[Trade],
+                               timestamp: pd.Timestamp, symbol: str, price: float,
+                               bar_low: float, bar_volume: Optional[float]) -> bool:
+        """
+        Exit if the bar traded through the strategy's stop or trailing stop.
+
+        Same rule as the risk manager's stop: probed against the bar's low, and
+        filled at ``min(open, stop)`` so a gap through the stop fills at the
+        open, then priced by the cost model, which can only make it worse.
+
+        Returns:
+            True if an exit traded
+        """
+        plan = portfolio.exit_plan
+        if plan is None or portfolio.is_flat:
+            return False
+        level = plan.stop_level()
+        if level is None or bar_low > level:
+            return False
+
+        reason_code = plan.stop_reason()
+        return self._execute_exit(portfolio, trades, timestamp, symbol,
+                                  min(price, level), reason_code,
+                                  f"low {bar_low:.2f} <= {reason_code} {level:.2f}",
+                                  bar_volume)
+
+    def _process_take_profit(self, portfolio: Portfolio, trades: List[Trade],
+                             timestamp: pd.Timestamp, symbol: str, price: float,
+                             bar_high: float, bar_volume: Optional[float]) -> bool:
+        """
+        Exit if the bar traded up to the strategy's target.
+
+        A target rests like a limit sell: it fills at ``max(open, target)``, so
+        a gap above it fills at the open, and the cost model then prices the
+        fill against that reference - the target is the best case, never a
+        guaranteed price.
+
+        Returns:
+            True if an exit traded
+        """
+        plan = portfolio.exit_plan
+        if plan is None or portfolio.is_flat or plan.take_profit_price is None:
+            return False
+        target = plan.take_profit_price
+        if bar_high < target:
+            return False
+
+        return self._execute_exit(portfolio, trades, timestamp, symbol,
+                                  max(price, target), EXIT_TAKE_PROFIT,
+                                  f"high {bar_high:.2f} >= target {target:.2f}",
+                                  bar_volume)
+
+    def _execute_exit(self, portfolio: Portfolio, trades: List[Trade],
+                      timestamp: pd.Timestamp, symbol: str, reference_price: float,
+                      reason_code: str, reason: str,
+                      bar_volume: Optional[float]) -> bool:
+        """
+        Sell the whole open position for one of the strategy's exits.
+
+        Args:
+            portfolio: Current portfolio state
+            trades: Trade log to append to
+            timestamp: Current bar timestamp
+            symbol: Traded symbol
+            reference_price: Price handed to the cost model
+            reason_code: ``Trade.exit_reason`` for the fill
+            reason: Human-readable reason for the log
+            bar_volume: Volume traded on this bar
+
+        Returns:
+            True if anything was sold. A partial fill leaves the remainder open
+            with its exits still armed; an exit that cannot execute at all is
+            logged and leaves the position open, never silently closed.
+        """
+        trade = self._execute_sell_trade(timestamp, symbol, reference_price, 1.0,
+                                         portfolio.position, bar_volume=bar_volume)
+        label = reason_code.upper().replace('_', ' ')
+        if trade is None:
+            logger.warning(
+                f"{label} EXIT NOT EXECUTED: {reason}; position {portfolio.position:.6f} "
+                f"units at ${reference_price:.2f} is either below the minimum order "
+                f"value of ${self.min_order_value:.2f} or more than the bar can absorb. "
+                f"Position stays open."
+            )
+            return False
+
+        trade.exit_reason = reason_code
+        trades.append(trade)
+        portfolio.apply_sell(trade)
+
+        if not portfolio.is_flat:
+            logger.warning(
+                f"{label} EXIT PARTIALLY FILLED: sold {trade.quantity:.6f} units at "
+                f"${trade.price:.2f} - {reason}. {portfolio.position:.6f} units remain "
+                f"open with their exits still armed."
+            )
+            return True
+
+        portfolio.close_position()
+        logger.info(f"{label} EXIT: {trade.quantity:.4f} shares at ${trade.price:.2f} - {reason}")
         return True
 
     def _process_buy(self, portfolio: Portfolio,
@@ -764,6 +1021,7 @@ class BacktestEngine:
         if trade is None:
             return
 
+        trade.exit_reason = EXIT_SIGNAL
         trades.append(trade)
         portfolio.apply_sell(trade)
 

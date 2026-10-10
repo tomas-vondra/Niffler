@@ -22,6 +22,7 @@
       "value": {"type": "double"},
       "commission": {"type": "double"},
       "slippage_cost": {"type": "double"},
+      "exit_reason": {"type": "keyword"},
       "created_at": {"type": "date"}
     }
   }

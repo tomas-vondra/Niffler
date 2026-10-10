@@ -1,6 +1,7 @@
 import pandas as pd
 from dataclasses import dataclass
 from enum import Enum
+from typing import Optional
 
 
 class TradeSide(Enum):
@@ -27,6 +28,9 @@ class Trade:
             i.e. ``|fill price - reference price| * quantity``. Always >= 0 -
             transaction costs are never favourable. Optional with a 0.0 default,
             appended last, so existing positional callers keep working.
+        exit_reason: Why a sell happened - one of
+            ``niffler.backtesting.exits.EXIT_REASONS`` ('signal', 'risk_stop',
+            'stop', 'trailing_stop', 'take_profit', 'time'). None on a buy.
     """
     timestamp: pd.Timestamp
     symbol: str
@@ -36,3 +40,4 @@ class Trade:
     value: float
     commission: float = 0.0
     slippage_cost: float = 0.0
+    exit_reason: Optional[str] = None

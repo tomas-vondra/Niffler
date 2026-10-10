@@ -424,6 +424,52 @@ The backtesting engine integrates seamlessly with risk management systems:
 - Provides detailed logging of stop loss executions, including a WARNING when a triggered
   stop cannot be executed because the residual position is below `min_order_value`
 
+#### Exits the strategy sets
+
+A strategy can carry its own exits, independent of any risk manager, by adding up to four
+columns next to `signal` (names in `niffler/strategies/base_strategy.py`, engine handling
+in `niffler/backtesting/exits.py`). Each is read on the bar that produced the buy signal;
+NaN, or a missing column, means that exit is off.
+
+| Column | Meaning | Fill |
+|--------|---------|------|
+| `stop_price` | Absolute stop. On a later bar while the position is open, a value **moves** the stop - up only, never looser - so a strategy can run its own ATR or Chandelier trail | `min(open, stop)` once the low reaches it |
+| `take_profit_price` | Absolute target, resting like a limit sell | `max(open, target)` once the high reaches it |
+| `trailing_stop_pct` | Stop trailing the highest high since entry by this fraction (0 < pct < 1) | `min(open, trail)`, as a stop |
+| `max_bars_held` | Leave this many bars after the entry fill | at the open of that bar |
+
+The rules, which are the ones a resting order at a broker obeys:
+
+- Every exit is priced by the cost model and pays commission, so a stop fills at or below
+  its level and a target at or below its level, never above.
+- Within a bar the time exit goes first (it is an order at the open), then the stops -
+  the risk manager's and the strategy's, higher first, since that is the one price meets
+  first on the way down - then the target. **A bar that touches both the stop and the
+  target is booked as the stop**: the order within a bar is unknown, and the pessimistic
+  answer cannot manufacture an edge.
+- The trail moves only on completed bars. A bar's own high does not lift the trail that
+  same bar's low is tested against.
+- Under `next_bar_open` the **entry bar is checked too**: the entry filled at its open and
+  the rest of the range came after. A stop at or above the entry fill triggers at once and
+  is logged as a warning.
+- Exits belong to the position: they are taken from the entry that opened it, a scale-in
+  only tightens the stop, and a partial exit leaves the rest open with its exits armed.
+  An exit that cannot execute (below `min_order_value`, or a bar the cost model says
+  cannot absorb it) is logged and the position stays open.
+- The bar an exit trades on does not act on its own signal.
+- Every sell records why on `Trade.exit_reason`: `signal`, `risk_stop`, `stop`,
+  `trailing_stop`, `take_profit` or `time`. The CSV and Elasticsearch trade exports carry it.
+
+```python
+df['stop_price'] = np.where(df['signal'] == 1, df['close'] - 2 * atr, np.nan)
+df['take_profit_price'] = np.where(df['signal'] == 1, df['close'] + 4 * atr, np.nan)
+df['max_bars_held'] = 20
+```
+
+Values are read only from bars the strategy has already seen, so they are no more able to
+look ahead than the signal is - provided the strategy computes them from data up to that
+bar, which is the strategy's own responsibility exactly as it is for the signal.
+
 #### Portfolio State Tracking
 - `Portfolio` is the single owner of position state: cash, units, entry price, stop and side
 - The risk manager holds none of it. It is handed a frozen `PortfolioSnapshot` on each
@@ -494,7 +540,9 @@ Be aware of these before trusting a backtest figure:
   exposure) exist in the risk framework but are not exercised by a single-symbol backtest
 - **No funding, borrow, or overnight financing costs.** Commission only
 - **Intra-bar ordering is unknown.** When a bar both triggers a stop and carries a signal,
-  the stop is processed first; and the entry bar's stop is checked before the entry fills
+  the stop is processed first; a bar touching both a strategy stop and its target is booked
+  as the stop; and the risk manager's stop on the entry bar is checked before the entry
+  fills (the strategy's own exits are checked after it)
 - **The significance test is not corrected for multiple testing.** It knows nothing about
   how many parameter sets were tried to find the one being tested. The
   [`SEARCH LUCK` block](optimization.md#search-luck) that corrects for one search is

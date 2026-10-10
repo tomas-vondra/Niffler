@@ -823,6 +823,12 @@ without editing any of them.
    `niffler/optimization/`. The dependency runs one way only.
 3. Add one line to `STRATEGY_CLASSES` in `niffler/strategies/registry.py`.
 
+A strategy that states its own exits - a stop, a target, a trailing stop, a holding limit
+- emits them as extra columns next to `signal` (`stop_price`, `take_profit_price`,
+`trailing_stop_pct`, `max_bars_held`). The engine fills them like resting orders and
+prices them with the same costs as any other fill; see
+[docs/backtesting.md](docs/backtesting.md#exits-the-strategy-sets).
+
 That is the whole procedure. `tests/test_strategies/test_registry.py` then applies the
 shared contract to it automatically, with no new test file required:
 
@@ -974,7 +980,7 @@ The suite is the source of truth for its own size. Run it:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-At the time of writing this reports **1726 tests, 0 failures, 0 errors**. Treat that as a
+At the time of writing this reports **1755 tests, 0 failures, 0 errors**. Treat that as a
 sanity check, not a spec — if the command disagrees with this paragraph, believe the
 command. It is the only place in the documentation that quotes a count.
 

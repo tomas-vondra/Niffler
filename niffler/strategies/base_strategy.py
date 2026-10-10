@@ -2,6 +2,17 @@ from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any
 import pandas as pd
 
+#: Optional exit columns a strategy may add next to ``signal``. Each is read on
+#: the bar of a buy signal, NaN meaning "not set"; the engine's handling is
+#: documented in :mod:`niffler.backtesting.exits`.
+STOP_PRICE_COLUMN = 'stop_price'
+TAKE_PROFIT_COLUMN = 'take_profit_price'
+TRAILING_STOP_COLUMN = 'trailing_stop_pct'
+MAX_BARS_HELD_COLUMN = 'max_bars_held'
+
+EXIT_COLUMNS = (STOP_PRICE_COLUMN, TAKE_PROFIT_COLUMN, TRAILING_STOP_COLUMN,
+                MAX_BARS_HELD_COLUMN)
+
 
 class BaseStrategy(ABC):
     """
@@ -28,6 +39,14 @@ class BaseStrategy(ABC):
             DataFrame with same index as input data and additional columns:
             - 'signal': 1 for buy, -1 for sell, 0 for hold
             - 'position_size': fraction of portfolio to allocate (0.0 to 1.0)
+
+            and, optionally, any of the exit columns in ``EXIT_COLUMNS``:
+            - 'stop_price': absolute stop for the position a buy opens; on a
+              later bar while it is open, a value moves the stop up (never down)
+            - 'take_profit_price': absolute target for that position
+            - 'trailing_stop_pct': stop trailing the highest high since entry
+              by this fraction (0 < pct < 1)
+            - 'max_bars_held': leave at the open this many bars after entry
         """
         pass
         
